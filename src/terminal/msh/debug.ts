@@ -1,3 +1,4 @@
+import { getAccount, subscribeAccount } from '../../os/account'
 import type { Budget } from '../limits'
 import type { Node, SourceSpan } from './parse'
 
@@ -7,37 +8,38 @@ export type PauseReason = 'entry' | 'step' | 'breakpoint' | 'pause'
 /** A script (msh file, source, ./script, msh -c), a function call or a $(…) substitution. */
 export type FrameKind = 'script' | 'function' | 'substitution'
 /** One level of the call stack at a pause; `line`/`column` is where that frame is now. */
-export type DebugFrame = { kind: FrameKind; name: string; filename: string; line: number; column: number }
-export type DebugSnapshot = {
-  id: string; label: string; state: DebugState; location?: SourceSpan
-  variables: Readonly<Record<string, string>>; status?: number; breakpoints: readonly string[]
-  /** Positional parameters of the paused frame ($1…), bounded like variables. */
-  args: readonly string[]
-  /**
-   * What the bounds left out, so a viewer never mistakes a cut value or a missing entry for the real
-   * thing: the original length of each value cut at 4096 characters (variables by name, arguments by
-   * index from 0), how many arguments there were, and how many variables (captured or not).
-   */
+export type DebugFrame = { id: string; values?: DebugValues; kind: FrameKind; name: string; filename: string; line: number; column: number }
+export type DebugBindings = {
+  args: readonly string[]; params: Iterable<string>; locals: Iterable<string>
+  entries: () => Iterable<{ name: string; value: string | undefined; scope: 'parameter' | 'local' | 'global'; inherited: boolean; identity: string }>
+}
+export type DebugValues = {
+  variables: Readonly<Record<string, string>>; args: readonly string[]
   cut: { variables: Readonly<Record<string, number>>; args: Readonly<Record<number, number>> }
-  argCount: number
-  variableCount: number
-  /** Names made `local` by the innermost function at the pause. */
-  locals: readonly string[]
-  /** Innermost first. Empty unless paused. */
+  argCount: number; variableCount: number
+  locals: readonly string[]; params: readonly string[]; unset: readonly string[]
+  scopes: Readonly<Record<string, { kind: 'parameter' | 'local' | 'global'; inherited: boolean; identity: string }>>
+  /** Prior complete values only, for the same session/frame/binding, bounded to display text. */
+  changes: Readonly<Record<string, string>>
+}
+export type DebugSnapshot = DebugValues & {
+  id: string; label: string; state: DebugState; location?: SourceSpan
+  status?: number; breakpoints: readonly string[]
+  /** Innermost first. Empty unless paused. A frame beyond the shared capture bound has no values. */
   frames: readonly DebugFrame[]
   reason?: PauseReason
-  /** Increases with every pause, so a viewer can tell a new stop from the same one. */
   pauses: number
 }
+const emptyValues = (): DebugValues => ({ variables: {}, args: [], cut: { variables: {}, args: {} }, argCount: 0, variableCount: 0, locals: [], params: [], unset: [], scopes: {}, changes: {} })
 /** How the session runs after a resume. `over`/`out` compare frame depth at the time of the step. */
 type Mode = { kind: 'run' } | { kind: 'into' } | { kind: 'over'; depth: number } | { kind: 'out'; depth: number } | { kind: 'entry'; filename: string }
 /** Where a new session first stops: before its first command, only at breakpoints, or at the first command of a file. */
 export type DebugStart = 'first' | 'run' | { entry: string }
-type Frame = { kind: FrameKind; name: string; filename: string; call?: SourceSpan; at?: SourceSpan; last?: { line: number; start: number; filename: string } }
+type Frame = { id: string; bindings?: () => DebugBindings; kind: FrameKind; name: string; filename: string; call?: SourceSpan; at?: SourceSpan; last?: { line: number; start: number; filename: string } }
 
 const MAX_SESSIONS = 16
 const MAX_POINTS = 256
-export const SNAPSHOT_LIMITS = { variables: 256, value: 4096, args: 64 } as const
+export const SNAPSHOT_LIMITS = { variables: 256, value: 4096, args: 64, characters: 65536 } as const
 const MAX_VARS = SNAPSHOT_LIMITS.variables
 const MAX_VALUE = SNAPSHOT_LIMITS.value
 const MAX_ARGS = SNAPSHOT_LIMITS.args
@@ -179,7 +181,9 @@ export class DebugSession {
   /** Stop at the editor's breakpoints too (Xed launched it, or the user attached Xed to it). */
   private editor = false
   private frames: Frame[] = []
-  private root: Frame = { kind: 'script', name: '-c', filename: '-c' }
+  private nextFrame = 0
+  private previous = new Map<string, DebugValues>()
+  private root: Frame = { id: 'root', kind: 'script', name: '-c', filename: '-c' }
   private sources = new Map<string, string>()
   private release?: () => void
   private snapshot: DebugSnapshot
@@ -192,7 +196,7 @@ export class DebugSession {
       sessions.delete(old.id)
     }
     this.mode = start === 'first' ? { kind: 'into' } : start === 'run' ? { kind: 'run' } : { kind: 'entry', filename: start.entry }
-    this.snapshot = { id: this.id, label, state: 'running', variables: {}, breakpoints: [], args: [], cut: { variables: {}, args: {} }, argCount: 0, variableCount: 0, locals: [], frames: [], pauses: 0 }
+    this.snapshot = { id: this.id, label, state: 'running', ...emptyValues(), breakpoints: [], frames: [], pauses: 0 }
     sessions.set(this.id, this)
     emit()
   }
@@ -226,49 +230,70 @@ export class DebugSession {
     if (this.snapshot.state !== 'paused') return
     this.mode = mode
     this.pauseRequested = false
-    this.snapshot = { ...this.snapshot, state: 'running', frames: [] }
+    this.previous = new Map(this.snapshot.frames.flatMap(f => f.values ? [[f.id, f.values] as const] : []))
+    this.snapshot = { ...this.snapshot, ...emptyValues(), state: 'running', frames: [] }
     const release = this.release; this.release = undefined; release?.(); emit()
+  }
+  clearHistory() {
+    this.previous.clear()
+    this.snapshot = { ...this.snapshot, changes: {}, frames: this.snapshot.frames.map(f => ({ ...f, values: f.values ? { ...f.values, changes: {} } : undefined })) }
   }
   cancel() { if (!this.done) { this.abort.abort(); this.finish(130) } }
   finish(status: number) {
     if (this.done) return
-    this.snapshot = { ...this.snapshot, status, frames: [], state: this.abort.signal.aborted || status === 130 ? 'cancelled' : status ? 'failed' : 'completed' }
+    this.previous.clear()
+    this.root.bindings = undefined; this.root.at = undefined
+    for (const frame of this.frames) frame.bindings = undefined
+    this.snapshot = { ...this.snapshot, ...emptyValues(), status, frames: [], state: this.abort.signal.aborted || status === 130 ? 'cancelled' : status ? 'failed' : 'completed' }
     const release = this.release; this.release = undefined; release?.(); emit()
   }
 
   // --- frames, from the interpreter -----------------------------------------------------------------
+  /** A subshell executes in this frame, but owns a different environment. No extra step/frame. */
+  useBindings(bindings: () => DebugBindings): () => void {
+    if (this.done) return () => {}
+    const frame = this.frames[this.frames.length - 1] ?? this.root
+    const saved = frame.bindings
+    frame.bindings = bindings
+    return () => { frame.bindings = this.done ? undefined : saved }
+  }
+
   /** A script, function or substitution starts. Returns the matching `leave`. */
-  enter(kind: FrameKind, name: string, filename: string, source?: string): () => void {
+  enter(kind: FrameKind, name: string, filename: string, source?: string, bindings?: () => DebugBindings): () => void {
     if (source !== undefined && filename.startsWith('/') && (this.sources.has(filename) || this.sources.size < MAX_SOURCES)) this.sources.set(filename, sourceHash(source))
     const top = this.frames[this.frames.length - 1] ?? this.root
-    const frame: Frame = { kind, name: name.slice(0, 200), filename, call: top.at }
+    const frame: Frame = { id: `${this.id}:${++this.nextFrame}`, bindings, kind, name: name.slice(0, 200), filename, call: top.at }
     this.frames.push(frame)
     let left = false
     return () => {
       if (left) return
       left = true
       const i = this.frames.lastIndexOf(frame)
-      if (i >= 0) this.frames.splice(i)
+      if (i >= 0) for (const removed of this.frames.splice(i)) this.previous.delete(removed.id)
     }
   }
 
-  private stack(location: SourceSpan): DebugFrame[] {
+  private stack(location: SourceSpan, capture: (f: Frame) => DebugValues | undefined): DebugFrame[] {
     const out: DebugFrame[] = []
     let at: SourceSpan | undefined = location
     for (let i = this.frames.length - 1; i >= 0 && out.length < MAX_FRAMES; i--) {
       const f = this.frames[i]
-      out.push({ kind: f.kind, name: f.name, filename: at?.filename ?? f.filename, line: at?.line ?? 0, column: at?.column ?? 0 })
+      out.push({ id: f.id, values: capture(f), kind: f.kind, name: f.name, filename: at?.filename ?? f.filename, line: at?.line ?? 0, column: at?.column ?? 0 })
       at = f.call
     }
-    if (at && out.length < MAX_FRAMES) out.push({ kind: 'script', name: this.snapshot.label.slice(0, 200), filename: at.filename, line: at.line, column: at.column })
+    if (at && out.length < MAX_FRAMES) out.push({ id: this.root.id, values: capture(this.root), kind: 'script', name: this.snapshot.label.slice(0, 200), filename: at.filename, line: at.line, column: at.column })
     return out
   }
 
-  async checkpoint(location: SourceSpan, variables: Record<string, string>, signal: AbortSignal, budget?: Budget, extra?: { args?: readonly string[]; locals?: Iterable<string> }) {
+  async checkpoint(location: SourceSpan, variables: Record<string, string>, signal: AbortSignal, budget?: Budget, extra?: { args?: readonly string[]; locals?: Iterable<string>; bindings?: () => DebugBindings }) {
     if (this.done || signal.aborted || this.abort.signal.aborted) return
     const depth = this.frames.length
     const frame = this.frames[depth - 1] ?? this.root
     frame.at = location
+    // The executing shell can change without entering a frame, notably inside ( ... ).
+    frame.bindings = extra?.bindings ?? (() => ({ args: extra?.args ?? [], params: [], locals: extra?.locals ?? [], entries: function* () {
+      for (const name in variables) if (Object.hasOwn(variables, name)) yield { name, value: variables[name], scope: 'global' as const, inherited: false, identity: name }
+    } }))
     // A line event, as in Python's debugger: execution reaches another line, or jumps back (a loop).
     const last = frame.last
     const lineEvent = !last || last.filename !== location.filename || last.line !== location.line || location.start <= last.start
@@ -287,30 +312,66 @@ export class DebugSession {
     // Capture only at stops, with explicit bounds. No polling or frame work while idle.
     if (!reason) return
     if (this.snapshot.pauses === 0 && reason === 'step' && mode.kind === 'into') reason = 'entry'
-    const copy: Record<string, string> = Object.create(null)
-    const cutVars: Record<string, number> = Object.create(null)
-    let count = 0, held = 0
-    for (const k in variables) {
-      if (!Object.hasOwn(variables, k)) continue
-      // Past the bound, variables are only counted (no copy, no charge), so a lookup can say "not captured".
-      if (count++ >= MAX_VARS) continue
-      const full = variables[k]
-      const value = full.slice(0, MAX_VALUE)
-      if (budget?.step() || budget?.write(k.length + value.length, held)) return
-      held += k.length + value.length
-      copy[k] = value
-      if (full.length > MAX_VALUE) cutVars[k] = full.length
+    // One shared bound across every caller and executing frame, not a fresh budget per frame.
+    let varsLeft = MAX_VARS, argsLeft = MAX_ARGS, charsLeft = SNAPSHOT_LIMITS.characters as number
+    let held = 0
+    const charge = (size: number) => {
+      if (budget?.step() || budget?.write(size, held)) return false
+      held += size
+      return true
     }
-    const args: string[] = []
-    const cutArgs: Record<number, number> = Object.create(null)
-    for (const a of extra?.args?.slice(0, MAX_ARGS) ?? []) {
-      const value = a.slice(0, MAX_VALUE)
-      if (budget?.write(value.length, held)) return
-      held += value.length
-      if (a.length > MAX_VALUE) cutArgs[args.length] = a.length
-      args.push(value)
+    const capture = (f: Frame): DebugValues | undefined => {
+      if (!f.bindings) return undefined
+      const source = f.bindings()
+      const values = emptyValues()
+      const copy: Record<string, string> = Object.create(null), cutVars: Record<string, number> = Object.create(null)
+      const scopes: Record<string, DebugValues['scopes'][string]> = Object.create(null)
+      const changes: Record<string, string> = Object.create(null)
+      const unset: string[] = [], locals: string[] = [], params: string[] = []
+      const previous = this.previous.get(f.id)
+      for (const entry of source.entries()) {
+        if (budget?.stopped) return undefined
+        const { name, value, scope, inherited, identity } = entry
+        values.variableCount++
+        if (!varsLeft || charsLeft < name.length) continue
+        varsLeft--; charsLeft -= name.length
+        if (!charge(name.length + identity.length + 32)) return undefined
+        scopes[name] = { kind: scope, inherited, identity }
+        if (scope === 'parameter' && !inherited) params.push(name)
+        if (scope === 'local' && !inherited) locals.push(name)
+        if (value === undefined) unset.push(name)
+        else {
+          const captured = value.slice(0, Math.min(MAX_VALUE, charsLeft))
+          charsLeft -= captured.length
+          if (!charge(captured.length)) return undefined
+          copy[name] = captured
+          if (captured.length < value.length) cutVars[name] = value.length
+        }
+        if (previous?.scopes[name]?.identity === identity && previous.cut.variables[name] === undefined && cutVars[name] === undefined) {
+          const wasSet = Object.hasOwn(previous.variables, name)
+          if ((wasSet && previous.variables[name] !== value) || (previous.unset.includes(name) && value !== undefined)) {
+            const before = wasSet ? previous.variables[name] === '' ? '(empty)' : previous.variables[name].slice(0, 120) + (previous.variables[name].length > 120 ? '…' : '') : '(unset)'
+            if (before.length <= charsLeft) {
+              if (!charge(before.length)) return undefined
+              changes[name] = before; charsLeft -= before.length
+            }
+          }
+        }
+      }
+      const args: string[] = [], cutArgs: Record<number, number> = Object.create(null)
+      for (const arg of source.args) {
+        if (!argsLeft || !charsLeft) break
+        const value = arg.slice(0, Math.min(MAX_VALUE, charsLeft))
+        if (!charge(value.length)) return undefined
+        argsLeft--; charsLeft -= value.length
+        if (value.length < arg.length) cutArgs[args.length] = arg.length
+        args.push(value)
+      }
+      return { ...values, variables: copy, cut: { variables: cutVars, args: cutArgs }, args, argCount: source.args.length, locals, params, unset, scopes, changes }
     }
-    const locals = [...(extra?.locals ?? [])].slice(0, MAX_VARS)
+    const frames = this.stack(location, capture)
+    if (budget?.stopped) return
+    const values = frames[0]?.values ?? emptyValues()
     this.pauseRequested = false
     let stop = () => {}
     try {
@@ -321,8 +382,7 @@ export class DebugSession {
         this.abort.signal.addEventListener('abort', stop, { once: true })
         this.snapshot = {
           ...this.snapshot, state: 'paused', reason, pauses: this.snapshot.pauses + 1,
-          location: { ...location, expression: location.expression.slice(0, MAX_VALUE) }, variables: copy, args, locals, frames: this.stack(location),
-          cut: { variables: cutVars, args: cutArgs }, argCount: extra?.args?.length ?? 0, variableCount: count,
+          location: { ...location, expression: location.expression.slice(0, MAX_VALUE) }, ...values, frames,
         }
         emit()
       })
@@ -332,3 +392,12 @@ export class DebugSession {
     }
   }
 }
+
+// A debugger snapshot is private to the account that created it; never retain it across sign-out.
+let debugAccount = getAccount().user?.id
+const clearDebugAccount = () => { for (const session of sessions.values()) session.cancel(); sessions.clear(); emit() }
+subscribeAccount(() => {
+  const next = getAccount().user?.id
+  if (next !== debugAccount) { debugAccount = next; clearDebugAccount() }
+})
+if (typeof window !== 'undefined') window.addEventListener('mvlos:forget', clearDebugAccount)

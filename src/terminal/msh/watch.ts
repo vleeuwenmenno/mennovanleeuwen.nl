@@ -16,7 +16,7 @@ export const WATCH_DISPLAY = 1000
 export type WatchSnapshot = {
   variables: Readonly<Record<string, string>>; args: readonly string[]
   cut?: { variables: Readonly<Record<string, number>>; args: Readonly<Record<number, number>> }
-  argCount?: number; variableCount?: number
+  argCount?: number; variableCount?: number; unset?: readonly string[]
 }
 /** `truncated`: the value shown is shorter than the real one (cut in the snapshot, or past the result bound). */
 export type WatchResult = { ok: true; value: string; truncated: boolean } | { ok: false; error: string }
@@ -43,7 +43,8 @@ function lookup(ref: string, snap: WatchSnapshot | null): Piece | { error: strin
     return { value, length: value.length, truncated: cut }
   }
   if (Object.hasOwn(snap.variables, ref)) return piece(snap.variables[ref], snap.cut?.variables[ref])
-  const captured = Object.keys(snap.variables).length
+  if (snap.unset?.includes(ref)) return { error: `${ref} is not set at this pause` }
+  const captured = Object.keys(snap.variables).length + (snap.unset?.length ?? 0)
   if ((snap.variableCount ?? captured) > captured) return { error: `${ref} is not captured (only ${captured} of ${snap.variableCount} variables are kept)` }
   return { error: ref === '?' ? '$? is not captured' : `${ref} is not set at this pause` }
 }

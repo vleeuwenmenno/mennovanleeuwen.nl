@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { debugRevision, debugSessions, editorBreakpoints, removeBreakpoints, setBreakpointEnabled, sourceHash, subscribeDebug, toggleBreakpoint, type DebugSession, type DebugStart } from '../terminal/msh/debug'
 import { launchDebug } from '../terminal/msh/interp'
 import '../terminal/commands' // install the normal executable/command/security hooks
-import { formatDiagnostic, type Diagnostic } from '../terminal/msh/analysis'
-import type { Token } from '../terminal/msh/parse'
+import { formatDiagnostic, type AnalysisToken, type Diagnostic } from '../terminal/msh/analysis'
 import { argRef, evaluateWatch, MAX_WATCHES, variableAt, WATCH_DISPLAY, watchError, type WatchResult } from '../terminal/msh/watch'
 import { useWM } from '../os/wm'
 import { HOME } from '../terminal/vfs'
@@ -20,12 +19,12 @@ const OUTPUT_LIMIT = 32768
 const fileName = (p: string) => p.split('/').pop() || p
 const dirName = (p: string) => p.replace(/\/[^/]*$/, '') || '/'
 
-export function MshHighlight({ text, tokens }: { text: string; tokens: Token[] }) {
+export function MshHighlight({ text, tokens }: { text: string; tokens: AnalysisToken[] }) {
   let end = 0
   return <>{tokens.map((t, i) => {
     const gap = text.slice(end, t.start)
     end = t.end
-    const cls = t.k === 'op' || t.k === 'io' ? 'md-punct' : t.k === 'arith' ? 'md-code' : t.k === 'word' && /^(if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function)$/.test(t.v) ? 'md-bullet' : t.k === 'word' && /['"$`]/.test(t.v) ? 'md-code' : undefined
+    const cls = t.role === 'parameter' ? 'md-code' : t.k === 'op' || t.k === 'io' ? 'md-punct' : t.k === 'arith' ? 'md-code' : t.k === 'word' && /^(if|then|else|elif|fi|for|in|do|done|while|until|case|esac|function)$/.test(t.v) ? 'md-bullet' : t.k === 'word' && /['"$`]/.test(t.v) ? 'md-code' : undefined
     return <span key={i}>{gap}<span className={cls}>{text.slice(t.start, t.end)}</span></span>
   })}{text.slice(end)}</>
 }
@@ -54,6 +53,7 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
   const wm = useWM()
   useSyncExternalStore(subscribeDebug, debugRevision)
   const [selected, select] = useState('')
+  const [selectedFrame, selectFrame] = useState({ session: '', id: '' })
   const [output, setOutput] = useState('')
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('output')
@@ -90,6 +90,8 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
   const snap = session?.current ?? null
   const state: DebugUiState = snap?.state ?? 'idle'
   const paused = state === 'paused'
+  const inspectedFrame = paused && snap ? snap.frames.find(f => selectedFrame.session === snap.id && f.id === selectedFrame.id) ?? snap.frames[0] : null
+  const values = inspectedFrame?.values ?? null
   const live = state === 'running' || paused
   const msh = !!path && isMsh(path, text)
   const runnable = !path ? 'Open an msh script to run it' : !msh ? 'Run works for msh scripts: .msh or .sh files, or an msh shebang' : !path.startsWith('/') ? 'Only files on the file system can run' : !ready ? 'The file is still loading' : null
@@ -170,8 +172,10 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
     },
     attach: (id: string) => {
       select(id)
+      selectFrame({ session: '', id: '' })
       const s = debugSessions().find(x => x.id === id)
       if (!s) return
+      s.clearHistory()
       s.useEditorBreakpoints()
       setOpen(true)
     },
@@ -185,14 +189,16 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
   const inspect = (name: string): Inspect | null => {
     if (!paused || !snap) return null
     if (!inStack) return { name, result: { ok: false, error: 'This file is not in the paused call stack' } }
-    return { name, result: evaluateWatch(name, snap) }
+    if (!values) return { name, result: { ok: false, error: 'This frame was not captured' } }
+    if (path !== inspectedFrame?.filename) return { name, result: { ok: false, error: 'Select this file’s frame in Call stack to inspect its values' } }
+    return { name, result: evaluateWatch(name, values) }
   }
   const atCaret = paused && msh ? variableAt(text, caret) : null
   const caretInspect = atCaret ? inspect(atCaret) : null
 
   // A hover belongs to one pause of one session in one file: another session, a step, or another
   // tab hides it until the pointer moves again. Its value is read from the current snapshot when drawn.
-  const pauseKey = paused && snap ? `${snap.id}:${snap.pauses}` : ''
+  const pauseKey = paused && snap ? `${snap.id}:${snap.pauses}:${inspectedFrame?.id}` : ''
   /** Mouse over the editor while paused: the variable under the pointer. */
   const hoverAt = (e: ReactMouseEvent<HTMLTextAreaElement>) => {
     if (!paused || !msh || !path) return hover && setHover(null)
@@ -224,7 +230,7 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
   }
 
   return {
-    session, snap, state, paused, live, owner, msh, runnable, dirty, saving, edited, differs, pausedLine, sessions, selected,
+    session, snap, state, paused, live, values, inspectedFrame, selectFrame: (id: string) => selectFrame({ session: snap?.id ?? '', id }), owner, msh, runnable, dirty, saving, edited, differs, pausedLine, sessions, selected,
     output, setOutput, open, setOpen, tab, setTab, height, setHeight, watches, setWatches, addWatch,
     caretInspect, hoverAt, hoverOut: () => setHover(null), hoverTip, inStack, actions,
   }
@@ -232,7 +238,7 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
 export type XedDebugCtl = ReturnType<typeof useXedDebug>
 
 /** The character offset under a point of the editor's textarea (monospace, tabs of 2), or null. */
-function offsetAt(el: HTMLTextAreaElement, clientX: number, clientY: number, lineHeight: number, pad: number): number | null {
+export function offsetAt(el: HTMLTextAreaElement, clientX: number, clientY: number, lineHeight: number, pad: number): number | null {
   const box = el.getBoundingClientRect()
   const scale = box.width / (el.offsetWidth || 1)
   const x = (clientX - box.left) / scale
@@ -273,7 +279,7 @@ function InspectLine({ inspect, differs }: { inspect: Inspect; differs?: boolean
   const r = inspect.result
   return <>
     <span className="xed-var-name">{inspect.name}</span>
-    {r.ok ? <> = <span className="xed-var-value">{shown(r.value) || <span className="muted">(empty)</span>}</span>{(r.value.length > WATCH_DISPLAY || r.truncated) && <span className="muted"> ({r.truncated ? `cut; ${r.value.length} characters kept` : `${r.value.length} characters`})</span>}</> : <span className="xed-var-error"> {r.error}</span>}
+    {r.ok ? <> = <span className="xed-var-value">{shown(r.value) || <span className="muted">{r.truncated ? '(truncated)' : '(empty)'}</span>}</span>{(r.value.length > WATCH_DISPLAY || r.truncated) && <span className="muted"> ({r.truncated ? `cut; ${r.value.length} characters kept` : `${r.value.length} characters`})</span>}</> : <span className="xed-var-error"> {r.error}</span>}
     {differs && <span className="xed-var-note">The editor text differs from what is running</span>}
   </>
 }
@@ -356,10 +362,10 @@ export function XedDebugPanel({ ctl, path, caretLine, diagnostics, commands, jum
   commands: ReadonlySet<number> | null
   jump: (path: string, line: number, col: number) => void
 }) {
-  const { snap, paused, actions, tab, setTab } = ctl
+  const { snap, paused, actions, tab, setTab, values } = ctl
   const points = editorBreakpoints()
   const frames = paused && snap ? snap.frames : []
-  const varCount = paused && snap ? Object.keys(snap.variables).length + snap.args.length : 0
+  const varCount = values ? Object.keys(values.variables).length + values.unset.length + values.args.length : 0
   const tabs: [Tab, string, number | null][] = [
     ['output', 'Output', null], ['variables', 'Variables', paused ? varCount : null], ['watch', 'Watch', ctl.watches.length || null],
     ['breakpoints', 'Breakpoints', points.length || null], ['stack', 'Call stack', frames.length || null], ['problems', 'Problems', diagnostics.length || null],
@@ -383,21 +389,31 @@ export function XedDebugPanel({ ctl, path, caretLine, diagnostics, commands, jum
     </>
   } else if (tab === 'variables') {
     if (!paused || !snap) body = <p className="xed-dbg-empty">{notPaused(ctl)}</p>
+    else if (!values) body = <p className="xed-dbg-empty">This frame was not captured.</p>
     else {
-      const locals = new Set(snap.locals)
-      const names = Object.keys(snap.variables).sort((a, b) => Number(locals.has(b)) - Number(locals.has(a)) || a.localeCompare(b))
+      const names = [...Object.keys(values.variables), ...values.unset].sort()
+      const groups = [
+        ['Parameters', names.filter(k => values.scopes[k]?.kind === 'parameter' && !values.scopes[k]?.inherited)],
+        ['Locals', names.filter(k => values.scopes[k]?.kind === 'local' && !values.scopes[k]?.inherited)],
+        ['Caller scope', names.filter(k => values.scopes[k]?.inherited)],
+        ['Globals', names.filter(k => !values.scopes[k] || values.scopes[k].kind === 'global')],
+      ] as const
       body = <><table className="xed-vars selectable" aria-label="Variables at this pause">
+        <caption>{ctl.inspectedFrame?.name} · {ctl.inspectedFrame?.id}</caption>
         <tbody>
-          {snap.args.map((v, i) => <VarRow key={argRef(i + 1)} name={argRef(i + 1)} tag="argument" value={v} length={snap.cut.args[i]} onWatch={() => ctl.addWatch(argRef(i + 1))} />)}
-          {names.map(k => <VarRow key={k} name={k} tag={locals.has(k) ? 'local' : undefined} value={snap.variables[k]} length={snap.cut.variables[k]} onWatch={() => ctl.addWatch(k)} />)}
+          {!!values.args.length && <tr><th colSpan={3}>Positional arguments</th></tr>}
+          {values.args.map((v, i) => <VarRow key={argRef(i + 1)} name={argRef(i + 1)} tag="argument" value={v} length={values.cut.args[i]} onWatch={() => ctl.addWatch(argRef(i + 1))} />)}
+          {groups.map(([label, keys]) => keys.length ? <Fragment key={label}>
+            <tr><th colSpan={3}>{label}</th></tr>
+            {keys.map(k => <VarRow key={k} name={k} tag={values.scopes[k]?.kind ?? 'global'} value={values.variables[k]} previous={values.changes[k]} length={values.cut.variables[k]} onWatch={() => ctl.addWatch(k)} />)}
+          </Fragment> : null)}
         </tbody>
       </table>
-      {(snap.argCount > snap.args.length || snap.variableCount > names.length) && (
-        <p className="xed-dbg-empty xed-dbg-omitted">
-          {snap.argCount > snap.args.length && `${snap.argCount} arguments; the first ${snap.args.length} are kept. `}
-          {snap.variableCount > names.length && `${snap.variableCount} variables; ${names.length} are kept.`}
-        </p>
-      )}</>
+      {(values.argCount > values.args.length || values.variableCount > names.length) && <p className="xed-dbg-empty xed-dbg-omitted">
+        {values.argCount > values.args.length && `${values.argCount} arguments; the first ${values.args.length} are kept. `}
+        {values.variableCount > names.length && `${values.variableCount} variables; ${names.length} are kept. `}
+        Capture limits are shared across frames; omitted bindings are not unset.
+      </p>}</>
     }
   } else if (tab === 'watch') {
     body = <WatchList ctl={ctl} />
@@ -426,9 +442,9 @@ export function XedDebugPanel({ ctl, path, caretLine, diagnostics, commands, jum
   } else if (tab === 'stack') {
     body = !paused ? <p className="xed-dbg-empty">{notPaused(ctl)}</p> : (
       <ol className="xed-stack" aria-label="Call stack">
-        {frames.map((f, i) => (
-          <li key={i} className={i === 0 ? 'is-top' : ''}>
-            <button className="xed-link" disabled={!f.filename.startsWith('/')} onClick={() => go(f.filename, f.line, f.column)} title={f.filename.startsWith('/') ? `${f.filename}:${f.line}:${f.column}` : 'No source file: the launch line or $(…) text'}>
+        {frames.map(f => (
+          <li key={f.id} className={ctl.inspectedFrame?.id === f.id ? 'is-top' : ''}>
+            <button className="xed-link" aria-pressed={ctl.inspectedFrame?.id === f.id} onClick={() => { ctl.selectFrame(f.id); go(f.filename, f.line, f.column) }} title={f.filename.startsWith('/') ? `${f.filename}:${f.line}:${f.column}` : 'No source file: the launch line or $(…) text'}>
               <span className="xed-frame-name">{f.kind === 'function' ? `${f.name}()` : f.kind === 'substitution' ? '$(…)' : fileName(f.name)}</span>
               <span className="muted"> {f.filename.startsWith('/') ? `${fileName(f.filename)}:${f.line}` : 'launch line'}</span>
             </button>
@@ -456,6 +472,7 @@ export function XedDebugPanel({ ctl, path, caretLine, diagnostics, commands, jum
         </select>
         <button className="zed-dock-btn" onClick={() => ctl.setOpen(false)} title="Hide the debug panel" aria-label="Hide the debug panel">⌄</button>
       </div>
+      {paused && ctl.inspectedFrame && <div className="xed-dbg-frame">Inspecting {ctl.inspectedFrame.name} · {ctl.inspectedFrame.id}{ctl.inspectedFrame.id !== frames[0]?.id ? ' (caller)' : ' (executing)'}</div>}
       {ctl.caretInspect && <div className="xed-dbg-caret" aria-live="polite"><span className="muted">At caret:</span> <InspectLine inspect={ctl.caretInspect} /> <button className="xed-link" onClick={() => ctl.addWatch(ctl.caretInspect!.name)}>Watch</button></div>}
       {ctl.differs && ctl.live && <div className="xed-dbg-warn" role="note">The editor text of this file differs from the source this session is running (it was edited or changed on disk). Lines and markers may not match; stop and run again to use the new text.</div>}
       <div className="xed-dbg-body" role="tabpanel">{body}</div>
@@ -469,14 +486,15 @@ function notPaused(ctl: XedDebugCtl) {
   return 'The session has ended; values from its last pause are cleared.'
 }
 
-/** `length`: the real length of a value the snapshot cut at 4096 characters. */
-function VarRow({ name, value, tag, length, onWatch }: { name: string; value: string; tag?: string; length?: number; onWatch: () => void }) {
-  const real = length ?? value.length
-  return <tr>
+/** `length`: the original length when either the per-value or shared snapshot bound cut it. */
+function VarRow({ name, value, tag, length, previous, onWatch }: { name: string; value?: string; tag?: string; length?: number; previous?: string; onWatch: () => void }) {
+  const real = length ?? value?.length ?? 0
+  return <tr className={previous !== undefined ? 'is-changed' : undefined}>
     <th scope="row"><span className="xed-var-name">{name}</span>{tag && <span className="xed-var-tag">{tag}</span>}</th>
     <td className="xed-var-value" title={real > WATCH_DISPLAY ? `${real} characters` : undefined}>
-      {shown(value) || <span className="muted">(empty)</span>}
-      {real > WATCH_DISPLAY && <span className="muted"> ({real} characters{length !== undefined ? `, ${value.length} kept` : ''})</span>}
+      {previous !== undefined && <span className="xed-var-previous">{shown(previous)} → </span>}
+      {value === undefined ? <span className="muted">(unset)</span> : shown(value) || (length === undefined && <span className="muted">(empty)</span>)}
+      {(length !== undefined || real > WATCH_DISPLAY) && <span className="muted"> ({length !== undefined ? 'truncated; ' : ''}{real} characters{length !== undefined ? `, ${value?.length ?? 0} kept` : ''})</span>}
     </td>
     <td><button className="xed-link" onClick={onWatch} aria-label={`Watch ${name}`}>Watch</button></td>
   </tr>
@@ -496,10 +514,10 @@ function WatchList({ ctl }: { ctl: XedDebugCtl }) {
     {!ctl.watches.length ? <p className="xed-dbg-empty">Watches read variables of the paused script. They never run commands.</p> : (
       <ul className="xed-watches selectable" aria-label="Watches">
         {ctl.watches.map(w => {
-          const r = ctl.paused && ctl.snap ? evaluateWatch(w, ctl.snap) : null
+          const r = ctl.paused ? ctl.values ? evaluateWatch(w, ctl.values) : { ok: false as const, error: 'This frame was not captured' } : null
           return <li key={w}>
             <span className="xed-var-name">{w}</span>
-            {r ? (r.ok ? <span className="xed-var-value"> = {shown(r.value) || <span className="muted">(empty)</span>}{(r.truncated || r.value.length > WATCH_DISPLAY) && <span className="muted"> (truncated)</span>}</span> : <span className="xed-var-error"> {r.error}</span>) : <span className="muted"> — not paused</span>}
+            {r ? (r.ok ? <span className="xed-var-value"> = {shown(r.value) || (!r.truncated && <span className="muted">(empty)</span>)}{(r.truncated || r.value.length > WATCH_DISPLAY) && <span className="muted"> (truncated)</span>}</span> : <span className="xed-var-error"> {r.error}</span>) : <span className="muted"> — not paused</span>}
             <button className="xed-x" onClick={() => ctl.setWatches(ws => ws.filter(x => x !== w))} aria-label={`Remove watch ${w}`} title="Remove">×</button>
           </li>
         })}

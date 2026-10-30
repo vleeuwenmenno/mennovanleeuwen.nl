@@ -57,6 +57,126 @@ try {
   const nodes = parse(source, 'spans.msh').items
   eq([nodes[0].node.span.start, nodes[1].node.span.start, nodes[1].node.span.column], [0, 12, 3], 'repeated commands retain distinct source spans')
   check(lex('echo "a b" | cat').some((t: { k: string; start: number; end: number }) => t.k === 'op' && t.start === 11 && t.end === 12), 'highlight tokens use real lexer offsets')
+  const symbols = await vite.ssrLoadModule('/src/terminal/msh/symbols.ts')
+  const symbolMain = 'source ./lib.msh\nparcel=global\nouter(parcel) {\n local fuel=9\n echo "$parcel $fuel $global $1"\n inner() { echo "$parcel"; }\n}\ndeliver "Space Potato" 3'
+  const symbolFiles = new Map([['/tmp/main.msh', symbolMain], ['/tmp/lib.msh', 'global=origin\ndeliver(parcel,cost) { echo "$parcel $cost"; }']])
+  const reads: string[] = []
+  const symbolProject = await symbols.indexProject('/tmp/main.msh', '/tmp', async (path: string) => { reads.push(path); return symbolFiles.get(path) ?? null }, new AbortController().signal)
+  eq(reads, ['/tmp/main.msh', '/tmp/lib.msh'], 'static source indexing follows literal paths from launch cwd')
+  const resolved = (at: number) => symbols.resolveSymbol(symbolProject, '/tmp/main.msh', at)
+  eq([resolved(symbolMain.indexOf('$parcel')).reliable, resolved(symbolMain.indexOf('$parcel')).definitions[0].kind], [true, 'parameter'], 'parameter shadows global in shared parser-backed analysis')
+  eq([resolved(symbolMain.indexOf('$fuel')).reliable, resolved(symbolMain.indexOf('$fuel')).definitions[0].kind], [true, 'local'], 'unconditional local declaration resolves in own function')
+  const dynamicGlobal = resolved(symbolMain.indexOf('$global'))
+  check(!dynamicGlobal.reliable && dynamicGlobal.note.includes('caller local') && dynamicGlobal.definitions[0].path === '/tmp/lib.msh', 'free function variable offers source assignment as candidate, not invented lexical binding')
+  check(!resolved(symbolMain.lastIndexOf('$parcel')).reliable, 'nested function does not lexically capture outer parameter')
+  const sourceFunction = resolved(symbolMain.indexOf('deliver "'))
+  check(sourceFunction.reliable && sourceFunction.definitions[0].signature === 'deliver(parcel, cost)' && sourceFunction.definitions[0].path === '/tmp/lib.msh', 'function call resolves literal sourced definition with signature and origin')
+  check(resolved(symbolMain.indexOf('$1')).note.includes('Positional argument'), 'static positional hint distinguishes caller arguments')
+  const varsComplete = symbols.completeSymbols(symbolProject, '/tmp/main.msh', symbolMain.indexOf('$parcel') + 4, ['printf'])
+  check(varsComplete.some((c: { name: string; detail: string }) => c.name === 'parcel' && c.detail.includes('parameter')) && !varsComplete.some((c: { name: string }) => c.name === 'printf'), 'variable completion respects local shadowing and excludes commands')
+  const parcelCompletion = varsComplete.find((c: { name: string }) => c.name === 'parcel')
+  eq([parcelCompletion.start, parcelCompletion.end, parcelCompletion.caret], [symbolMain.indexOf('$parcel') + 1, symbolMain.indexOf('$parcel') + 7, symbolMain.indexOf('$parcel') + 4], 'completion replaces the whole existing identifier, including text after the caret')
+  const commandComplete = symbols.completeSymbols(symbolProject, '/tmp/main.msh', symbolMain.indexOf('deliver "') + 3, ['declare', 'printf'])
+  check(commandComplete.some((c: { name: string; detail: string }) => c.name === 'deliver' && c.detail.includes('deliver(parcel, cost)')), 'command completion shows source function signature')
+  const completionProject = (text: string) => ({ entry: '/tmp/complete', cwd: '/tmp', files: new Map([['/tmp/complete', symbols.indexMsh(text, '/tmp/complete')]]), links: [], notes: [] })
+  const literalCompletions: [string, string, number[]][] = [
+    ['"del"', '"deliver"', [5, 3, 4]], ["'del'", "'deliver'", [5, 3, 4]],
+    ['"delivery"', '"deliver"', [4]], ["'delivery'", "'deliver'", [4]],
+    ['de\\l', "'deliver'", [4, 2, 3]], ['\\del', "'deliver'", [4, 2]],
+    ['de"l"', "'deliver'", [5, 3]], ['del', 'deliver', [3, 2]],
+  ]
+  for (const [head, replacement, positions] of literalCompletions) for (const caret of positions) {
+    const source = `deliver(p) { echo "$p"; }\n${head} "Space Potato" # untouched`
+    const start = source.indexOf('\n') + 1
+    const choices = symbols.completeSymbols(completionProject(source), '/tmp/complete', start + caret, ['printf'])
+    const completion = choices.find((c: any) => c.name === 'deliver')
+    eq([completion?.start, completion?.end], [start, start + head.length], 'command completion replaces exactly the parser word range')
+    const edited = completion ? source.slice(0, completion.start) + completion.insertText + source.slice(completion.end) : source
+    eq(edited, `deliver(p) { echo "$p"; }\n${replacement} "Space Potato" # untouched`, `literal completion preserves whole command and arguments: ${head} at ${caret}`)
+    check(!choices.some((c: any) => c.name === 'printf'), `decoded literal prefix filters unrelated suggestions: ${head} at ${caret}`)
+    eq(await run(edited), { stdout: 'Space Potato\n', stderr: '', status: 0 }, `completed literal invokes deliver: ${head} at ${caret}`)
+  }
+  for (const head of ['de\\l', 'de"l"']) {
+    const source = `alias deliver='echo alias'\ndeliver(p) { echo "$p"; }\n${head} hello`
+    const c = symbols.completeSymbols(completionProject(source), '/tmp/complete', source.lastIndexOf(head) + head.length, []).find((c: any) => c.name === 'deliver')
+    const edited = source.slice(0, c.start) + c.insertText + source.slice(c.end)
+    eq((await run(edited)).stdout, 'hello\n', `literal command completion must not enable alias expansion: ${head}`)
+  }
+  const continuation = '\\' + '\n'
+  const continuationCases: [string, string, string, string][] = [
+    ['continuation only', `deli${continuation}ver`, 'deliver', 'ALIAS hello\n'],
+    ['multiple continuations', `de${continuation}li${continuation}ver`, 'deliver', 'ALIAS hello\n'],
+    ['trailing continuation', `deliver${continuation}`, 'deliver', 'ALIAS hello\n'],
+    ['double quotes', `"deli${continuation}ver"`, '"deliver"', 'FUNCTION:hello\n'],
+    ['single quotes', `'deli${continuation}ver'`, "'deliver'", 'FUNCTION:hello\n'],
+    ['real escape', `de\\li${continuation}ver`, "'deliver'", 'FUNCTION:hello\n'],
+    ['mixed quotes', `deli${continuation}"ver"`, "'deliver'", 'FUNCTION:hello\n'],
+  ]
+  for (const [label, head, replacement, output] of continuationCases) {
+    const header = 'alias deliver="echo ALIAS"\ndeliver(p) { echo "FUNCTION:$p"; }\n'
+    const source = header + head + ' hello'
+    eq(await run(source), { stdout: output, stderr: '', status: 0 }, `continued command dispatch before completion: ${label}`)
+    const positions = new Set([head.length, 3, head.indexOf(continuation), head.indexOf(continuation) + 1, head.indexOf(continuation) + 2])
+    for (const caret of positions) {
+      const choices = symbols.completeSymbols(completionProject(source), '/tmp/complete', header.length + caret, ['printf'])
+      const c = choices.find((c: any) => c.name === 'deliver')
+      check(!!c && !choices.some((c: any) => c.name === 'printf'), `continued prefix matches at ${caret}: ${label}`)
+      const edited = c ? source.slice(0, c.start) + c.insertText + source.slice(c.end) : source
+      eq(edited, header + replacement + ' hello', `completion preserves normalized quoting at ${caret}: ${label}`)
+      eq(await run(edited), { stdout: output, stderr: '', status: 0 }, `completion preserves continued command dispatch at ${caret}: ${label}`)
+    }
+  }
+  for (const [word, caret, completed] of [
+    ['"$par"', 5, '"$parcel"'], ['"$par"', 3, '"$parcel"'],
+    ['"${par}"', 6, '"${parcel}"'], ['"${par:-fallback}"', 5, '"${parcel:-fallback}"'],
+    ['"$"', 2, '"$parcel"'],
+  ] as [string, number, string][]) {
+    const source = `parcel=hello\necho ${word}`, start = source.lastIndexOf(word)
+    const choices = symbols.completeSymbols(completionProject(source), '/tmp/complete', start + caret, ['printf'])
+    const c = choices.find((c: any) => c.name === 'parcel')
+    const edited = c ? source.slice(0, c.start) + c.insertText + source.slice(c.end) : source
+    eq(edited, `parcel=hello\necho ${completed}`, `variable completion replaces only an expansion identifier: ${word} at ${caret}`)
+    eq((await run(edited)).stdout, 'hello\n', 'completed variable still evaluates through normal msh expansion')
+  }
+  for (const [head, caret] of [
+    ['"del${suffix}"', 4], ['del${suffix}', 3], ['del$(echo iver)', 3],
+    ['"$parcel"', 9], ['"${parcel}"', 11], ['`echo del`', 9],
+  ] as [string, number][]) {
+    const source = `deliver(p) { echo "$p"; }\n${head} hello`, start = source.indexOf('\n') + 1
+    eq(symbols.completeSymbols(completionProject(source), '/tmp/complete', start + caret, []), [], `dynamic command expression is not replaced by a literal completion: ${head}`)
+  }
+  const variableCommand = 'parcel=deliver\ndeliver(p) { echo "$p"; }\n"$par" hello'
+  const variableCommandAt = variableCommand.lastIndexOf('$par') + 4
+  const variableChoice = symbols.completeSymbols(completionProject(variableCommand), '/tmp/complete', variableCommandAt, []).find((c: any) => c.name === 'parcel')
+  const completedVariableCommand = variableCommand.slice(0, variableChoice.start) + variableChoice.insertText + variableCommand.slice(variableChoice.end)
+  eq((await run(completedVariableCommand)).stdout, 'hello\n', 'variable completion inside a command head preserves its expansion')
+  for (const word of ["'$par'", '"\\$par"', '"del"']) {
+    const source = `parcel=hello\ndeliver(p) { :; }\necho ${word}`
+    eq(symbols.completeSymbols(completionProject(source), '/tmp/complete', source.length - 1, ['printf']), [], `quoted argument/literal data is not a completion site: ${word}`)
+  }
+  const redefinitions = 'f() { :; }\nf() { :; }\nf'
+  const redefined = { entry: '/tmp/redefined', cwd: '/tmp', files: new Map([['/tmp/redefined', symbols.indexMsh(redefinitions, '/tmp/redefined')]]), links: [], notes: [] }
+  const ambiguous = symbols.resolveSymbol(redefined, '/tmp/redefined', redefinitions.length - 1)
+  check(!ambiguous.reliable && ambiguous.definitions.length === 2, 'function redefinitions remain explicit candidates')
+  const literalRefs = symbols.indexMsh(`echo '$fake' "\\$escaped" "$real" # $comment`, '/tmp/literal')
+  eq(literalRefs.references.filter((r: { kind: string }) => r.kind === 'variable').map((r: { name: string }) => r.name), ['real'], 'reference extraction honors parser words, quoting, escapes and comments')
+  const dynamicSources = 'source "$lib"\ncd /tmp/elsewhere\nsource ./relative\neval "$command"'
+  const dynamicReads: string[] = []
+  const dynamicIndex = await symbols.indexProject('/tmp/dynamic', '/tmp', async (path: string) => { dynamicReads.push(path); return dynamicSources }, new AbortController().signal)
+  eq(dynamicReads, ['/tmp/dynamic'], 'dynamic source and cwd do not trigger guessed file reads')
+  check(dynamicIndex.notes.some((n: string) => n.includes('dynamic source')) && dynamicIndex.files.get('/tmp/dynamic').uncertain, 'dynamic source/eval uncertainty is explicit')
+  const initializer = 'x=global\nf() { local x="$x"; echo "$x"; }'
+  const initializerProject = { entry: '/tmp/init', cwd: '/tmp', files: new Map([['/tmp/init', symbols.indexMsh(initializer, '/tmp/init')]]), links: [], notes: [] }
+  check(!symbols.resolveSymbol(initializerProject, '/tmp/init', initializer.indexOf('$x')).reliable && symbols.resolveSymbol(initializerProject, '/tmp/init', initializer.lastIndexOf('$x')).definitions[0].kind === 'local', 'local initializer reads caller before declaration takes effect')
+  const shadowedBuiltin = symbols.indexMsh('local() { :; }; f() { local x=1; echo "$x"; }', '/tmp/shadowed')
+  check(shadowedBuiltin.uncertain && !shadowedBuiltin.definitions.some((d: { name: string }) => d.name === 'x'), 'function shadowing local builtin does not fabricate local declarations')
+  eq(symbols.literalWord('"lib\\path"'), 'lib\\path', 'literal source decoding preserves ordinary backslash in double quotes')
+  const cancelledIndex = new AbortController()
+  let indexReads = 0
+  await symbols.indexProject('/tmp/cancelled', '/tmp', async () => { indexReads++; cancelledIndex.abort(); return 'source next' }, cancelledIndex.signal)
+  eq(indexReads, 1, 'cancelled source indexing starts no further reads')
+  const cyclic = await symbols.indexProject('/tmp/cycle', '/tmp', async () => 'source ./cycle', new AbortController().signal)
+  eq(cyclic.files.size, 1, 'source cycles terminate without executing')
   const aborted = new AbortController(); aborted.abort()
   eq((await runCapturedStreams('echo never', base(aborted.signal))).status, 130, 'pre-cancelled execution')
   eq(await runCaptured('echo legacy; false', base()), { output: 'legacy', status: 1 }, 'legacy combined-output API remains compatible')
@@ -64,6 +184,255 @@ try {
     for (let i = 0; i < 200; i++) { if (test()) return; await new Promise(r => setTimeout(r, 5)) }
     throw new Error('debug checkpoint timeout')
   }
+  // Review regressions: a subshell must be inspected from its executing environment.
+  const subshellProbeSource = 'x=outer\n(\nx=inner\nset -- child\necho "$x:$1"\n)\necho "$x"'
+  const subshellProbe = new DebugSession('subshell review', 'run')
+  subshellProbe.breakpoint('/tmp/review-subshell.msh', 5)
+  const subshellProbeRun = runCapturedStreams(subshellProbeSource, { ...base(), debug: subshellProbe }, '/tmp/review-subshell.msh')
+  await wait(() => subshellProbe.current.state === 'paused')
+  eq([subshellProbe.current.variables.x, subshellProbe.current.args], ['inner', ['child']], 'review P2: executing subshell bindings and arguments')
+  const reviewWatch = await vite.ssrLoadModule('/src/terminal/msh/watch.ts')
+  eq(reviewWatch.evaluateWatch('$x:$1', subshellProbe.current), { ok: true, value: 'inner:child', truncated: false }, 'review P2: subshell watch matches execution')
+  subshellProbe.continue()
+  eq((await subshellProbeRun).stdout, 'inner:child\nouter\n', 'review P2: subshell output and restored outer value')
+  subshellProbe.finish(0)
+
+  // Nested forks retain the executing invocation's identity, but not its parent's values.
+  const forkLines = [
+    'x=global', 'set -- root',
+    'leaf(extra) {', 'echo "leaf:$parcel:$x:$1"', '}',
+    'outer(value) {', 'local x=caller',
+    'inner(parcel) (', 'parcel=sub; x=inner; set -- child',
+    '(', 'parcel=nested; x=deep; set -- nested', 'leaf extra',
+    'echo "nested:$parcel:$x:$1"', 'return 7', ')',
+    'echo "sub:$parcel:$x:$1"', 'return 8', ')',
+    'inner "Space Potato"', 'echo "caller:$value:$x:$1"', '}',
+    'outer outer', 'echo "root:$x:$1"',
+  ]
+  const forkDebug = new DebugSession('nested forks', 'run')
+  const forkPath = '/tmp/review-forks.msh'
+  for (const line of [4, 13, 16, 20, 23]) forkDebug.breakpoint(forkPath, line)
+  const forkRun = runCapturedStreams(forkLines.join('\n'), { ...base(), debug: forkDebug }, forkPath)
+  await wait(() => forkDebug.current.state === 'paused')
+  let forkSnap = forkDebug.current
+  eq(forkSnap.frames.map((f: { name: string }) => f.name), ['leaf', 'inner', 'outer', forkPath], 'fork does not add synthetic call frames')
+  eq(forkSnap.frames.map((f: any) => [f.values.variables.x, f.values.args]), [['deep', ['extra']], ['deep', ['nested']], ['caller', ['outer']], ['global', ['root']]], 'fork caller snapshots preserve each real shell and argument scope')
+  eq([forkSnap.frames[1].values.params, forkSnap.frames[1].values.variables.parcel], [['parcel'], 'nested'], 'named function subshell body retains parameter provenance')
+  eq([forkSnap.scopes.parcel.kind, forkSnap.scopes.parcel.inherited, forkSnap.scopes.x.kind, forkSnap.scopes.x.inherited], ['parameter', true, 'local', true], 'function called in fork sees inherited dynamic parameter/local scopes')
+  const forkFrame = forkSnap.frames[1].id, forkBinding = forkSnap.frames[1].values.scopes.parcel.identity
+  forkDebug.continue(); await wait(() => forkDebug.current.state === 'paused')
+  forkSnap = forkDebug.current
+  eq([forkSnap.frames[0].id, forkSnap.variables.parcel, forkSnap.variables.x, forkSnap.args], [forkFrame, 'nested', 'deep', ['nested']], 'return from leaf preserves fork invocation identity and bindings')
+  forkDebug.continue(); await wait(() => forkDebug.current.state === 'paused')
+  forkSnap = forkDebug.current
+  eq([forkSnap.frames[0].id, forkSnap.variables.parcel, forkSnap.variables.x, forkSnap.args], [forkFrame, 'sub', 'inner', ['child']], 'return from nested subshell restores outer fork bindings without a new frame')
+  check(forkSnap.scopes.parcel.identity !== forkBinding && forkSnap.changes.parcel === undefined, 'copied fork binding is never compared with its parent as a previous value')
+  forkDebug.continue(); await wait(() => forkDebug.current.state === 'paused')
+  eq([forkDebug.current.variables.value, forkDebug.current.variables.x, forkDebug.current.args], ['outer', 'caller', ['outer']], 'named subshell return restores true caller values')
+  forkDebug.continue(); await wait(() => forkDebug.current.state === 'paused')
+  eq([forkDebug.current.variables.x, forkDebug.current.args], ['global', ['root']], 'all fork/function exits restore root environment and positional arguments')
+  forkDebug.continue()
+  eq((await forkRun).stdout, 'leaf:nested:deep:extra\nnested:nested:deep:nested\nsub:sub:inner:child\ncaller:outer:caller:outer\nroot:global:root\n', 'nested return paths execute with the inspected bindings')
+  forkDebug.finish(0)
+  // Cancellation must clear providers even when suspended inside two forks and a named frame.
+  const forkBase = base()
+  await runLine('x=outer; forked(p) (x=inner; (p=deep; echo never))', forkBase)
+  const cancelFork = launchDebug('forked value; touch /tmp/review-fork-after-cancel', forkBase)
+  for (let i = 0; i < 15; i++) {
+    await wait(() => cancelFork.session.current.state === 'paused' || cancelFork.session.done)
+    if (cancelFork.session.current.variables.p === 'deep') break
+    cancelFork.session.stepInto()
+  }
+  eq(cancelFork.session.current.variables.p, 'deep', 'cancel test reaches nested named subshell')
+  cancelFork.session.cancel(); await cancelFork.done
+  eq([cancelFork.session.current.frames, cancelFork.session.current.variables, cancelFork.session.current.changes], [[], {}, {}], 'fork cancellation clears captured callers, values and history')
+  check(!lookup('/tmp/review-fork-after-cancel'), 'fork cancellation never executes subsequent side effects')
+  const restoredFork: string[] = []
+  await runLine('echo "$x:${p-unset}"', { ...forkBase, print: (t: string) => restoredFork.push(t) })
+  eq(restoredFork.join(''), 'outer:unset', 'cancellation unwinds local bindings in persistent shell')
+
+  const cwdMain = 'source /tmp/move.msh\nsource ./lib.msh\nf'
+  const cwdFiles = new Map([['/tmp/cwd-main.msh', cwdMain], ['/tmp/move.msh', 'cd sub'], ['/tmp/lib.msh', 'f() { echo wrong; }'], ['/tmp/sub/lib.msh', 'f() { echo right; }']])
+  const cwdProject = await symbols.indexProject('/tmp/cwd-main.msh', '/tmp', async (p: string) => cwdFiles.get(p) ?? null, new AbortController().signal)
+  const cwdResolution = symbols.resolveSymbol(cwdProject, '/tmp/cwd-main.msh', cwdMain.length - 1)
+  check(!cwdResolution.reliable && !cwdProject.links.some((l: { to: string }) => l.to === '/tmp/lib.msh'), 'review P2: sourced cd cannot produce a definitive wrong library', JSON.stringify(cwdResolution))
+  const quotedEval = `f() { echo old; }; "eval" 'f() { echo new; }'; f`
+  const quotedEvalProject = { entry: '/tmp/quoted-eval', cwd: '/tmp', files: new Map([['/tmp/quoted-eval', symbols.indexMsh(quotedEval, '/tmp/quoted-eval')]]), links: [], notes: [] }
+  check(!symbols.resolveSymbol(quotedEvalProject, '/tmp/quoted-eval', quotedEval.length - 1).reliable, 'review P2: quoted eval invalidates old function definition')
+  eq((await run(quotedEval)).stdout, 'new\n', 'review P2: quoted eval really redefines function at runtime')
+  const staticProject = (text: string) => ({ entry: '/tmp/static', cwd: '/tmp', files: new Map([['/tmp/static', symbols.indexMsh(text, '/tmp/static')]]), links: [], notes: [] })
+  const literalHeads = (word: string) => [`'${word}'`, `"${word}"`, `\\${word}`]
+  for (const evalHead of literalHeads('eval')) {
+    const text = `f() { echo old; }; ${evalHead} 'f() { echo new; }'; f`, project = staticProject(text)
+    check(!symbols.resolveSymbol(project, '/tmp/static', text.length - 1).reliable, `literal command identity invalidates eval definitions: ${evalHead}`)
+    eq((await run(text)).stdout, 'new\n', `decoded eval identity agrees with runtime: ${evalHead}`)
+  }
+  for (const head of literalHeads('f')) {
+    const text = `f() { :; }; ${head}`, project = staticProject(text)
+    const result = symbols.resolveSymbol(project, '/tmp/static', text.lastIndexOf(head))
+    check(result?.reliable && result.reference.name === 'f' && text.slice(result.reference.start, result.reference.end) === head, `quoted function reference retains raw source range: ${head}`)
+  }
+  for (const builtin of ['alias', 'unalias', 'unset', 'command']) for (const head of literalHeads(builtin)) {
+    const file = symbols.indexMsh(`${head} name`, '/tmp/static')
+    check(file.uncertain, `quoted state-changing command remains uncertain: ${head}`)
+  }
+  for (const builtin of ['local', 'export']) for (const head of literalHeads(builtin)) {
+    const text = builtin === 'local' ? `f() { ${head} name=value; echo "$name"; }` : `${head} name=value; echo "$name"`
+    const project = staticProject(text), definition = symbols.resolveSymbol(project, '/tmp/static', text.indexOf('$name'))
+    eq([definition.reliable, definition.definitions[0]?.kind], [true, builtin === 'local' ? 'local' : 'global'], `quoted declaration command has actual builtin meaning: ${head}`)
+    const shadowed = symbols.indexMsh(`${builtin}() { :; }; ${text}`, '/tmp/static')
+    check(shadowed.uncertain && !shadowed.definitions.some((d: any) => d.name === 'name'), `quoted declaration respects function shadowing: ${head}`)
+  }
+  for (const sourceHead of [...literalHeads('source'), ...literalHeads('.')]) {
+    const file = symbols.indexMsh(`${sourceHead} './lib.msh'`, '/tmp/static')
+    eq(file.sources.map((s: any) => s.word), ['./lib.msh'], `quoted source identity preserves literal target: ${sourceHead}`)
+    const shadowed = symbols.indexMsh(`source() { :; }; ${sourceHead.replace('.', 'source')} ./lib.msh`, '/tmp/static')
+    check(shadowed.uncertain && shadowed.sources.length === 0, `quoted source respects function shadowing: ${sourceHead}`)
+  }
+  for (const cdHead of literalHeads('cd')) {
+    const file = symbols.indexMsh(`${cdHead} sub; source ./lib.msh`, '/tmp/static')
+    check(file.cwdChanges && file.sources[0].cwdUnknown, `quoted cd invalidates relative source cwd: ${cdHead}`)
+  }
+  for (const head of ['$cmd', '"$cmd"', '`echo eval`', 'e*al']) {
+    const text = `f() { :; }; ${head} 'f() { :; }'; f`, project = staticProject(text)
+    check(project.files.get('/tmp/static').uncertain && !symbols.resolveSymbol(project, '/tmp/static', text.length - 1).reliable, `dynamic command identity is unknown: ${head}`)
+  }
+
+  for (const builtin of ['source', 'local']) {
+    const main = builtin === 'source' ? 'source /tmp/override.msh\n"source" /tmp/lib.msh\nf' : 'source /tmp/override.msh\nf() { "local" x=value; echo "$x"; }'
+    const project = await symbols.indexProject('/tmp/main', '/tmp', async (p: string) => p === '/tmp/main' ? main : p === '/tmp/override.msh' ? `${builtin}() { :; }` : 'f() { :; }', new AbortController().signal)
+    check(!symbols.resolveSymbol(project, '/tmp/main', builtin === 'source' ? main.length - 1 : main.indexOf('$x')).reliable, `imported function shadowing prevents invented quoted builtin facts: ${builtin}`)
+  }
+  // Sourced cwd effects flow back to the caller and through nested/repeated contexts.
+  const cwdCases: [string, string, Record<string, string | null>][] = [
+    ['nested', 'source /tmp/move.msh\nsource ./lib.msh\nf', { '/tmp/move.msh': 'source /tmp/nested.msh', '/tmp/nested.msh': 'cd sub' }],
+    ['conditional source', 'if true; then source /tmp/move.msh; fi\nsource ./lib.msh\nf', { '/tmp/move.msh': 'cd sub' }],
+    ['conditional cd', 'source /tmp/move.msh\nsource ./lib.msh\nf', { '/tmp/move.msh': 'if true; then cd sub; fi' }],
+    ['function cd', 'source /tmp/move.msh\nmove\nsource ./lib.msh\nf', { '/tmp/move.msh': 'move() { cd sub; }' }],
+    ['unloaded', 'source /tmp/move.msh\nsource ./lib.msh\nf', { '/tmp/move.msh': null }],
+    ['dynamic source', 'source "$move"\nsource ./lib.msh\nf', {}],
+    ['outside project', 'source /elsewhere/move.msh\nsource ./lib.msh\nf', {}],
+    ['quoted cd/source', '"source" /tmp/move.msh\n"." ./lib.msh\nf', { '/tmp/move.msh': "'cd' sub" }],
+    ['repeat in changed cwd', 'source /tmp/move.msh\nsource /tmp/move.msh\nf', { '/tmp/move.msh': 'source ./lib.msh\ncd sub' }],
+    ['nested absolute source after cd', 'source /tmp/move.msh\nsource /tmp/load.msh\nf', { '/tmp/move.msh': 'cd sub', '/tmp/load.msh': 'source ./lib.msh' }],
+  ]
+  for (const [label, main, files] of cwdCases) {
+    const reads: string[] = []
+    const project = await symbols.indexProject('/tmp/main', '/tmp', async (p: string) => {
+      reads.push(p)
+      return p === '/tmp/main' ? main : p === '/tmp/lib.msh' ? 'f() { echo wrong; }' : files[p] ?? null
+    }, new AbortController().signal)
+    check(!project.links.some((l: any) => l.to === '/tmp/lib.msh') && !symbols.resolveSymbol(project, '/tmp/main', main.length - 1).reliable, `source cwd uncertainty avoids guessed relative definitions: ${label}`)
+    check(reads.length <= 16 && new Set(reads).size === reads.length, `source graph reads stay bounded and cached: ${label}`)
+  }
+  const pureSources = 'source ./pure.msh\nsource ./pure.msh\nsource ./lib.msh\nf'
+  const pureProject = await symbols.indexProject('/tmp/main', '/tmp', async (p: string) => p === '/tmp/main' ? pureSources : p === '/tmp/pure.msh' ? 'echo unchanged' : 'f() { :; }', new AbortController().signal)
+  check(symbols.resolveSymbol(pureProject, '/tmp/main', pureSources.length - 1).reliable, 'known pure repeated sources retain reliable following relative navigation')
+  const cappedSources = Array.from({ length: 30 }, (_, i) => `source /tmp/unloaded-${i}`).join('\n')
+  let failedReads = 0
+  await symbols.indexProject('/tmp/main', '/tmp', async (p: string) => { failedReads++; return p === '/tmp/main' ? cappedSources : null }, new AbortController().signal)
+  eq(failedReads, 16, 'source read limit also counts unavailable files')
+  // Named parameters: parser, runtime, source diagnostics and frame cleanup share the real path.
+  const potato = `deliver(parcel, cost) {
+    printf 'Delivering %s for %s fuel\\n' "$parcel" "$cost"
+}
+deliver "Space Potato" 3`
+  eq(await run(potato), { stdout: 'Delivering Space Potato for 3 fuel\n', stderr: '', status: 0 }, 'exact named-parameter potato example')
+  for (const header of ['f()', 'function f()', 'function f']) {
+    eq((await run(`${header} { printf '<%s:%s>\\n' "$#" "$1"; }; f; f a b`)).stdout, '<0:>\n<2:a>\n', `legacy argument handling: ${header}`)
+  }
+  for (const header of ['f(a,b)', 'function f(a, b)', 'f (\n a, # comment\n b\n)', 'f(a ,\n b)', 'f(a,\\\n b)']) {
+    eq((await run(`${header}\n{ printf '<%s:%s>\\n' "$a" "$b"; }; f '' 'two words'`)).stdout, '<:two words>\n', `named header whitespace: ${header}`)
+  }
+  eq((await run(`f(a) { printf '%s\\n' "$a"; }; f '$(touch /tmp/parameter-eval) \`echo no\` $HOME " * ;'`)).stdout,
+    '$(touch /tmp/parameter-eval) `echo no` $HOME " * ;\n', 'argument strings are never reparsed or expanded twice')
+  check(!lookup('/tmp/parameter-eval'), 'substitution-looking literal parameter causes no mutation')
+  eq((await run(`f(a,b) { printf '%s\\n' "$#" "$1" "$2" "$@"; shift; printf '%s\\n' "$a" "$b" "$#" "$1"; }; f 'one two' ''`)).stdout,
+    '2\none two\n\none two\n\none two\n\n1\n\n', 'positionals preserved; shift does not change named snapshots')
+  for (const options of ['', 'set -u;']) for (const args of ['', 'one', 'one two three']) {
+    const r = await run(`${options} f(a,b) { touch /tmp/arity-body; };\nf ${args}`, '/tmp/arity.msh')
+    check(r.status === 1 && r.stderr.includes('/tmp/arity.msh:2:1:') && r.stderr.includes(`f expects 2 arguments (a, b); received ${args ? args.split(' ').length : 0}`), `exact arity diagnostic: ${options} ${args}`, r.stderr)
+  }
+  check(!lookup('/tmp/arity-body'), 'arity failure never enters body')
+  eq((await run('set -u; f(a) { printf "<%s>" "$a"; }; f ""')).stdout, '<>', 'empty supplied argument is set under nounset')
+  eq((await run('set -u; f() { printf "<%s>" "$1"; }; f')).stdout, '<>', 'legacy missing positional remains empty under nounset')
+  eq((await run('a=global; f(a) { local a=changed; g(a) { echo "$a"; }; g nested; echo "$a"; unset a; }; f first; echo "$a"')).stdout,
+    'nested\nchanged\nglobal\n', 'parameter/local redeclaration preserves original value, nesting and unset restore')
+  eq((await run('a=global; f(a) { g() { echo "$a"; }; g; }; f caller; echo "$a"')).stdout, 'caller\nglobal\n', 'parameter follows existing dynamic local scope')
+  eq((await run('f(n) { echo "$n"; if [ "$n" -gt 0 ]; then f "$((n - 1))"; fi; echo "$n"; }; f 2')).stdout,
+    '2\n1\n0\n0\n1\n2\n', 'recursive named bindings isolate frames')
+  eq((await run('f(a) { echo "$a"; }; x=$(f "two words"); echo "$x"; (f sub)')).stdout, 'two words\nsub\n', 'substitution and subshell preserve function parameter definitions')
+  eq((await run('f(a) { echo never; }; x=$(f); echo "status=$? value=$x"')).stdout, 'status=1 value=\n', 'wrong arity in substitution keeps status and skips body')
+  const badParameters: [string, number, string][] = [
+    ['f(a,a) { :; }', 5, 'duplicate'], ['f(a, a) { :; }', 6, 'duplicate'],
+    ['f(1x) { :; }', 3, 'plain variable'], ['f(a-b) { :; }', 3, 'plain variable'],
+    ['f(a=1) { :; }', 3, 'plain variable'], ['f(a: str) { :; }', 3, 'plain variable'],
+    ['f([a]) { :; }', 3, 'plain variable'], ['f(a[]) { :; }', 3, 'plain variable'],
+    ['f(...a) { :; }', 3, 'plain variable'], ['f("a") { :; }', 3, 'plain variable'],
+    ['f($a) { :; }', 3, 'plain variable'], ['f(a b) { :; }', 5, 'comma'],
+    ['f(,a) { :; }', 3, 'before comma'], ['f(a,) { :; }', 5, 'after comma'],
+    ['f(a,,b) { :; }', 5, 'before comma'], ['f(RANDOM) { :; }', 3, 'computed'],
+    ['f(readonly a) { :; }', 12, 'comma'], ['f("Space Potato", 3)', 3, 'plain variable'],
+  ]
+  for (const [code, column, message] of badParameters) {
+    const a = analyzeMsh('# file\n' + code, '/tmp/params-invalid.msh')
+    check(a.diagnostics.length === 1 && a.diagnostics[0].line === 2 && a.diagnostics[0].column === column && a.diagnostics[0].message.includes(message),
+      `precise declaration diagnostic: ${code}`, JSON.stringify(a.diagnostics))
+  }
+  const analysis = analyzeMsh(potato, 'potato.msh')
+  eq(analysis.tokens.filter((t: { role?: string }) => t.role === 'parameter').map((t: { v: string }) => t.v), ['parcel', 'cost'], 'shared Xed analysis identifies named parameters')
+  eq([...analysis.commands], [2, 4], 'parameter declaration does not add debugger command stops')
+  eq((await run('echo a,b readonly parcel cost')).stdout, 'a,b readonly parcel cost\n', 'ordinary command words and commas remain literal')
+  const q = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
+  await runLine(`printf %s ${q(potato)} > /tmp/named-source.msh`, base())
+  eq((await run('source /tmp/named-source.msh')).stdout, 'Delivering Space Potato for 3 fuel\n', 'source uses shared named parser/runtime')
+  eq((await run('msh -n /tmp/named-source.msh')).status, 0, 'syntax-only accepts named parameters without running')
+  await runLine(`printf %s ${q('f(a,a) { :; }')} > /tmp/named-invalid.msh`, base())
+  for (const cmd of ['source', 'msh -n']) {
+    const r = await run(`${cmd} named-invalid.msh`)
+    check(r.status === 2 && r.stderr.includes('/tmp/named-invalid.msh:1:5:') && r.stderr.includes('duplicate function parameter'), `${cmd} keeps canonical declaration diagnostics`, r.stderr)
+  }
+  for (const tail of ['return 7', 'set -e; false', 'set -u; echo "$missing"']) {
+    const b = base()
+    await runLine(`a=outer; f(a) { local own=inner; ${tail}; }; f inner`, b)
+    eq([b.env['a'], Object.hasOwn(b.env, 'own')], ['outer', false], `cleanup after ${tail}`)
+  }
+  const proto = base()
+  const originalPrototype = Object.getPrototypeOf(proto.env)
+  await runLine('f(__proto__, constructor) { echo "$__proto__:$constructor"; local __proto__=local; }; f data ctor', proto)
+  check(Object.getPrototypeOf(proto.env) === originalPrototype && !Object.hasOwn(proto.env, '__proto__') && !Object.hasOwn(proto.env, 'constructor'), 'prototype-like identifiers bind as data and restore absence')
+  const namedCancelBase = base()
+  await runLine('a=outer; f(a) { echo "$a"; }', namedCancelBase)
+  const namedCancel = launchDebug('f inner', namedCancelBase)
+  await wait(() => namedCancel.session.current.state === 'paused')
+  namedCancel.session.stepInto()
+  await wait(() => namedCancel.session.current.state === 'paused')
+  eq([namedCancel.session.current.variables.a, namedCancel.session.current.args, namedCancel.session.current.params, namedCancel.session.current.locals], ['inner', ['inner'], ['a'], []], 'parameter visible before first function command with positionals intact')
+  namedCancel.session.cancel(); await namedCancel.done
+  eq(namedCancelBase.env['a'], 'outer', 'cancelled named invocation restores caller value')
+  const bindingBudget = new Budget({ ...AGENT_LIMITS, maxVariable: 4 })
+  const limitedBase = { ...base(), budget: bindingBudget }
+  await runLine('a=old; f(a,b) { touch /tmp/named-budget-body; }; f new oversized', limitedBase)
+  check(bindingBudget.stopped === 'memory' && limitedBase.env['a'] === 'old' && !Object.hasOwn(limitedBase.env, 'b') && !lookup('/tmp/named-budget-body'), 'partial parameter binding obeys variable budget and restores on exhaustion')
+  const framesSource = 'value=global\nf(value) {\n  local attempt=1\n  if [ "$value" = outer ]; then f inner; fi\n  value=changed\n  unset attempt\n  echo "$value"\n}\nf outer\necho "$value"'
+  const frameSession = new DebugSession('frame inspection', 'run')
+  frameSession.breakpoint('/tmp/frames.msh', 5)
+  const frameRun = runCapturedStreams(framesSource, { ...base(), debug: frameSession }, '/tmp/frames.msh')
+  await wait(() => frameSession.current.state === 'paused')
+  let frames = frameSession.current.frames
+  const innerId = frames[0].id, outerId = frames[1].id
+  check(innerId !== outerId && frames[0].name === 'f' && frames[1].name === 'f', 'recursive debugger frames have distinct stable identity')
+  eq([frames[0].values.variables.value, frames[1].values.variables.value, frames[2].values.variables.value], ['inner', 'outer', 'global'], 'caller snapshots reconstruct each shadowed binding, not executing values')
+  eq([frames[0].values.params, frames[0].values.locals, frames[1].values.args], [['value'], ['attempt'], ['outer']], 'parameters separated from locals and caller positional arguments retained')
+  frameSession.stepOver(); await wait(() => frameSession.current.state === 'paused')
+  eq([frameSession.current.frames[0].id, frameSession.current.changes.value, frameSession.current.variables.value], [innerId, 'inner', 'changed'], 'changed values compare same invocation and binding only')
+  frameSession.stepOver(); await wait(() => frameSession.current.state === 'paused')
+  eq([frameSession.current.unset, frameSession.current.changes.attempt], [['attempt'], '1'], 'unset local captured explicitly with prior value')
+  frameSession.stepOut(); await wait(() => frameSession.current.state === 'paused')
+  eq([frameSession.current.frames[0].id, frameSession.current.variables.value, frameSession.current.changes.value], [outerId, 'outer', undefined], 'return selects caller identity without comparing unrelated recursion')
+  frameSession.breakpoint('/tmp/frames.msh', 5); frameSession.continue()
+  await frameRun; frameSession.finish(0)
+  eq([frameSession.current.frames, frameSession.current.variables, frameSession.current.changes], [[], {}, {}], 'completed debugger clears all current and prior inspection values')
   await runLine("echo 'echo child' > /tmp/review-child.sh", base())
   const relative = launchDebug('source review-child.sh', base())
   await wait(() => relative.session.current.state === 'paused')
@@ -336,6 +705,29 @@ try {
   const ptext = ': "$10 ${10} $1x ${2} $"'
   const hoverAt = (needle: string, d = 0) => watch.variableAt(ptext, ptext.indexOf(needle) + d)
   eq([hoverAt('$10'), hoverAt('$10', 1), hoverAt('$10', 2), hoverAt('${10}'), hoverAt('${10}', 2), hoverAt('${10}', 3), hoverAt('$1x', 1), hoverAt('$1x', 2), hoverAt('${2}', 2), hoverAt(' $"', 1)], ['$1', '$1', null, '${10}', '${10}', '${10}', '$1', null, '$2', null], 'hover/caret: unbraced $10 is $1 (its 0 is text), braced ${10} is the tenth')
+  const captureEnv = (kept: number) => {
+    const env: Record<string, string> = { empty: '' }
+    for (let i = 0; i < 15; i++) env['p' + i] = 'a'.repeat(4096)
+    const used = Object.entries(env).reduce((n, [name, value]) => n + name.length + value.length, 0)
+    env.pad = 'a'.repeat(65535 - used - 'pad'.length - kept)
+    env.x = 'secret'; env.omitted = 'not captured'
+    return env
+  }
+  for (const kept of [0, 2]) {
+    const short = launchDebug('echo "$x"\nunset p0\necho "$x"\nx=changed\necho "$x"', { ...base(), env: captureEnv(kept) }, 'short capture')
+    await wait(() => short.session.current.state === 'paused')
+    const captured = short.session.current
+    eq([captured.variables.x, captured.cut.variables.x], ['secret'.slice(0, kept), 6], `shared bound can truncate a short value to ${kept} characters`)
+    eq(reviewWatch.evaluateWatch('x', captured), { ok: true, value: 'secret'.slice(0, kept), truncated: true }, 'watch preserves short capture truncation')
+    eq(reviewWatch.evaluateWatch('${#x}', captured), { ok: true, value: '6', truncated: false }, 'watch length uses uncaptured original length')
+    check(reviewWatch.evaluateWatch('omitted', captured).error.includes('not captured') && !captured.unset.includes('x'), 'omitted variable and short cut never masquerade as unset')
+    for (let i = 0; i < 2; i++) { short.session.stepOver(); await wait(() => short.session.current.state === 'paused') }
+    eq([short.session.current.variables.x, short.session.current.cut.variables.x, short.session.current.changes.x], ['secret', undefined, undefined], 'complete capture after a short cut is not a change from empty or a partial prefix')
+    for (let i = 0; i < 2; i++) { short.session.stepOver(); await wait(() => short.session.current.state === 'paused') }
+    eq([short.session.current.variables.x, short.session.current.changes.x], ['changed', 'secret'], 'later complete captures still produce correct previous values')
+    short.session.cancel(); await short.done
+    eq([short.session.current.frames, short.session.current.changes], [[], {}], 'short-capture cancellation clears prior values')
+  }
   for (let i = 0; i < 30; i++) { const s = new DebugSession('bounded'); s.finish(0) }
   eq(debugSessions().length, 16, 'registry remains bounded')
 } finally { await vite.close() }

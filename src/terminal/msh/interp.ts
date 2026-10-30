@@ -5,7 +5,7 @@ import { reserve, textWork } from '../bounds'
 // Commands still give their output as one string (with {c:…} markup); the shell turns that into a
 // byte stream for pipes, $(…) and files (markup stripped) and into lines for the screen.
 
-import { DebugSession, STOP_NODES, type DebugStart } from './debug'
+import { DebugSession, STOP_NODES, type DebugStart, type DebugBindings } from './debug'
 import { diagnostic, formatDiagnostic } from './analysis'
 import { CmdError, DeniedError, type Ctx } from '../types'
 import { printable, settle } from '../bytes'
@@ -96,14 +96,17 @@ class LimitSignal extends Signal {
 /** An error the shell itself reports (bad substitution, unbound variable): the command fails. */
 class ShellError extends Error {}
 
+type LocalFrame = { saved: Map<string, string | undefined>; params: string[]; id: number }
+let scopeSerial = 0
+
 type State = {
   vars: Record<string, string>
-  funcs: Map<string, Node>
+  funcs: Map<string, Node & { t: 'func' }>
   opts: { e: boolean; x: boolean; u: boolean; pipefail: boolean }
   positional: string[]
   arg0: string
   /** Saved values for `local`, one frame per function call */
-  locals: Map<string, string | undefined>[]
+  locals: LocalFrame[]
   loops: number
   getopts: number
   /** `alias` definitions; scripts (msh file, source from a script) do not expand them, like bash */
@@ -385,6 +388,11 @@ class Shell {
   /** The status of the last $(…) in the current command, for a line of assignments only */
   private substStatus: number | null = null
   private depth = 0
+  private shellId = ++scopeSerial
+  private argumentScopes: string[][] = []
+  // Debug-only provenance for copied bindings; never grants `local` a runtime scope in a fork.
+  private inheritedDebugLocals: readonly LocalFrame[] = []
+  private inheritedDebugOwn?: LocalFrame
   private location?: SourceSpan
   /** Alias names that do not expand while an expanded alias runs (the loop guard) */
   private aliasBlock: Set<string> | null = null
@@ -436,7 +444,61 @@ class Shell {
     if (!NAME.test(name)) throw new ShellError(`${name}: not a valid identifier`)
     const why = this.base.budget?.variable(value.length)
     if (why) throw new LimitSignal(why)
-    this.st.vars[name] = value
+    // Shell identifiers such as __proto__ are data, not object setters.
+    Object.defineProperty(this.st.vars, name, { value, writable: true, enumerable: true, configurable: true })
+  }
+
+  /** Both explicit locals and named parameters use the same scope and variable limits. */
+  localVar(name: string, value: string) {
+    const frame = this.st.locals[this.st.locals.length - 1]
+    if (!frame) throw new ShellError('local: can only be used in a function')
+    if (!frame.saved.has(name)) frame.saved.set(name, Object.hasOwn(this.st.vars, name) ? this.st.vars[name] : undefined)
+    this.setVar(name, value)
+  }
+
+  /** Argument scopes include source-with-arguments, independently of local variable scopes. */
+  pushArgs(args: string[]): () => void {
+    const saved = this.st.positional
+    this.argumentScopes.push(saved)
+    this.st.positional = args
+    return () => { this.st.positional = saved; this.argumentScopes.pop() }
+  }
+
+  /** Read a suspended frame without copying unbounded environments or exposing live references. */
+  private debugBindings(): () => DebugBindings {
+    const localDepth = this.st.locals.length, argDepth = this.argumentScopes.length
+    return () => {
+      const sh = this
+      const own = this.st.locals[localDepth - 1] ?? this.inheritedDebugOwn
+      return {
+        args: this.argumentScopes[argDepth] ?? this.st.positional,
+        params: own?.params ?? [], locals: own?.saved.keys() ?? [],
+        *entries() {
+          // Saved names also include bindings currently unset or hidden by a deeper frame.
+          const names = function* () {
+            for (const name in sh.st.vars) if (Object.hasOwn(sh.st.vars, name)) yield name
+            const scopes = [...sh.inheritedDebugLocals, ...sh.st.locals]
+            for (let i = 0; i < scopes.length; i++) for (const name of scopes[i].saved.keys()) {
+              if (!Object.hasOwn(sh.st.vars, name) && !scopes.slice(0, i).some(f => f.saved.has(name))) yield name
+            }
+          }
+          for (const name of names()) {
+            sh.checkAbort()
+            let value = Object.hasOwn(sh.st.vars, name) ? sh.st.vars[name] : undefined
+            for (let i = sh.st.locals.length - 1; i >= localDepth; i--) {
+              const saved = sh.st.locals[i].saved
+              if (saved.has(name)) value = saved.get(name)
+            }
+            let owner: LocalFrame | undefined
+            for (let i = localDepth - 1; i >= 0; i--) if (sh.st.locals[i].saved.has(name)) { owner = sh.st.locals[i]; break }
+            if (!owner) for (let i = sh.inheritedDebugLocals.length - 1; i >= 0; i--) if (sh.inheritedDebugLocals[i].saved.has(name)) { owner = sh.inheritedDebugLocals[i]; break }
+            if (value === undefined && !owner) continue
+            const scope = owner ? owner.params.includes(name) ? 'parameter' : 'local' : 'global'
+            yield { name, value, scope, inherited: !!owner && owner !== own, identity: `${sh.shellId}:${owner?.id ?? 'global'}:${scope}:${name}` } as const
+          }
+        },
+      }
+    }
   }
 
   private arithVars() {
@@ -552,9 +614,10 @@ class Shell {
   /** $(…) and `…`: runs in a subshell and gives what it printed, trailing newlines removed. */
   private async substitute(src: string, io: Io): Promise<string> {
     const sub = this.subshell()
+    sub.inheritedDebugOwn = undefined // A new substitution frame inherits its caller's locals.
     const out = bufferSink(this.base.budget)
     let status: number
-    const leave = this.base.debug?.enter('substitution', '$(…)', '-c')
+    const leave = this.base.debug?.enter('substitution', '$(…)', '-c', undefined, sub.debugBindings())
     try {
       status = await sub.exec(parse(src), { out, err: io.err, stdin: null })
     } catch (e) {
@@ -782,12 +845,19 @@ class Shell {
       base.cwd = p
       st.vars.PWD = p
     }
-    return new Shell(base, st, false)
+    const sub = new Shell(base, st, false)
+    if (this.base.debug) {
+      sub.inheritedDebugLocals = [...this.inheritedDebugLocals, ...this.st.locals]
+      sub.inheritedDebugOwn = this.st.locals.at(-1) ?? this.inheritedDebugOwn
+    }
+    return sub
   }
 
   /** A new shell for a script or `msh -c`: the environment copied, no functions. */
   child(arg0: string, positional: string[]): Shell {
     const sh = this.subshell()
+    sh.inheritedDebugLocals = []
+    sh.inheritedDebugOwn = undefined
     sh.st.funcs.clear()
     sh.st.aliases = new Map()
     sh.st.arg0 = arg0
@@ -830,7 +900,7 @@ class Shell {
     this.checkAbort()
     if (n.span) this.location = n.span
     if (n.span && this.base.debug && STOP_NODES.has(n.t)) {
-      await this.base.debug.checkpoint(n.span, this.st.vars, this.base.signal, this.base.budget, { args: this.st.positional, locals: this.st.locals[this.st.locals.length - 1]?.keys() })
+      await this.base.debug.checkpoint(n.span, this.st.vars, this.base.signal, this.base.budget, { args: this.st.positional, locals: this.st.locals[this.st.locals.length - 1]?.saved.keys(), bindings: this.debugBindings() })
       this.checkAbort()
       if (this.base.debug.abort.signal.aborted) throw new AbortSignal_()
     }
@@ -902,7 +972,7 @@ class Shell {
         return s
       }
       case 'func':
-        this.st.funcs.set(n.name, n.body)
+        this.st.funcs.set(n.name, n)
         return 0
       case 'arith':
         return this.redirected(n.redirs, io, async (io2) => {
@@ -920,10 +990,13 @@ class Shell {
       case 'subshell':
         return this.redirected(n.redirs, io, async (io2) => {
           const sub = this.subshell()
+          const restore = this.base.debug?.useBindings(sub.debugBindings())
           try {
             return await sub.exec(n.body, io2, cond)
           } catch (e) {
             return sub.caught(e, io2)
+          } finally {
+            restore?.()
           }
         })
       case 'if':
@@ -1177,19 +1250,26 @@ class Shell {
     }
   }
 
-  private async call(name: string, body: Node, args: string[], io: Io): Promise<number> {
+  private async call(name: string, fn: Node & { t: 'func' }, args: string[], io: Io): Promise<number> {
+    const { body, params } = fn
+    if (params.length && args.length !== params.length) {
+      return fail(io, `${name} expects ${params.length} arguments (${params.map(p => p.name).join(', ')}); received ${args.length}`)
+    }
     if (this.depth >= 100) {
       io.err.write(`${red(`msh: ${name}: maximum function nesting level exceeded (100)`)}\n`)
       return 1
     }
-    const savedArgs = this.st.positional
-    const frame = new Map<string, string | undefined>()
-    this.st.positional = args
+    const restoreArgs = this.pushArgs(args)
+    const frame: LocalFrame = { saved: new Map(), params: params.map(p => p.name), id: ++scopeSerial }
     this.st.locals.push(frame)
     this.depth++
-    const leave = this.base.debug?.enter('function', name, body.span?.filename ?? '-c')
-    await breathe()
+    const leave = this.base.debug?.enter('function', name, body.span?.filename ?? '-c', undefined, this.debugBindings())
     try {
+      for (let i = 0; i < params.length; i++) {
+        this.checkAbort()
+        this.localVar(params[i].name, args[i])
+      }
+      await breathe()
       return await this.exec(body, io)
     } catch (e) {
       if (e instanceof ReturnSignal) return e.status
@@ -1198,10 +1278,10 @@ class Shell {
       leave?.()
       this.depth--
       this.st.locals.pop()
-      this.st.positional = savedArgs
-      for (const [k, v] of frame) {
+      restoreArgs()
+      for (const [k, v] of frame.saved) {
         if (v === undefined) delete this.st.vars[k]
-        else this.st.vars[k] = v
+        else Object.defineProperty(this.st.vars, k, { value: v, writable: true, enumerable: true, configurable: true })
       }
     }
   }
@@ -1257,7 +1337,7 @@ class Shell {
       io.err.write(`${red(`msh: ${formatDiagnostic(diagnostic(src, sourcePath, e))}`)}\n`)
       return 2
     }
-    const leave = this.base.debug?.enter('script', label, sourcePath, src)
+    const leave = this.base.debug?.enter('script', label, sourcePath, src, this.debugBindings())
     try {
       return await this.exec(tree, io)
     } catch (e) {
@@ -1635,8 +1715,7 @@ const BUILTINS: Record<string, Builtin> = {
       const eq = a.indexOf('=')
       const name = eq < 0 ? a : a.slice(0, eq)
       if (!NAME.test(name)) return fail(io, `local: '${a}': not a valid identifier`)
-      if (!frame.has(name)) frame.set(name, name in sh.st.vars ? sh.st.vars[name] : undefined)
-      sh.st.vars[name] = eq < 0 ? (sh.st.vars[name] ?? '') : a.slice(eq + 1)
+      sh.localVar(name, eq < 0 ? (Object.hasOwn(sh.st.vars, name) ? sh.st.vars[name] : '') : a.slice(eq + 1))
     }
     return 0
   },
@@ -1709,14 +1788,13 @@ const BUILTINS: Record<string, Builtin> = {
     if (text === null) return fail(io, `source: ${args[0]}: No such file or directory`)
     const abs = resolvePath(sh.base.cwd, args[0])
     if (sh.st.running.includes(abs) || sh.st.running.length >= MAX_SOURCE_DEPTH) return fail(io, `source: ${args[0]}: already running, skipped`)
-    const savedArgs = sh.st.positional
-    if (args.length > 1) sh.st.positional = args.slice(1)
+    const restoreArgs = args.length > 1 ? sh.pushArgs(args.slice(1)) : undefined
     sh.st.running.push(abs)
     try {
       return await sh.runSource(text, io, args[0], abs)
     } finally {
       sh.st.running.pop()
-      if (args.length > 1) sh.st.positional = savedArgs
+      restoreArgs?.()
     }
   },
   alias: (sh, args, io) => {
@@ -2023,8 +2101,14 @@ export async function runLine(line: string, shell: Base, options: RunLineOptions
       try {
         status = e instanceof LimitSignal ? STOP_STATUS[e.why] : sh.caught(e, io)
       } catch {
-        out.write(`${red(`msh: ${(e as Error)?.message ?? e}`)}\n`)
-        status = 1
+        // A helper may signal exhaustion as CmdError; reporting it must not write after stop.
+        if (shell.budget?.stopped) {
+          status = STOP_STATUS[shell.budget.stopped]
+          stop = true
+        } else {
+          out.write(`${red(`msh: ${(e as Error)?.message ?? e}`)}\n`)
+          status = 1
+        }
       }
     }
     tty.flush?.()

@@ -187,7 +187,7 @@ try {
   await key('F10'); await waitState('Paused (step) · xed-main.msh:7')
   await tab('Variables')
   const vars = await A<string>(`return W.querySelector('.xed-vars').textContent`)
-  expect(vars.includes('i2') && vars.includes('count1'), 'step over a loop body stops on it again for the next iteration with new values', vars)
+  expect(vars.includes('iglobal1 → 2') && vars.includes('countglobal0 → 1'), 'step over a loop body stops on it again for the next iteration with new values', vars)
   // F9 at line 9 while paused, then continue to it.
   await caretAt(main.indexOf('echo "count'))
   await key('F9')
@@ -300,7 +300,7 @@ try {
   expect((await activeFile()) === 'xed-external.msh', 'attached pause reveals its file')
   await button('Step over'); await waitState('Paused (step) · xed-external.msh:2')
   await tab('Variables')
-  expect((await A<string>(`return W.querySelector('.xed-vars').textContent`)).includes('valueexternal') && !(await page.eval(`window.xedExternalFinished || window.xedExternalOutput.length !== 0`)), 'attached session steps; its output stays with its owner')
+  expect((await A<string>(`return W.querySelector('.xed-vars').textContent`)).includes('valueglobalexternal') && !(await page.eval(`window.xedExternalFinished || window.xedExternalOutput.length !== 0`)), 'attached session steps; its output stays with its owner')
   await button('Continue')
   await page.waitFor(`window.xedExternalFinished`)
   await waitState('Completed')
@@ -424,7 +424,7 @@ try {
   expect(argRows.length === 64 && argRows[9].name === '${10}' && argRows[9].value === 'tenth' && argRows[63].name === '${64}' && argRows[63].value === 'extra64', 'Variables labels argument 10 as ${10}, shows tenth and keeps exactly 64 arguments', argRows)
   const omitted = await A<string>(`return W.querySelector('.xed-dbg-omitted')?.textContent`)
   expect(omitted.includes('65 arguments; the first 64 are kept.'), 'Variables reports the real count and snapshot limit', omitted)
-  await A(`const row = W.querySelectorAll('.xed-vars tr')[9]; row.querySelector('button').click()`)
+  await A(`W.querySelector('[aria-label="Watch \${10}"]').click()`)
   await tab('Watch')
   watched = await watchText()
   expect(watched.length === 1 && watched[0].startsWith('${10} = tenth'), 'argument 10 row Watch adds ${10}, reading tenth rather than first0', watched)
@@ -462,6 +462,277 @@ try {
   await A(`W.querySelector('[aria-label="Close"]').click()`)
   await page.waitFor(`!document.querySelector('.zed')`)
 
+  // --- named parameters and real recursive caller inspection ---------------------------------------
+  const frameCode = 'value=global\nf(value) {\n  local attempt=1 blank=\n  if [ "$value" = outer ]; then f inner; fi\n  value=changed\n  unset attempt\n  echo "$value"\n}\nf outer\necho "$value"'
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-frames.msh', ${JSON.stringify(frameCode)}, false)
+    window.xedDebug.toggleBreakpoint('/tmp/xed-frames.msh', 5)
+    window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/xed-frames.msh', root: '/tmp' } } }))
+  })()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-frames.msh')`)
+  await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = 'a'`)
+  await focusWin('a'); await A(`W.querySelector('.zed').focus()`)
+  await key('F5'); await waitState('Paused (breakpoint) · xed-frames.msh:5')
+  await tab('Variables')
+  const frameVars = () => A<string>(`return W.querySelector('.xed-vars').textContent`)
+  let fv = await frameVars()
+  expect(fv.includes('Parameters') && fv.includes('valueparameterinner') && fv.includes('Locals') && fv.includes('blanklocal(empty)'), 'named parameter group, ordinary locals and empty strings are distinct', fv)
+  await tab('Watch'); await addWatch('value')
+  expect((await watchText())[0].includes('value = inner'), 'watch starts in executing frame')
+  await tab('Call stack')
+  await A(`W.querySelectorAll('.xed-stack button')[1].click()`)
+  await tab('Variables'); fv = await frameVars()
+  expect(fv.includes('valueparameterouter') && !fv.includes('valueparameterinner'), 'select recursive caller shows caller bindings, not relabelled inner values', fv)
+  await tab('Watch')
+  expect((await watchText())[0].includes('value = outer'), 'selected-frame watch matches caller bindings')
+  await tab('Call stack'); await A(`W.querySelectorAll('.xed-stack button')[0].click()`)
+  await key('F10'); await waitState('Paused (step) · xed-frames.msh:6')
+  await tab('Variables'); fv = await frameVars()
+  expect(fv.includes('inner → changed'), 'same-frame previous value is visible after stepping', fv)
+  await key('F10'); await waitState('Paused (step) · xed-frames.msh:7')
+  fv = await frameVars()
+  expect(fv.includes('1 → (unset)') && fv.includes('blanklocal(empty)'), 'unset is distinct from empty and retains bounded previous value', fv)
+  await key('F11', MODS.shift); await waitState('Paused (breakpoint) · xed-frames.msh:5')
+  fv = await frameVars()
+  expect(fv.includes('valueparameterouter') && !fv.includes('inner → outer'), 'step out restores caller without comparing recursive bindings', fv)
+  await key('F5', MODS.shift); await waitState('Stopped')
+  expect(!(await A(`return !!W.querySelector('.xed-vars')`)), 'stop clears frame inspection')
+  await A(`W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+
+  // --- a named function's subshell keeps its frame but owns the executing bindings -----------------
+  const forkCode = 'x=outer\nf(parcel) (\n  x=inner\n  set -- child\n  echo "$parcel:$x:$1"\n)\nf "Space Potato"\necho "$x"'
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-fork.msh', ${JSON.stringify(forkCode)}, false)
+    window.xedDebug.toggleBreakpoint('/tmp/xed-fork.msh', 5)
+    window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/xed-fork.msh', root: '/tmp' } } }))
+  })()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-fork.msh')`)
+  await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = 'a'`)
+  await focusWin('a'); await A(`W.querySelector('.zed').focus()`)
+  await key('F5'); await waitState('Paused (breakpoint) · xed-fork.msh:5')
+  await tab('Variables'); fv = await frameVars()
+  expect(fv.includes('parcelparameterSpace Potato') && fv.includes('xglobalinner') && fv.includes('child'), 'named subshell Variables shows actual executing parameter, global and positional values', fv)
+  await tab('Watch'); await addWatch('$parcel:$x:$1')
+  expect((await watchText())[0].includes('Space Potato:inner:child'), 'subshell Watch agrees with executing shell')
+  await tab('Call stack'); await A(`W.querySelectorAll('.xed-stack button')[1].click()`)
+  await tab('Variables'); fv = await frameVars()
+  expect(fv.includes('xglobalouter') && !fv.includes('xglobalinner'), 'selecting subshell function caller keeps true parent environment', fv)
+  await tab('Call stack'); await A(`W.querySelectorAll('.xed-stack button')[0].click()`)
+  await button('Step out'); await waitState('Paused (step) · xed-fork.msh:8')
+  await tab('Variables'); fv = await frameVars()
+  expect(fv.includes('xglobalouter') && !fv.includes('inner →') && !fv.includes('parcelparameter'), 'step out restores caller without comparing copied subshell values', fv)
+  await button('Stop'); await waitState('Stopped')
+  await A(`W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+
+  // --- capture truncation is not an empty variable, even for a short original value -----------------
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-short-cut.msh', 'echo "$x"\\nunset p0\\necho "$x"\\nx=changed\\necho "$x"', false)
+    window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/xed-short-cut.msh', root: '/tmp' } } }))
+    const { launchDebug } = await import('/src/terminal/msh/interp.ts')
+    const env = { empty: '' }
+    for (let i = 0; i < 15; i++) env['p' + i] = 'a'.repeat(4096)
+    const used = Object.entries(env).reduce((n, [name, value]) => n + name.length + value.length, 0)
+    env.pad = 'a'.repeat(65535 - used - 'pad'.length)
+    env.x = 'secret'; env.omitted = 'not captured'
+    window.xedShortCut = launchDebug('msh /tmp/xed-short-cut.msh', {
+      cwd: '/tmp', setCwd() {}, env, history: [], windows: [], openApp() {}, openNewApp() {}, closeWindow() {}, clear() {}, exit() {}, setAccent() {}, print() {}, live() {}, size: { cols: 80, rows: 24 }, onKey() {}, signal: new AbortController().signal,
+    }, 'short capture', { start: { entry: '/tmp/xed-short-cut.msh' } })
+  })()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-short-cut.msh') && window.xedShortCut.session.current.state === 'paused'`)
+  await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = 'a'`)
+  await focusWin('a')
+  await A(`const b = W.querySelector('[aria-label="Toggle debug panel"]'); if (b.getAttribute('aria-pressed') !== 'true') b.click()`)
+  await attach('window.xedShortCut.session.id')
+  await tab('Variables')
+  const shortCapture = await page.eval(`({ value: window.xedShortCut.session.current.variables.x, length: window.xedShortCut.session.current.cut.variables.x })`)
+  expect(shortCapture.value === '' && shortCapture.length === 6, 'review P2: shared capture bound keeps zero of a six-character variable', shortCapture)
+  const shortRow = await A<string>(`return [...W.querySelectorAll('.xed-vars tr')].find(r => r.querySelector('.xed-var-name')?.textContent === 'x').textContent`)
+  expect(shortRow.includes('truncated') && shortRow.includes('6 characters') && shortRow.includes('0 kept') && !shortRow.includes('(empty)'), 'review P2: zero-kept short value is visibly truncated, never empty', shortRow)
+  const emptyRow = await A<string>(`return [...W.querySelectorAll('.xed-vars tr')].find(r => r.querySelector('.xed-var-name')?.textContent === 'empty').textContent`)
+  expect(emptyRow.includes('(empty)') && !emptyRow.includes('truncated'), 'review P2: a genuine empty string remains distinct', emptyRow)
+  await tab('Watch'); await addWatch('x'); await addWatch('omitted')
+  const cutWatches = await watchText()
+  expect(cutWatches[0].includes('truncated') && !cutWatches[0].includes('(empty)') && cutWatches[1].includes('not captured') && !cutWatches[1].includes('not set'), 'review P2: Watch distinguishes truncation and uncaptured binding', cutWatches)
+  await caretAt(7)
+  const cutCaret = await A<string>(`return W.querySelector('.xed-dbg-caret').textContent`)
+  expect(cutCaret.includes('truncated') && cutCaret.includes('0 characters kept') && !cutCaret.includes('(empty)'), 'runtime caret inspection distinguishes zero capture from empty', cutCaret)
+  await button('Step over'); await waitState('Paused (step) · xed-short-cut.msh:2')
+  await button('Step over'); await waitState('Paused (step) · xed-short-cut.msh:3')
+  await tab('Variables')
+  let completeRow = await A<string>(`return [...W.querySelectorAll('.xed-vars tr')].find(r => r.querySelector('.xed-var-name')?.textContent === 'x').textContent`)
+  expect(completeRow.includes('secret') && !completeRow.includes('→'), 'complete value after truncated capture has no false previous empty value', completeRow)
+  await button('Step over'); await waitState('Paused (step) · xed-short-cut.msh:4')
+  await button('Step over'); await waitState('Paused (step) · xed-short-cut.msh:5')
+  completeRow = await A<string>(`return [...W.querySelectorAll('.xed-vars tr')].find(r => r.querySelector('.xed-var-name')?.textContent === 'x').textContent`)
+  expect(completeRow.includes('secret → changed'), 'complete snapshots still highlight a later real value change', completeRow)
+  await button('Stop'); await page.eval('window.xedShortCut.done')
+  await A(`W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+
+  // --- parser-backed static origins, modified click, keyboard, completion and unsaved sources --------
+  const intelMain = 'source /tmp/xed-symbol-lib.msh\nfuel=9\ndeliver(parcel,cost) {\n  local fuel=6\n  echo "$parcel $cost $fuel $1"\n}\ndeliver "Space Potato" 3\nfromlib hello\necho "$fuel"'
+  const intelLib = 'fromlib(message) { echo "$message"; }'
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-symbol-main.msh', ${JSON.stringify(intelMain)}, false)
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-symbol-lib.msh', ${JSON.stringify(intelLib)}, false)
+    window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/xed-symbol-main.msh', root: '/tmp' } } }))
+  })()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-symbol-main.msh')`)
+  await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = 'a'`)
+  await focusWin('a')
+  const intelReady = () => page.waitFor(`document.querySelector('.window[data-test="a"] .xed-symbol-summary')?.textContent.includes('Static:')`, 5000)
+  await caretAt(intelMain.indexOf('$parcel') + 2); await intelReady()
+  const summary = () => A<string>(`return W.querySelector('.xed-symbol-summary')?.textContent ?? ''`)
+  expect((await summary()).includes('parameter') && (await summary()).includes('xed-symbol-main.msh:3'), 'static parameter origin uses shared named declaration')
+  const paramHighlight = await A<string[]>(`return [...W.querySelectorAll('.zed-hl .md-code')].map(e => e.textContent)`)
+  expect(paramHighlight.includes('parcel') && paramHighlight.includes('cost'), 'shared highlighting marks named parameter declarations')
+  await caretAt(intelMain.indexOf('$fuel') + 2)
+  expect((await summary()).includes('local') && (await summary()).includes(':4'), 'local static origin shadows global assignment')
+  await caretAt(intelMain.lastIndexOf('$fuel') + 2)
+  expect((await summary()).includes('global') && (await summary()).includes(':2'), 'global static origin outside function scope')
+  await caretAt(intelMain.indexOf('$1') + 1)
+  expect((await summary()).includes('positional argument'), 'static positional hint is distinct from parameter')
+  const pointerTo = async (source: string, offset: number) => A<{ x: number; y: number }>(`
+    const el = W.querySelector('textarea.zed-input'), rect = el.getBoundingClientRect()
+    const source = ${JSON.stringify(source)}, before = source.slice(0, ${offset}), rows = before.split(String.fromCharCode(10))
+    const canvas = document.createElement('canvas').getContext('2d'), style = getComputedStyle(el); canvas.font = style.fontSize + ' ' + style.fontFamily
+    const cw = canvas.measureText('0'.repeat(100)).width / 100
+    return { x: rect.x + (rows.at(-1).length + .3) * cw, y: rect.y + ${PAD} + (rows.length - 1) * ${LINE} + ${LINE / 2} }`)
+  const callOffset = intelMain.indexOf('deliver "')
+  await caretAt(callOffset)
+  const defPoint = await pointerTo(intelMain, callOffset + 2)
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: defPoint.x, y: defPoint.y, button: 'left', clickCount: 1, modifiers: MODS.ctrl })
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: defPoint.x, y: defPoint.y, button: 'left', clickCount: 1, modifiers: MODS.ctrl })
+  await page.waitFor(`document.querySelector('.window[data-test="a"] textarea.zed-input')?.selectionStart === ${intelMain.indexOf('deliver(parcel')}`, 5000)
+  pass('real Ctrl+Click navigates function reference to parsed declaration')
+  await A(`W.querySelector('.xed-symbol-actions button:nth-child(2)').click()`)
+  await page.waitFor(`document.querySelector('.window[data-test="a"] textarea.zed-input')?.selectionStart >= ${callOffset} && document.querySelector('.window[data-test="a"] textarea.zed-input')?.selectionStart <= ${callOffset + 7}`, 5000)
+  pass('definition Back restores caller caret')
+  await caretAt(intelMain.indexOf('fromlib hello'))
+  await page.eval(`window.xedFs.writeFile('/tmp', '/tmp/xed-symbol-lib.msh', ${JSON.stringify('\n' + intelLib)}, false)`)
+  await A(`W.querySelector('.xed-symbol-actions button').click()`)
+  await page.waitFor(`document.querySelector('.zed-status-msg')?.textContent.includes('Source changed')`, 5000)
+  expect((await activeFile()) === 'xed-symbol-main.msh', 'changed closed source does not navigate to stale location')
+  await page.waitFor(`document.querySelector('.xed-symbol-summary')?.textContent.includes('xed-symbol-lib.msh:2')`, 5000)
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: 'g', code: 'KeyG', windowsVirtualKeyCode: 71, modifiers: MODS.alt })
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-symbol-lib.msh')`, 5000)
+  expect((await A<number>(`return W.querySelector('textarea.zed-input').selectionStart`)) === 1, 'keyboard Go to Definition follows authorized literal source to another tab')
+  await edit('\n\n' + intelLib)
+  await A(`W.querySelector('.xed-symbol-actions button:nth-child(2)').click()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-symbol-main.msh')`)
+  await caretAt(intelMain.indexOf('fromlib hello')); await intelReady()
+  await page.waitFor(`document.querySelector('.xed-symbol-summary')?.textContent.includes('xed-symbol-lib.msh:3')`, 5000)
+  await A(`W.querySelector('.xed-symbol-actions button').click()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-symbol-lib.msh') && document.querySelector('textarea.zed-input')?.selectionStart === 2`, 5000)
+  pass('unsaved source buffer overrides disk and updates definition location')
+  // Restore the source so window cleanup requires no discard dialog.
+  await edit('\n' + intelLib)
+  await A(`W.querySelector('.xed-symbol-actions button:nth-child(2)').click()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-symbol-main.msh')`)
+  await caretAt(intelMain.indexOf('$parcel') + 4)
+  await intelReady()
+  await A(`W.querySelector('.xed-symbol-actions button:nth-child(3)').click()`)
+  const suggestions = () => A<string>(`return W.querySelector('.xed-completions')?.textContent ?? ''`)
+  expect((await suggestions()).includes('parcel') && (await suggestions()).includes('parameter') && !(await suggestions()).includes('printf'), 'contextual parameter completion excludes command names')
+  await A(`W.querySelector('.xed-completions button').click()`)
+  expect((await A<string>(`return W.querySelector('textarea.zed-input').value`)) === intelMain, 'completion in the middle of a name replaces its suffix and preserves quoted expression')
+  await caretAt(callOffset + 'deliver'.length); await intelReady()
+  await A(`W.querySelector('.xed-symbol-actions button:nth-child(3)').click()`)
+  await page.waitFor(`document.querySelector('.xed-completions')?.textContent.includes('deliver(parcel, cost)')`, 5000)
+  pass('function completion shows named parameter signature')
+  // Real Ctrl+Space edits and executes each resulting script through the editor's Run action.
+  const completeAt = async (source: string, caret: number, name: string) => {
+    await edit(source); await caretAt(caret)
+    for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: ' ', code: 'Space', windowsVirtualKeyCode: 32, modifiers: MODS.ctrl })
+    await page.waitFor(`[...document.querySelectorAll('.xed-completions button b')].some(b => b.textContent === ${JSON.stringify(name)})`, 5000)
+    await A(`const choice = [...W.querySelectorAll('.xed-completions button')].find(b => b.querySelector('b')?.textContent === ${JSON.stringify(name)}); choice.click()`)
+    return A<string>(`return W.querySelector('textarea.zed-input').value`)
+  }
+  const runCompleted = async (expected: string, label: string) => {
+    const prior = await A<string>(`return W.querySelector('[aria-label="Debug session"]')?.value ?? ''`)
+    await key('F5')
+    await page.waitFor(`document.querySelector('.window[data-test="a"] [aria-label="Debug session"]')?.value !== ${JSON.stringify(prior)} && document.querySelector('.window[data-test="a"] .xed-dbg-state .xed-dbg-long')?.textContent.startsWith('Completed · exit 0')`, 10000)
+    await tab('Output')
+    const output = await A<string>(`return W.querySelector('.xed-dbg-output')?.textContent ?? ''`)
+    expect(output === expected, label, output)
+  }
+  const completionCases: [string, string, number[]][] = [
+    ['"del"', '"deliver"', [5, 3]], ["'del'", "'deliver'", [5, 3]],
+    ['"delivery"', '"deliver"', [4]], ["'delivery'", "'deliver'", [4]],
+    ['de\\l', "'deliver'", [4, 3]], ['de"l"', "'deliver'", [5]], ['del', 'deliver', [3, 2]],
+  ]
+  for (const [head, replacement, positions] of completionCases) for (const caret of positions) {
+    const source = `deliver(p) { echo "$p"; }\n${head} "Space Potato" # untouched`
+    const edited = await completeAt(source, source.indexOf('\n') + 1 + caret, 'deliver')
+    await page.waitFor(`document.querySelector('.window[data-test="a"] textarea.zed-input')?.selectionStart === ${source.indexOf('\n') + 1 + replacement.length}`, 5000)
+    expect(edited === `deliver(p) { echo "$p"; }\n${replacement} "Space Potato" # untouched`, `Ctrl+Space preserves literal command and surrounding arguments: ${head} at ${caret}`, edited)
+    await runCompleted('Space Potato\n', `completed ${head} at ${caret} executes deliver with status 0`)
+  }
+  const aliasedCompletion = 'alias deliver="echo alias"\ndeliver(p) { echo "$p"; }\nde\\l hello'
+  const aliasedEdited = await completeAt(aliasedCompletion, aliasedCompletion.lastIndexOf('de\\l') + 4, 'deliver')
+  expect(aliasedEdited.endsWith("'deliver' hello"), 'escaped completion stays quoted to preserve alias suppression', aliasedEdited)
+  await runCompleted('hello\n', 'escaped completion invokes the function even when the same name has an alias')
+  const continuation = '\\' + '\n'
+  const continuedCases: [string, string, string, string][] = [
+    ['continuation only', `deli${continuation}ver`, 'deliver', 'ALIAS hello\n'],
+    ['double quotes', `"deli${continuation}ver"`, '"deliver"', 'FUNCTION:hello\n'],
+    ['single quotes', `'deli${continuation}ver'`, "'deliver'", 'FUNCTION:hello\n'],
+    ['real escape', `de\\li${continuation}ver`, "'deliver'", 'FUNCTION:hello\n'],
+    ['mixed quotes', `deli${continuation}"ver"`, "'deliver'", 'FUNCTION:hello\n'],
+  ]
+  for (const [label, head, replacement, output] of continuedCases) {
+    const header = 'alias deliver="echo ALIAS"\ndeliver(p) { echo "FUNCTION:$p"; }\n'
+    const source = header + head + ' hello'
+    await edit(source); await caretAt(source.length)
+    await runCompleted(output, `real continued command dispatch before completion: ${label}`)
+    for (const caret of [head.length, head.indexOf(continuation) + 1]) {
+      const edited = await completeAt(source, header.length + caret, 'deliver')
+      expect(edited === header + replacement + ' hello', `Ctrl+Space keeps continuation-normalized spelling at ${caret}: ${label}`, edited)
+      await page.waitFor(`document.querySelector('.window[data-test="a"] textarea.zed-input')?.selectionStart === ${header.length + replacement.length}`, 5000)
+      await runCompleted(output, `real Ctrl+Space preserves continued command dispatch at ${caret}: ${label}`)
+    }
+  }
+  for (const word of ['"$par"', '"${par}"']) {
+    const source = `parcel=hello\necho ${word}`
+    const edited = await completeAt(source, source.indexOf('par', source.indexOf('\n')) + 2, 'parcel')
+    expect(edited === source.replace(word, word.replace('par', 'parcel')), 'Ctrl+Space keeps variable expansion syntax intact', edited)
+    await runCompleted('hello\n', 'completed variable reference executes unchanged shell expansion')
+  }
+  for (const head of ['del${suffix}', 'del$(echo iver)']) {
+    const source = `deliver(p) { :; }\n${head} hello`
+    await edit(source); await caretAt(source.indexOf('\n') + 4)
+    for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: ' ', code: 'Space', windowsVirtualKeyCode: 32, modifiers: MODS.ctrl })
+    await page.waitFor(`document.querySelector('.xed-completions')?.textContent === 'No matching symbols'`, 5000)
+    expect((await A<string>(`return W.querySelector('textarea.zed-input').value`)) === source, `dynamic command expression remains untouched: ${head}`)
+  }
+  // Symbols never runs a source/eval: the dynamic path is labelled, not followed.
+  await edit('source "$dynamic"\neval "$unknown"\necho "$fuel"')
+  await caretAt(37)
+  await A(`const b = W.querySelector('.xed-symbol-actions button:nth-child(4)'); if (b.getAttribute('aria-expanded') !== 'true') b.click()`)
+  await page.waitFor(`document.querySelector('.xed-symbol-details')?.textContent.includes('dynamic source')`, 5000)
+  pass('dynamic source uncertainty is visible without evaluating it')
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-cwd-move.msh', '"cd" sub', false)
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-cwd-lib.msh', 'f() { echo wrong; }', false)
+  })()`)
+  const movedSources = 'source /tmp/xed-cwd-move.msh\nsource ./xed-cwd-lib.msh\nf'
+  await edit(movedSources); await caretAt(movedSources.length - 1)
+  await page.waitFor(`document.querySelector('.xed-symbol-details')?.textContent.includes('working directory')`, 5000)
+  await A(`W.querySelector('.xed-symbol-actions button').click()`)
+  expect((await activeFile()) === 'xed-symbol-main.msh' && !(await summary()).includes('xed-cwd-lib.msh'), 'Go to Definition never guesses old cwd after sourced quoted cd', await summary())
+  const quotedRedefinition = `f() { echo old; }; "eval" 'f() { echo new; }'; f`
+  await edit(quotedRedefinition); await caretAt(quotedRedefinition.length - 1)
+  await page.waitFor(`document.querySelector('.xed-symbol-summary')?.textContent.includes('(candidate)')`, 5000)
+  const uncertainPoint = await pointerTo(quotedRedefinition, quotedRedefinition.length - 1)
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: uncertainPoint.x, y: uncertainPoint.y, button: 'left', clickCount: 1, modifiers: MODS.ctrl })
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: uncertainPoint.x, y: uncertainPoint.y, button: 'left', clickCount: 1, modifiers: MODS.ctrl })
+  expect((await A<number>(`return W.querySelector('textarea.zed-input').selectionStart`)) === quotedRedefinition.length - 1 && (await A<boolean>(`return !!W.querySelector('.xed-definitions button')`)), 'modified click after quoted eval presents candidates without a false definitive jump')
+  await edit(intelMain)
+  await A(`W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+
   // --- phone: touch taps on the gutter and controls, fitting the width --------------------------------
   await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
   await page.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
@@ -492,6 +763,17 @@ try {
   await P(`W.querySelector('[aria-label="Stop"]').click()`)
   await waitState('Stopped', 'p')
   pass('tapping Run on a phone runs to the breakpoint; Stop stops')
+  const phoneCall = await P<number>(`return W.querySelector('textarea.zed-input').value.indexOf('greet "$name"') + 2`)
+  await caretAt(phoneCall, phoneCall, 'p')
+  await page.waitFor(`document.querySelector('.window[data-test="p"] .xed-symbol-summary')?.textContent.includes('function')`, 5000)
+  at = await P(`const r = W.querySelector('.xed-symbol-actions button').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }`)
+  await tap(at.x, at.y)
+  if (await P(`return !!W.querySelector('.xed-definitions button')`)) {
+    at = await P(`const r = W.querySelector('.xed-definitions button').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }`)
+    await tap(at.x, at.y)
+  }
+  await page.waitFor(`document.querySelector('.window[data-test="p"] .zed-tab.is-active')?.textContent.includes('xed-lib.msh')`, 5000)
+  pass('touch Go to Definition and explicit candidate open sourced function without modifier keys')
   await page.send('Emulation.setTouchEmulationEnabled', { enabled: false })
   await page.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false })
   await P(`W.querySelector('[aria-label="Close"]').click()`)

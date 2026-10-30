@@ -766,6 +766,62 @@ and parser for highlighting and syntax diagnostics. Diagnostics show filename, l
 and the offending expression. Analysis is limited to 512 KB; larger files remain editable.
 Nothing is executed to lint a file.
 
+**msh symbols and navigation.** Ctrl+Click (or Cmd+Click) a function or variable reference
+to go to a reliable parsed definition. With the caret on a symbol, **Go to Definition**
+(Alt+G) does the same; its button also works by touch. **Back** (Alt+Left while editing)
+returns to the previous location, with at most 32 entries per window. Ordinary copy/paste,
+browser shortcuts and debugger gutter actions keep their meanings.
+
+The **Static** strip follows the caret or pointer and names parameter/local/global/function
+origins and their file and line. Expand **Symbols** for signatures, source locations and
+uncertainty explanations. This is source information, distinct from the debugger's paused
+runtime values. **Complete** (Ctrl+Space in the textarea) offers matching visible variables
+after `$`/`${`, and functions with their parameter signatures or real msh builtins at command
+positions. Choose a suggestion by button (keyboard focus or touch); completion never runs it.
+Command completion replaces the parsed literal word, including from inside or just after its
+quotes. It preserves surrounding quotes and arguments, and normalizes mixed/escaped command
+spellings to a quoted literal so they still suppress aliases. Variable completion replaces only
+the referenced name; dynamic command expressions are never replaced with a literal command suggestion.
+Backslash-newline continuations use the lexer's normalization: continuations alone do not
+suppress aliases, while genuine quotes or escapes still do after completion.
+Parameters/locals shadow global suggestions, and another function's locals are not offered.
+
+Indexing uses the shared msh parser, including named parameters, assignments, local/export
+commands and literal `source`/`.` statements. It does not execute shell, `eval`, substitutions
+or arbitrary network requests. Open buffers, including unsaved sourced files, take precedence.
+Closed local/browser files are read through the existing permission-checked file API. Remote
+sources must already be open in this window: automatic symbol discovery does not download
+Seafile files. A literal relative source is resolved from the project/launch working directory,
+not from the source file's directory. Sources outside the project, dynamic paths, or relative
+sources after a possible `cd` are reported as unknown rather than guessed.
+This includes possible directory changes in nested, conditional or repeated sourced files;
+an unavailable source also makes subsequent relative source paths unknown. The index does
+not execute `cd` to discover the new directory. Literal quoted or escaped command names
+have their normal shell meaning, including `"source"`, `'cd'`, `\eval` and quoted local/export
+commands; dynamic command names remain uncertain.
+Functions that shadow declaration/source builtins, including imported functions, also weaken
+those static facts to candidates.
+
+msh has dynamic scope, not lexical closures. A free variable in a function may come from a
+caller local: the index shows known assignment candidates and says so. Conditional declarations,
+multiple function definitions, dynamic sources and `eval` prevent a definitive jump; choose an
+explicit candidate instead. Parameters and unconditional local declarations with unambiguous
+command identity in the current function have reliable origins. This is intentionally not a
+full LSP or data-flow proof:
+command/arithmetic substitution internals, heredoc expansions, `read`/`getopts`-generated
+bindings and external commands are not resolved. A syntax-invalid file keeps its parser
+Problems but has no symbol index until it parses again. No React/TypeScript intelligence is
+implied.
+
+Each window attempts at most 16 source file reads (including unavailable files), 8 source edges
+deep and 512 KB total, with at most 4096 symbol facts per file and 40 completion suggestions.
+Indexing is debounced, cancelled on
+file/buffer/root changes or window close, and discards stale asynchronous results. Before a
+jump into a closed source, its text is checked again; a changed file is reindexed instead of
+navigating to an outdated location. Account
+changes clear navigation/index state and disable intelligence in that old window; reopen Xed
+under the current account. No symbol index or navigation history is persisted.
+
 **Running and debugging.** The editor bar of every open file has the debugger toolbar: Run
 (or Continue while paused), Pause, Stop, Step Over, Step Into and Step Out, followed by the
 session state (not running, running, paused with its reason and location, completed or failed
@@ -833,14 +889,31 @@ debugger moves to another file and back (stepping into a function in another fil
 again leaves the caller's selection where it was), and the editor keeps the keyboard focus if it
 had it. The panel under the editor (resizable
 from its top edge, shown and hidden with the bug button in the status bar) has **Output**,
-**Variables** (arguments, the function's `local` names and the other variables of the pause),
-**Watch**, **Breakpoints**, **Call stack** (click a frame to see its line) and **Problems**
+**Variables** (positional arguments, named **Parameters**, ordinary **Locals**, inherited **Caller scope** and **Globals**),
+**Watch**, **Breakpoints**, **Call stack** (click a frame to inspect its bindings and see its line) and **Problems**
 (syntax diagnostics, also marked in the gutter). Hovering a variable in the editor shows its
 value at the pause (the value is read from the current pause when drawn; a step or choosing
 another session hides it until the pointer moves); with a keyboard or on a touch screen, putting the caret on a variable shows
 it in the panel. Values are only shown while paused, from the pause's snapshot: when the
 session resumes or ends they are cleared rather than shown as if current, and a hover on a
 file that is not in the paused call stack says so.
+
+Every invocation has a stable, distinct frame identity, including recursive calls of the same
+function. Selecting a caller reconstructs its shadowed bindings and positional arguments;
+Watches and runtime hover use that selected frame. A hover in a different file asks you to
+select its frame rather than displaying the executing function's value under another name.
+Dynamic caller locals are labelled as inherited scope. Parameters are visible before the
+first body command. `(unset)` and `(empty)` are distinct, and omitted/cut values are labelled.
+Inside `( ... )`, the current frame shows the executing subshell's copied bindings and
+positionals, including parameters in a function with a subshell body. Caller frames retain
+their own bindings; leaving the subshell restores the enclosing view without adding a frame
+or comparing copied bindings as changes to their originals. A shared capture limit can cut
+even a short value to zero characters: Variables, Watch and hover label that truncation,
+never as an empty string.
+The Variables view highlights changes as previous → current only for the same session,
+invocation and binding. Comparisons use complete captured values only; previous display text
+is limited to 120 characters. Switching sessions resets comparisons. Ending a session or
+changing account clears its captured current and previous values.
 
 **Watches** are read from the snapshot and never evaluated as shell: a name, `$name`,
 `${name}`, `${#name}`, `$1`…`$9`, `${10}` and higher, `$#`, `$@` and `$?`, with plain text around them.
@@ -865,8 +938,10 @@ its lifetime. Xed cancels its own sessions when its window closes. With several 
 each has its own session and panel; the keys go to the focused one.
 
 The registry holds at most 16 sessions (evicting completed ones), each with at most 256
-breakpoints and 256 displayed variables and 64 arguments, capped at 4096 characters each; the
-editor keeps at most 256 breakpoints. Output retains the last 32 KB. Debug launches also bound
+breakpoints. One pause shares 256 variables, 64 arguments and 65,536 characters across the
+executing frame and its callers (at most 128 frames), with each value capped at 4096 characters; the
+editor keeps at most 256 breakpoints. The previous pause uses the same bound; snapshot work
+and retained change text also charge the shared execution budget. Output retains the last 32 KB. Debug launches also bound
 interpreter capture and screen chunks to 32768 UTF-16 code units, streaming partial lines when
 needed; ordinary `runLine` output remains unlimited unless its optional `captureLimit` is
 supplied. The toolbar and panel use the active theme, wrap to phone widths and have 36 px touch
@@ -911,7 +986,9 @@ with focus inside and outside the text, two Xed windows, the paused marker and s
 watches and hover (also across a session switch), stale-source warnings, save before run
 (closing the window, Stop, edits and a double F5 while the save is pending), the caller's
 selection after stepping out of another file, F5 with nano focused in the terminal panel,
-attach, stop and window close, a phone-sized touch screen, and that F5 outside Xed is not
+attach, stop and window close, named parameters and recursive caller-frame inspection, static
+modified-click/keyboard/touch navigation, unsaved source precedence and symbol completion,
+a phone-sized touch screen, and that F5 outside Xed is not
 taken. The save-before-run checks use a file in /tmp, whose save is quick; they act within the
 same task so the save's await is still pending, which is the same gap a slower Seafile or
 browser save has. Headless Chromium has no reload
@@ -928,6 +1005,44 @@ and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts (`./scrip
 `chmod +x`, see Permissions above). `man msh` shows the
 reference ([`src/data/mshReference.ts`](src/data/mshReference.ts)), which the agents read as the
 built-in `msh` skill.
+
+**Named function parameters.** Optional comma-separated names replace manual
+`local parcel="$1"; local cost="$2"` bindings:
+
+```sh
+deliver(parcel, cost) {
+    printf 'Delivering %s for %s fuel\n' "$parcel" "$cost"
+}
+deliver "Space Potato" 3
+```
+
+`function deliver(parcel, cost) { …; }` works too. Whitespace, newlines and comments
+between parameters are allowed. Names must be unique plain shell identifiers
+(`[A-Za-z_][A-Za-z0-9_]*`); `RANDOM` is computed by msh and cannot be a parameter.
+There are no defaults, rest parameters, destructuring, type annotations or expression-style
+calls such as `deliver("Space Potato", 3)`. Commas in ordinary command words stay literal.
+Existing `name()`, `function name()` and `function name` declarations keep their argument handling.
+
+A **nonempty** parameter list requires exactly that many arguments. Empty strings count as
+arguments. A wrong count fails with status 1 and a diagnostic naming the function, parameter
+names, received count and call site, before the body (including its redirects) runs. Normal
+argument expansion and call-site redirection still follow shell evaluation order. `set -e`
+handles this failure like any other command failure. `msh -n` checks declarations without
+running them; it cannot predict a call's expanded argument count.
+
+Bindings receive the already expanded strings, never reparse/evaluate them, and are local to
+each invocation, including recursion. `$1`, `$2`, `$#` and `"$@"` remain available; `shift` and
+`set --` change only those positional arguments, not the named snapshots. Named assignments
+can be changed or unset like other locals. Local shadowing and restoration use the same path
+as `local`, on return, error, exit, cancellation and budget exhaustion. Nested calls follow
+msh's dynamic scope: they can read a caller's locals until they shadow them. Arrays and
+read-only variables are not implemented by msh; declarations pretending to use them are
+syntax errors. Ordinary names such as `IFS` retain their existing local-variable effects.
+Missing arguments are rejected with or without `set -u`; for legacy functions, msh still
+expands a missing positional argument to the empty string even under `set -u`.
+
+`help --json` / `terminal_capabilities` advertise named-parameter syntax in `shell.syntax`.
+The shell version remains 2.0; this is a language feature, not an OS release.
 
 **Aliases and `~/.mvshrc`.** `alias ll='ls -l'` gives a command another name; `alias` lists them,
 `alias ll` shows one, `unalias ll` (or `unalias -a`) removes them. An alias replaces the first word
