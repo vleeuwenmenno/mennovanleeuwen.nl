@@ -188,8 +188,6 @@ async function browserChecks(fixture: string) {
     await drag([300, 400], -100)
     check('swiping', (await pages()) === 3)
     await page.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 200, y: 400, id: 0 }, { x: 100, y: 300, id: 1 }] })
-    // Both fingers move before lifting: lifted in place they would be taps (a new event's editor opens over the page).
-    await page.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 200, y: 430, id: 0 }, { x: 100, y: 330, id: 1 }] })
     await page.waitFor(`document.querySelectorAll('.ca-page').length === 1`, 4000)
     check('and the page is where it was', JSON.stringify(await heads(0)) === JSON.stringify(still))
     await touch('touchEnd')
@@ -197,14 +195,11 @@ async function browserChecks(fixture: string) {
 
     await drag([300, 400], -100)
     await page.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 200, y: 400, id: 0 }, { x: 100, y: 300, id: 1 }] })
-    // Both fingers move before lifting: lifted in place they would be taps (a new event's editor opens over the page).
-    await page.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 200, y: 430, id: 0 }, { x: 100, y: 330, id: 1 }] })
     await touch('touchEnd')
     await sleep(200)
     check('reduced motion, second finger: no crash, no drag left', (await pages()) === 1)
     // After a second finger, one finger swipes and turns again (a drag dropped by a second finger leaves nothing behind).
-    // (Lifted in place, two fingers are taps and a new event's editor would open over the page, so
-    // the next swipe would land on it: that, not Chromium, was the "cancel after multi-touch" first seen here.)
+    // (The second finger is held still and lifted: it must not make an event, whose editor would open over the page.)
     check('no editor or card left open', await page.eval<boolean>(`!document.querySelector('.ca-field, .ca-pv-back, .ca-pop')`))
     const afterMulti = await heads(0)
     await drag([300, 400], -200)
