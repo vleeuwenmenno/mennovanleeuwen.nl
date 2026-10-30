@@ -130,13 +130,33 @@ export function newKey(set: WidgetSet, id: string): string {
   return key
 }
 
+/** Projection-only aliases resolve a captured gesture after a pending addition was remapped.
+ * They are never serialized as placements or granted to packages. Ambiguous lineage fails closed. */
+export type PlacementAliases = Record<string, string | null>
+const aliases = new WeakMap<WidgetSet, PlacementAliases>()
+export function bindPlacementAliases(set: WidgetSet, keys: PlacementAliases): WidgetSet {
+  aliases.set(set, keys)
+  return set
+}
+export function resolvePlacementKey(set: WidgetSet, key: string): string {
+  if (Object.hasOwn(set.places, key)) return key
+  const map = aliases.get(set)
+  if (!map || !Object.hasOwn(map, key)) return key
+  if (map[key] === null) throw new Error('Widget placement identity is ambiguous; refresh before editing')
+  return map[key]
+}
+
 /** `set` with these entries changed or added and these keys removed. */
 export function changeSet(set: WidgetSet, put: Record<string, WidgetPlace>, remove: string[] = []): WidgetSet {
   const removed = removedKeys(set)
   const places = { ...set.places }
-  for (const [k, p] of Object.entries(put)) if (!removed.has(k)) places[k] = p
-  for (const k of remove) delete places[k]
-  return { places, removed: remove.length ? joinKeys([...removed, ...remove]) : set.removed }
+  for (const [original, p] of Object.entries(put)) {
+    const k = resolvePlacementKey(set, original)
+    if (!removed.has(k)) places[k] = p
+  }
+  const removals = remove.map(k => resolvePlacementKey(set, k))
+  for (const k of removals) delete places[k]
+  return bindPlacementAliases({ places, removed: removals.length ? joinKeys([...removed, ...removals]) : set.removed }, aliases.get(set) ?? {})
 }
 
 /** Pure legacy-layout import. A variant entry already carrying this note/widget identity must

@@ -9,7 +9,7 @@ export type WidgetState = {
   configs: Record<string, ConfigRecord>
   placements: WidgetSet
   installations: InstallationRecords
-  /** Durable high-water marks for pre-hydration writers. Never evicted. */
+  /** Durable high-water marks for every admitted writer. Never evicted. */
   consumed?: Record<string, number>
   /** Writer-local original placement key -> permanent remapped key. */
   remaps?: Record<string, Record<string, string>>
@@ -123,7 +123,7 @@ function mergeRemaps(a: WidgetState['remaps'] = {}, b: WidgetState['remaps'] = {
   return out
 }
 export type ConfigEdit = { at: number; patch: Record<string, unknown>; unset: string[]; removed?: true }
-export type WidgetDelta = { configs: Record<string, ConfigEdit>; placements: WidgetSet; added: string[]; installations: InstallationRecords }
+export type WidgetDelta = { configs: Record<string, ConfigEdit>; placements: WidgetSet; added: string[]; installations: InstallationRecords; expectedInstallations?: Record<string, string> }
 export const emptyDelta = (): WidgetDelta => ({ configs: {}, placements: EMPTY, added: [], installations: {} })
 export type PendingOperation = { writer: string; sequence: number; at: number; delta: WidgetDelta }
 /** Account-scoped durable operation log. A writer retains its complete unconsumed prefix. */
@@ -135,6 +135,7 @@ function normalizeDelta(raw: unknown): WidgetDelta {
     configs: Object.fromEntries(Object.entries(record(raw.configs) ? raw.configs : {}).filter(([, e]) => record(e) && counter(e.at) && record(e.patch) && Array.isArray(e.unset) && e.unset.every(k => typeof k === 'string'))) as WidgetDelta['configs'],
     placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations),
     added: Array.isArray(raw.added) ? raw.added.filter((k): k is string => typeof k === 'string') : [],
+    ...(record(raw.expectedInstallations) ? { expectedInstallations: Object.fromEntries(Object.entries(raw.expectedInstallations).filter(([,v]) => typeof v === 'string')) as Record<string,string> } : {}),
   }
 }
 const deltaEmpty = (d: WidgetDelta) => !Object.keys(d.configs).length && !Object.keys(d.placements.places).length && !d.placements.removed && !Object.keys(d.installations).length
@@ -180,6 +181,22 @@ export function configDelta(before: Configs, after: Configs): WidgetDelta {
   }
   return { ...emptyDelta(), configs }
 }
+/** A compact installation precondition, including unavailable presence. */
+export function installationToken(raw: unknown): string {
+  if (!record(raw) || !record(raw.active) || !record(raw.active.snapshot)) return stableJSON(['unavailable', raw])
+  const previous = record(raw.previous) ? raw.previous : undefined
+  return stableJSON([raw.generation, raw.kind, raw.active.snapshot.digest, raw.active.source, record(previous?.snapshot) ? previous.snapshot.digest : null, previous?.source])
+}
+/** Only unambiguous lineage can translate a captured placement key. The originating writer's
+ * own mapping disambiguates concurrent additions of the same logical widget. */
+export function placementAliases(state: WidgetState, preferredWriter: string): Record<string,string|null> {
+  const keys: Record<string,string|null> = Object.create(null)
+  for (const mapping of Object.values(state.remaps ?? {})) for (const [from,to] of Object.entries(mapping)) {
+    keys[from] = !Object.hasOwn(keys,from) || keys[from] === to ? to : null
+  }
+  Object.assign(keys, state.remaps?.[preferredWriter] ?? {})
+  return keys
+}
 function applyDelta(state: WidgetState, pending: WidgetDelta, canonicalExists: boolean, at: number, writer: string): WidgetState {
   const configs = configsOf(state)
   for (const [id, edit] of Object.entries(pending.configs)) {
@@ -207,7 +224,11 @@ function applyDelta(state: WidgetState, pending: WidgetDelta, canonicalExists: b
   // Use the original gesture stamp, never the time a stale tab happens to hydrate.
   const next = withConfigs(state, configs, at)
   for (const [id, edit] of Object.entries(pending.configs)) if (edit.removed && !next.configs[id]?.removed) Object.defineProperty(next.configs, id, { value: { at: Math.max(at, (state.configs[id]?.at ?? 0) + 1), removed: true }, enumerable: true, configurable: true, writable: true })
-  return { ...next, placements: mergeSets({ places: puts, removed: removals }, state.placements), installations: mergeInstallationRecords(pending.installations, state.installations), ...(Object.keys(remaps).length ? { remaps } : {}) }
+  const accepted = Object.fromEntries(Object.entries(pending.installations).filter(([id,value]) => {
+    const expected = pending.expectedInstallations?.[id]
+    return expected === undefined || expected === installationToken(state.installations[id]) || same(value,state.installations[id])
+  }))
+  return { ...next, placements: mergeSets({ places: puts, removed: removals }, state.placements), installations: mergeInstallationRecords(accepted, state.installations), ...(Object.keys(remaps).length ? { remaps } : {}) }
 }
 export function applyPending(state: WidgetState, pending: PendingWidgets, canonicalExists: boolean): WidgetState {
   let next = state

@@ -3,11 +3,11 @@ import { storageTransaction } from '../../os/storageTransaction'
 import { getAccount, subscribeAccount } from '../../os/account'
 import { accountGuard, accountKey, accountStorage, TAB_UID } from '../../os/accountSpace'
 import { getSyncedHydration, onSyncedHydration, reportSyncFailure, synced, type Synced, type SyncedHydration } from '../../os/synced'
-import { changeSet, importPlaces, mergeSets, type WidgetPlace, type WidgetSet } from './placementSet'
+import { bindPlacementAliases, changeSet, importPlaces, mergeSets, type WidgetPlace, type WidgetSet } from './placementSet'
 import {
   applyPending, appendPending, configDelta, configsOf, emptyDelta, emptyPending, importLegacy, mergeInstallationRecords, mergePending,
   mergeWidgetStates, normalizeConfigs, normalizePending, normalizeWidgetState, unconsumed,
-  stableJSON, withConfigs, type Configs, type InstallationRecords, type WidgetDelta, type WidgetState,
+  installationToken, placementAliases, stableJSON, type Configs, type InstallationRecords, type WidgetDelta, type WidgetState,
 } from './canonicalModel'
 
 export const WIDGET_STATE_KEY = 'widgets:state:v2'
@@ -29,7 +29,17 @@ function readJournals() {
 }
 let pending = readJournals()
 let journalTimer: ReturnType<typeof setTimeout> | undefined
-const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, { normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true, serialize: storageTransaction, afterPersist: value => { if (value) finishJournal(value) } })
+const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, {
+  normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true, serialize: storageTransaction,
+  beforeRead: () => {
+    const raw = accountStorage.get(`mvlos.sync.${WIDGET_STATE_KEY}`)
+    if (raw === null) return
+    try { if (normalizeWidgetState(JSON.parse(raw)?.value)) return } catch { /* invalid envelope */ }
+    throw new Error('Widget state is unreadable; original data and journals retained')
+  },
+  prepare: value => value ? applyPending(value, mergePending(pending, readJournals()), true) : value,
+  afterPersist: value => { if (value) finishJournal(value) },
+})
 
 /** Old layout coordinates have no viewport metadata. Keep every number unchanged and record the
  * screen class from the layout key, so desktop migration still wins a tie with mobile. */
@@ -78,12 +88,12 @@ const listeners = new Set<() => void>()
 const remoteListeners = new Set<(remote: boolean) => void>()
 const syncedListeners = new Set<() => void>()
 let configs = configsOf(view)
-let placements = view.placements
+let placements = bindPlacementAliases(view.placements, placementAliases(view, writer))
 let installations = view.installations
 function refresh(next: WidgetState, remote = false) {
   const configNext = configsOf(next)
   if (stableJSON(configNext) !== stableJSON(configs)) configs = configNext
-  if (stableJSON(next.placements) !== stableJSON(placements)) placements = next.placements
+  if (stableJSON(next.placements) !== stableJSON(placements) || stableJSON(next.remaps) !== stableJSON(view.remaps)) placements = bindPlacementAliases(next.placements, placementAliases(next, writer))
   if (stableJSON(next.installations) !== stableJSON(installations)) installations = next.installations
   view = next
   listeners.forEach(l => l())
@@ -92,10 +102,11 @@ function refresh(next: WidgetState, remote = false) {
 const latestState = () => mergeWidgetStates(state.get(), normalizeWidgetState((readJSON(`mvlos.sync.${WIDGET_STATE_KEY}`) as LegacyMeta | null)?.value))
 function queue(delta: WidgetDelta) {
   pending = unconsumed(mergePending(pending, readJournals()), latestState())
-  pending = appendPending(pending, writer, serial + 1, delta)
+  const next = appendPending(pending, writer, serial + 1, delta)
+  const own = { operations: Object.fromEntries(Object.entries(next.operations).filter(([, op]) => op.writer === writer)) }
+  if (!accountStorage.set(ownJournalKey, JSON.stringify(own))) throw new Error('Widget journal write refused; change not admitted')
+  pending = next
   serial++
-  const own = { operations: Object.fromEntries(Object.entries(pending.operations).filter(([, op]) => op.writer === writer)) }
-  accountStorage.set(ownJournalKey, JSON.stringify(own))
 }
 function finishJournal(committed: WidgetState) {
   pending = unconsumed(mergePending(pending, readJournals()), committed)
@@ -125,14 +136,14 @@ function hydrate(snapshot: SyncedHydration = {}) {
   if (snapshot[WIDGET_STATE_KEY] && !normalizeWidgetState(snapshot[WIDGET_STATE_KEY].value)) return
   const current = latestState()
   pending = unconsumed(mergePending(pending, readJournals()), current)
-  const next = applyPending(current ?? legacyState(snapshot), pending, !!current)
+  const next = current ?? legacyState(snapshot)
   // The serialized save merges other tabs' envelopes under the same IDB request scope before
   // writing data + receipts and cleaning this writer's journal.
   state.set(next)
   ready = true
-  refresh(state.get()!, true)
+  refresh(pendingView(), true)
   syncedListeners.forEach(l => l())
-  if (!emptyJournal()) scheduleDrain()
+  if (!emptyJournal()) void state.persist?.().catch(reportSyncFailure)
 }
 
 function scheduleDrain() {
@@ -175,7 +186,13 @@ function facade<T>(get: () => T, update: (next: T) => void): Synced<T> {
       remoteListeners.add(forward)
       return () => { remoteListeners.delete(forward) }
     },
-    flush: state.flush,
+    async flush() {
+      if (!ready) return
+      await state.persist?.()
+      if (!accountGuard()) throw new Error('Account changed')
+      const durable = normalizeWidgetState((readJSON(`mvlos.sync.${WIDGET_STATE_KEY}`) as LegacyMeta | null)?.value)
+      if (!durable || Object.keys(unconsumed(normalizePending(readJSON(ownJournalKey)), durable).operations).length) throw new Error('Widget changes are not durably committed')
+    },
     everSynced: state.everSynced,
     onSynced(l) {
       syncedListeners.add(l)
@@ -185,37 +202,32 @@ function facade<T>(get: () => T, update: (next: T) => void): Synced<T> {
   }
   return store
 }
-function commit(next: WidgetState) {
-  state.set(next)
-  refresh(state.get()!)
+function commit() {
+  refresh(pendingView())
+  if (ready) void state.persist?.().catch(reportSyncFailure)
 }
 
 export const canonicalConfigs = facade<Configs>(() => configs, next => {
-  if (ready) commit(withConfigs(view, normalizeConfigs(next)))
-  else {
-    queue(configDelta(configs, normalizeConfigs(next)))
-    refresh(pendingView())
-  }
+  queue(configDelta(configs, normalizeConfigs(next)))
+  commit()
 })
 export const canonicalPlacements = facade<WidgetSet>(() => placements, next => {
-  if (ready) commit({ ...view, placements: mergeSets(next, view.placements) })
-  else {
+  {
     const put = Object.fromEntries(Object.entries(next.places).filter(([key, p]) => stableJSON(p) !== stableJSON(placements.places[key])))
     const beforeRemoved = new Set(placements.removed.split(' '))
     const remove = next.removed.split(' ').filter(key => key && !beforeRemoved.has(key))
     const added = Object.entries(put).filter(([key, p]) => p.at > 0 && !Object.hasOwn(placements.places, key)).map(([key]) => key)
     queue({ ...emptyDelta(), placements: changeSet({ places: {}, removed: '' }, put, remove), added })
-    refresh(pendingView())
+    commit()
   }
 })
 /** Parent installation layer supplies its package normalization/typing over this generic facade.
  * Recovering a revision only updates this projection; configs and placements are never rolled back. */
 export const canonicalInstallations = facade<InstallationRecords>(() => installations, next => {
-  if (ready) commit({ ...view, installations: mergeInstallationRecords(next, view.installations) })
-  else {
+  {
     const edits = Object.fromEntries(Object.entries(next).filter(([id, value]) => stableJSON(value) !== stableJSON(installations[id])))
-    queue({ ...emptyDelta(), installations: edits })
-    refresh(pendingView())
+    queue({ ...emptyDelta(), installations: edits, expectedInstallations: Object.fromEntries(Object.keys(edits).map(id => [id, installationToken(installations[id])])) })
+    commit()
   }
 })
 
@@ -233,7 +245,7 @@ subscribeAccount(() => {
 })
 // Modules may load after /api/me and /api/state, or after a guest was established.
 if (ready && !emptyJournal()) {
-  try { commit(applyPending(latestState()!, pending, true)); if (!emptyJournal()) scheduleDrain() } catch (error) { reportSyncFailure(error) }
+  try { commit(); if (!emptyJournal()) scheduleDrain() } catch (error) { reportSyncFailure(error) }
 }
 if (!ready) hydrateSafely(getSyncedHydration() ?? {})
 

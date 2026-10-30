@@ -32,7 +32,7 @@ const inject = (reset=false, remote:unknown={}, extra='')=>`(()=>{
   const native=fetch.bind(window);window.fetch=(input,options)=>{
     const path=String(input);
     if(path==='/api/me')return new Promise((resolve,reject)=>{window.__releaseMe=()=>native(input,options).then(resolve,reject)});
-    if(path==='/api/state')return Promise.resolve(Response.json(window.__remote));
+    if(path==='/api/state')return window.__holdState?new Promise(()=>{}):Promise.resolve(Response.json(window.__remote));
     if(path.startsWith('/api/state/'))return new Promise(resolve=>window.__puts.push({path,body:JSON.parse(options.body),release:reply=>resolve(Response.json(reply))}));
     if(path.startsWith('/api/')&&sessionStorage.getItem('review2-switch'))return Promise.resolve(Response.json({}));
     return native(input,options);
@@ -125,6 +125,34 @@ try {
     check('Controlled three-tab race has no browser exceptions',[A,B,C].every(p=>!p.errors.length),[...A.errors,...B.errors,...C.errors])
   } finally {for(const p of [A,B,C]){await p.send('Debugger.resume').catch(()=>{});await p.close()}}
 
+  // A ready writer must leave a durable journal before returning, even while another tab owns
+  // the gate and the writer is immediately navigated away.
+  const H=await open(true),N=await open()
+  try {
+    await hydrate(H);await hydrate(N);await flush(H);await flush(N)
+    const resume=await pause(H,'navigation-holder')
+    await set(N,'navigation',{days:7})
+    check('Ready edit is journalled before its caller returns',await journalCount(N)>0)
+    await N.send('Page.navigate',{url:'about:blank'})
+    await resume()
+    const reopened=await open()
+    try { await hydrate(reopened);await flush(reopened);check('Navigation during blocked persistence recovers accepted edit',(await configs(reopened)).navigation?.days===7) }
+    finally {await reopened.close()}
+  } finally {await H.send('Debugger.resume').catch(()=>{});await H.close();await N.close()}
+
+  const activation=await open(true,{},`window.__holdState=true;const rawSet=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.includes('widgets.pending:v2:'))throw new DOMException('Synthetic quota','QuotaExceededError');return rawSet.call(this,k,v)}`)
+  try {
+    await activation.eval('window.__releaseMe()');await activation.waitFor(`import('/src/os/account.ts').then(m=>!!m.getAccount().user)`)
+    const error=await activation.eval(`(async()=>{const i=await import('/src/widgets/platform/installations.ts'),d=await import('/src/widgets/platform/defaults.ts');try{await i.activate('activation-test','status',{source:{kind:'system',path:'/usr/share/mvlos/widgets/status'},snapshot:await d.defaultBuild('status')},0);return ''}catch(e){return e.message}})()`)
+    check('Activation rejects before hydration when journal storage is unavailable',!!error&&await journalCount(activation)===0&&(await durable(activation))===null,error)
+  } finally {await activation.close()}
+  const quotaActivation=await open(true)
+  try {
+    await hydrate(quotaActivation);await flush(quotaActivation)
+    const error=await quotaActivation.eval(`(async()=>{const i=await import('/src/widgets/platform/installations.ts'),d=await import('/src/widgets/platform/defaults.ts');const snapshot=await d.defaultBuild('status');const raw=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.includes('widgets.pending:v2:'))throw new DOMException('Synthetic quota','QuotaExceededError');return raw.call(this,k,v)};try{await i.activate('activation-quota','status',{source:{kind:'system',path:'/usr/share/mvlos/widgets/status'},snapshot},0);return ''}catch(e){return e.message}})()`)
+    check('Hydrated activation rejects when its journal write fails',error.includes('journal write refused')&&!(await quotaActivation.eval(`import('/src/widgets/platform/installations.ts').then(m=>m.installation('activation-quota'))`)),error)
+  } finally {await quotaActivation.close()}
+
   const tombstone={ 'widgets:state:v2':{value:{schema:2,configs:{},placements:{places:{},removed:'remap-remove remap-move'},installations:{}},updatedAt:1} }
   const R=await open(true,tombstone)
   try {
@@ -143,15 +171,33 @@ try {
     check('Identity replay has no browser exceptions',!R.errors.length,R.errors)
   } finally {await R.close()}
 
+  // Mirror WM: keys are captured before another tab remaps the additions, and passed to an
+  // updater only after that remap became durable.
+  const G=await open(true,tombstone),M=await open(false,tombstone)
+  try {
+    await G.eval(`import('/src/os/widgetPlaces.ts').then(m=>{m.placeWidgets(['remap-remove','remap-move'].map(id=>({id,kind:'status',x:10,y:20,w:300,h:260,vw:1500,vh:1000})));window.__captured=Object.fromEntries(['remap-remove','remap-move'].map(id=>[id,m.entriesOf(m.widgetPlaces.get(),id)[0]]))})`)
+    await hydrate(M);await flush(M)
+    await G.eval(`import('/src/os/widgetPlaces.ts').then(m=>{const a=window.__captured;m.widgetPlaces.set(cur=>m.changeSet(cur,{[a['remap-move'].key]:{...a['remap-move'].place,x:321,y:456,at:Date.now()}},[a['remap-remove'].key]))})`)
+    await hydrate(G);await flush(G);await reload(G)
+    const moved=await entries(G,'remap-move')
+    check('Captured WM keys resolve after another tab persists remaps',moved.length===1&&moved[0].place.x===321&&moved[0].place.y===456&&(await entries(G,'remap-remove')).length===0,moved)
+  } finally {await G.close();await M.close()}
+
   const D=await open(true,{},`localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify({value:{schema:2,configs:{'move-seed':{at:7,value:{days:4}}},placements:{places:{},removed:''},installations:{}},base:4,dirty:true}));Object.defineProperty(window,'indexedDB',{value:{open(){throw new DOMException('Synthetic IDB denial','SecurityError')}},configurable:true});`)
   try {
     await set(D,'denied',{days:1});await hydrate(D)
     const error=await D.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalConfigs.flush().then(()=>'',e=>e.message))`)
     check('Unavailable transactional persistence refuses canonical writes',!!error&&(await durable(D))===null,error)
     check('IDB denial retains journal and usable optimistic widget data',await journalCount(D)>0&&(await configs(D)).denied.days===1)
+    check('Failed plain transfer retains ownership marker',await D.eval(`localStorage.getItem('mvlos.account')==='1'`))
     await D.eval(`import('/src/os/synced.ts').then(m=>{window.__ordinary=m.synced('review2-ordinary',0);window.__ordinary.set(7)})`)
     check('IDB denial preserves ordinary store synchronous persistence',await D.eval(`JSON.parse(localStorage.getItem('mvlos.u.1.sync.review2-ordinary')).value===7`))
   } finally {await D.close()}
+  const guestCookie=await newPage(b,1500,1000,'');await guestCookie.send('Network.deleteCookies',{name:'mvlos_uid',url:origin});await guestCookie.close()
+  const guest=await open()
+  try { await sleep(300);check('Visitor cannot import retained account-owned plain envelope',await guest.eval(`localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')===null&&localStorage.getItem('mvlos.account')==='1'`)) }
+  finally {await guest.close()}
+  const ownerCookie=await newPage(b,1500,1000,'');await ownerCookie.send('Network.setCookie',{name:'mvlos_uid',value:'1',url:origin});await ownerCookie.close()
   // Independent document with no IDB denial must recover the refused write from its journal.
   const recover=await open()
   try {
@@ -169,13 +215,14 @@ try {
     check('Refused localStorage write retains its journal',await journalCount(Q)>0&&(await durable(Q))===null)
     await Q.eval('window.__denyCanonical=false');await flush(Q)
     check('Transient storage denial retries without another edit',(await durable(Q)).value.configs.quota.value.days===1)
-    check('Receipt cleanup follows successful persistence',await journalCount(Q)===0)
+    const remaining=await journalCount(Q)
+    check('Receipt cleanup follows successful persistence',remaining===0,remaining)
   } finally {await Q.close()}
 
   const blocked=await open(true,{},`Object.defineProperty(window,'localStorage',{get(){throw new DOMException('Synthetic storage denial','SecurityError')}});`)
   try {
-    await set(blocked,'memory',{days:3});await hydrate(blocked)
-    check('Fully blocked localStorage keeps widget UI usable in memory',(await configs(blocked)).memory.days===3)
+    const admission=await blocked.eval(`import('/src/widgets/config.ts').then(m=>{try{m.setWidgetConfig('memory',{days:3});return ''}catch(e){return e.message}})`);await hydrate(blocked)
+    check('Fully blocked localStorage rejects an edit before acknowledgement',admission.includes('journal write refused')&&!(await configs(blocked)).memory,admission)
     const error=await blocked.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalConfigs.flush().then(()=>'',e=>e.message))`)
     check('Fully blocked localStorage reports refusal without a false durable success',!!error&&await blocked.eval('window.__writes.length===0'))
     check('Fully blocked storage has no unhandled browser exceptions',!blocked.errors.length,blocked.errors)
@@ -208,14 +255,15 @@ try {
     await F.eval(`import('/src/os/accountSpace.ts').then(m=>m.freezeAccount(false))`)
     await resume()
     const error=await F.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalConfigs.flush().then(()=>'',e=>e.message))`)
-    check('Revocation cancels queued persistence before any durable write',!!error&&!Object.hasOwn((await durable(L)).value.configs,'must-not-save'),error)
+    check('Revocation cancels frozen tab persistence',!!error,error)
     // Logout cleanup is intentionally permitted after revocation, but follows every earlier
     // running writer. It cannot clear first and then let the paused writer recreate the envelope.
-    const resumeCleanup=await pause(L,'before-cleanup')
+    await pause(L,'before-cleanup')
     await F.eval(`window.__cleared=false;void import('/src/os/accountSpace.ts').then(m=>m.clearAccountSpace()).then(()=>window.__cleared=true)`)
     await sleep(80);check('Logout cleanup waits behind an already-running writer',!await F.eval('window.__cleared'))
-    await resumeCleanup();await F.waitFor('window.__cleared')
-    check('Logout cleanup cannot be undone by the earlier paused write',(await durable(F))===null&&await journalCount(F)===0)
+    onPause=undefined;await L.send('Debugger.resume');await F.waitFor('window.__cleared')
+    const afterCleanup={canonical:await durable(F),journals:await journalCount(F)}
+    check('Logout cleanup cannot be undone by the earlier paused write',afterCleanup.canonical===null&&afterCleanup.journals===0,afterCleanup)
     check('Degraded storage and revocation create no unhandled browser exceptions',!Q.errors.length&&!D.errors.length&&!F.errors.length&&!L.errors.length,[...Q.errors,...D.errors,...F.errors,...L.errors])
   } finally {for(const p of [L,F]){await p.send('Debugger.resume').catch(()=>{});await p.close()}}
 } finally {await b.close();vite.kill('SIGTERM');rmSync(data,{recursive:true,force:true})}

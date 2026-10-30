@@ -365,7 +365,7 @@ try {
   await reload.pull()
   assert.equal(reload.canonical.canonicalConfigs.get()['offline-note'].tilt, 3)
 
-  // Guests cut over locally only after account identity is known. Storage denial stays usable.
+  // Guests cut over locally only after account identity is known. Storage denial rejects edits.
   const guest = new Page('visitor', 'guest')
   guest.seed('widgets:placed', { places: { guest: entry('guest') }, removed: '' })
   await guest.init()
@@ -387,11 +387,18 @@ try {
   const denied = new Page('visitor', 'denied')
   denied.blocked = true
   await denied.init()
-  denied.config.setWidgetConfig('temp', { tilt: 1 })
+  assert.throws(() => denied.config.setWidgetConfig('temp', { tilt: 1 }), /journal write refused/)
   await denied.login()
-  assert.equal(denied.canonical.canonicalConfigs.get().temp.tilt, 1)
-  denied.wp.widgetPlaces.set(cur => denied.wp.changeSet(cur, { temp: entry('temp') }))
-  assert.ok(denied.wp.widgetPlaces.get().places.temp)
+  assert.equal(denied.canonical.canonicalConfigs.get().temp, undefined)
+  assert.throws(() => denied.wp.widgetPlaces.set(cur => denied.wp.changeSet(cur, { temp: entry('temp') })), /journal write refused/)
+  assert.equal(denied.wp.widgetPlaces.get().places.temp, undefined)
+
+  const corrupt = new Page('visitor', 'corrupt-canonical')
+  corrupt.seed(KEY, { schema: 99, future: 'preserve' })
+  await corrupt.init(); await corrupt.login()
+  corrupt.config.setWidgetConfig('pending', { tilt: 4 })
+  await assert.rejects(corrupt.canonical.canonicalConfigs.flush!(), /unreadable/)
+  assert.deepEqual(corrupt.meta(KEY).value, { schema: 99, future: 'preserve' }, 'unsupported local state is not overwritten')
 
   // A late tab retains a consumed journal; receipts must survive new edits, removals and reloads.
   const lagA = new Page('27', 'lag-shared'); await lagA.init()

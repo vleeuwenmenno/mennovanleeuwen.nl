@@ -51,6 +51,8 @@ export type Synced<T> = {
   everSynced: () => boolean
   /** Wait for serialized durable persistence, when configured. */
   flush?: () => Promise<void>
+  /** Request a durable pass even when no optimistic value changed (serialized stores only). */
+  persist?: () => Promise<void>
   /** Called after account metadata is established, after any remote value callbacks. */
   onSynced: (l: () => void) => () => void
 }
@@ -111,6 +113,9 @@ export function synced<T>(
     preserveOnMergeError?: boolean
     /** Canonical stores serialize every durable write, including remote metadata updates. */
     serialize?: <R>(run: () => R) => Promise<R>
+    /** Both hooks run synchronously inside serialize, never during optimistic admission. */
+    beforeRead?: () => void
+    prepare?: (value: T) => T
     afterPersist?: (value: T) => void
     /** Sees every newer value from the server or another tab before any merge can drop it. */
     onIncoming?: (remote: unknown) => void
@@ -143,6 +148,7 @@ export function synced<T>(
   }
   const saveNow = () => {
     if (frozen() || !accountGuard()) return
+    opts.beforeRead?.()
     let others = false
     // Another tab's save this tab hasn't heard of yet: merged in first.
     const raw = opts.mergeTabs && opts.merge ? accountStorage.get(storageKey(key)) : null
@@ -162,10 +168,15 @@ export function synced<T>(
         if (opts.preserveOnMergeError) throw error
         /* not readable: written over */
       }
+    if (opts.prepare) {
+      const value = opts.prepare(meta.value)
+      if (JSON.stringify(value) !== JSON.stringify(meta.value)) { meta = { ...meta, value, dirty: true }; others = true }
+    }
     const durable = meta
     const saved = accountStorage.set(storageKey(key), JSON.stringify(durable))
     if (opts.serialize && !saved) throw new Error('Widget storage write refused; pending changes retained')
     if (saved) opts.afterPersist?.(durable.value)
+    if (opts.prepare && meta.dirty) schedulePush(key)
     // Another tab's changes came along: show them, as when they arrive by themselves.
     if (others) {
       emit()
@@ -194,7 +205,7 @@ export function synced<T>(
 
   const store: Synced<T> = {
     key,
-    ...(opts.serialize ? { flush } : {}),
+    ...(opts.serialize ? { flush, persist: async () => { save(); await flush() } } : {}),
     get: () => meta.value,
     set(next) {
       const value = typeof next === 'function' ? (next as (v: T) => T)(meta.value) : next

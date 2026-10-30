@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import { defaultBuild, isBuiltin } from './defaults'
 import type { Synced } from '../../os/synced'
-import { canonicalInstallations, canonicalInstallationBytes } from './canonicalState'
+import { canonicalInstallations, canonicalInstallationBytes, widgetsHydrated } from './canonicalState'
 import { getAccount } from '../../os/account'
 import { accountGuard } from '../../os/accountSpace'
 import { isWidgetKind, supportsCapabilities, record, verifySnapshot, type Snapshot, type SourceIdentity, type WidgetKind } from './package'
@@ -48,6 +48,7 @@ export async function activate(instance: string, kind: Installation['kind'], rev
   const fallback = { source: { kind: 'system' as const, path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }
   assertSource(revision.source)
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
+  if (!widgetsHydrated()) throw new Error('Widget state is not hydrated; retry activation after sync')
   let conflict = ''
   installations.set(all => {
     const current = all[instance]

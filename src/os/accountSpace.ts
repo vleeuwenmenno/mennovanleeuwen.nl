@@ -43,6 +43,10 @@ export const SPACE = TAB_UID ? `mvlos.u.${TAB_UID}.` : 'mvlos.visitor.'
 
 /** The key in this tab's account space for an account-owned key, written as before spaces (`mvlos.history`). */
 export const accountKey = (key: string) => SPACE + key.replace(/^mvlos\./, '')
+// A logout cleanup invalidates other still-open tabs even before their cookie-change event runs.
+const REVOCATION_KEY = `${SPACE}revocation:v1`
+const revocation = () => { try { return localStorage.getItem(REVOCATION_KEY) } catch { return null } }
+const TAB_REVOCATION = revocation()
 
 let frozen = false
 /** Whether this tab stopped: the browser is signed in as another account now (or this one is being cleared). */
@@ -68,7 +72,7 @@ export function freezeAccount(reload = true) {
 /** Whether this tab may still write its account's state and talk to the API: the cookie still says its account. */
 export function accountGuard(): boolean {
   if (frozen) return false
-  if (cookieUid() === TAB_UID) return true
+  if (cookieUid() === TAB_UID && revocation() === TAB_REVOCATION) return true
   freezeAccount()
   return false
 }
@@ -121,11 +125,12 @@ export function clearAccountSpace(): Promise<void> {
   const canonical = accountKey(WIDGET_STORAGE_KEY), journals = accountKey(WIDGET_JOURNAL_PREFIX)
   const widgetKey = (key: string) => key === canonical || key === journals || key.startsWith(journals + ':')
   try {
-    for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && !widgetKey(k)) localStorage.removeItem(k)
+    for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && k !== REVOCATION_KEY && !widgetKey(k)) localStorage.removeItem(k)
   } catch { return Promise.reject(new Error('Account storage cleanup unavailable')) }
   // Logout is authorized cleanup after revocation, so it intentionally does not call accountGuard.
   // It follows any already-running writer, including a tab paused inside its native storage call.
   return storageTransaction(() => {
+    localStorage.setItem(REVOCATION_KEY, crypto.randomUUID())
     for (const k of Object.keys(localStorage)) if (widgetKey(k)) localStorage.removeItem(k)
   })
 }
@@ -175,8 +180,12 @@ function moveIn() {
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
           localStorage.removeItem(k)
         }
-        localStorage.removeItem(OLD_MARKER)
-        localStorage.removeItem(OLDER_MARKER)
+        // The canonical envelope still lives in the plain space until the transaction below.
+        // Its ownership markers must outlive a blocked/failed transfer, including sign-out.
+        if (localStorage.getItem(WIDGET_STORAGE_KEY) === null) {
+          localStorage.removeItem(OLD_MARKER)
+          localStorage.removeItem(OLDER_MARKER)
+        }
       }
       if (TAB_UID) for (const k of keys) if (k.startsWith('mvlos.visitor.sync.') && k !== 'mvlos.visitor.sync.widgets:state:v2') {
         const to = SPACE + k.slice('mvlos.visitor.'.length)
@@ -194,6 +203,12 @@ function moveIn() {
           const v = localStorage.getItem(WIDGET_STORAGE_KEY)
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
           if (v !== null) localStorage.removeItem(WIDGET_STORAGE_KEY)
+          // Do not remove markers another account may have established in the meantime.
+          const marker = localStorage.getItem(OLD_MARKER)
+          if (TAB_UID ? marker === TAB_UID || (!marker && !!localStorage.getItem(OLDER_MARKER)) : !marker && !localStorage.getItem(OLDER_MARKER)) {
+            localStorage.removeItem(OLD_MARKER)
+            localStorage.removeItem(OLDER_MARKER)
+          }
         }
         if (localStorage.getItem(guestPlan) && localStorage.getItem(to) === null) {
           const v = localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')

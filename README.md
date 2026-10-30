@@ -4401,7 +4401,7 @@ per-config counters/tombstones, placement geometry/tombstones and immutable inst
 revisions/generations. Its presence is the atomic cutover marker. First import waits for successful
 account discovery and complete account-state hydration; failed/offline discovery does not mean
 an empty account. Confirmed guests cut over locally, including servers with sign-in disabled.
-Edits made while hydration is pending use account-scoped, per-writer browser journals. Every
+Every accepted edit first enters an account-scoped, per-writer browser journal. Every
 operation has a writer UUID and monotonic sequence. Consumption watermarks commit in the same
 JSON envelope as config/placement/install data and merge by maximum sequence. Every durable canonical
 read/merge/write sequence and receipt cleanup runs inside one origin-wide IndexedDB `readwrite` request
@@ -4413,13 +4413,14 @@ holds no account data here. Its scope supplies mutual exclusion; it does not rol
 localStorage write if the transaction later aborts. Receipts precede cleanup, making retry safe.
 All tabs use this same protocol, with or without Web Locks.
 
-Local UI updates remain optimistic. Explicit installation activation waits for durable
-persistence before succeeding. Absent/blocked IndexedDB refuses shared canonical writes rather
-than falling back to unsafe localStorage locking; the UI remains usable in memory and durable
-pending journals remain available for recovery. A failed flush gets one retry per caller;
-background sync retries use existing bounded backoff. Fully blocked localStorage cannot retain
-edits across reloads and reports persistence failure. Account guards cancel queued transactions
-on revocation/switch; authorized logout cleanup follows earlier active writers. If storage
+Local UI updates remain optimistic after their journal write succeeds. Explicit installation
+activation requires hydration and waits for its durable canonical result before succeeding.
+Absent/blocked IndexedDB refuses shared canonical writes; durable pending journals remain
+available for recovery. A failed flush gets one retry per caller; background sync retries use
+existing bounded backoff. If localStorage refuses a journal write, the edit is rejected rather
+than acknowledged without recovery. Account guards cancel queued transactions
+on revocation/switch; authorized logout cleanup follows earlier active writers and advances an
+account-space revocation marker so other open tabs cannot recreate cleared state. If storage
 refuses cleanup, authentication is still revoked and the inaccessible copy remains in that
 account's namespace. Ordinary synced stores keep their synchronous persistence behavior.
 
@@ -4430,7 +4431,7 @@ identity in the envelope. Later moves/removals use that same target across repla
 reloads; remapped removals beat stale geometry. Original gesture stamps prevent delayed replay
 from gaining a new wall-clock time. Ordinary per-config ordering remains unchanged.
 The log admits at most 1,024 pending operations and replay processes at most 1,024 per pass;
-canonical receipts retain up to 256 pre-hydration writers and 1,024 placement identity mappings.
+canonical receipts retain up to 256 writers and 1,024 placement identity mappings.
 Receipts/mappings are never evicted to admit another operation: capacity or conflicting identity
 errors preserve durable data and pending operations for recovery.
 The one-time import preserves IDs, note identities, counters, geometry, overlap, stacking and
