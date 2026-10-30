@@ -4,48 +4,35 @@ import type { Synced } from '../../os/synced'
 import { canonicalInstallations, canonicalInstallationBytes, widgetsHydrated } from './canonicalState'
 import { getAccount } from '../../os/account'
 import { accountGuard } from '../../os/accountSpace'
-import { isWidgetKind, supportsCapabilities, record, verifySnapshot, type Snapshot, type SourceIdentity, type WidgetKind } from './package'
+import { CUSTOM_KIND, isInstanceKind, supportsCapabilities, record, verifySnapshot, type InstanceKind } from './package'
 import { assertSource } from './sources'
-export type Revision = { source: SourceIdentity; snapshot: Snapshot }
-export type Installation = { schema: 1; instance: string; kind: WidgetKind; generation: number; active: Revision; previous?: Revision }
-type Installations = Record<string, Installation>
-export function mergeInstallations(local: Installations, remote: Installations): Installations {
-  const out = { ...remote }
-  for (const [id, value] of Object.entries(local)) {
-    const other = out[id]
-    if (!other || value.generation > other.generation || value.generation === other.generation && JSON.stringify(value) > JSON.stringify(other)) out[id] = value
-  }
-  return out
-}
-function normalize(raw: unknown): Installations {
-  if (!record(raw)) return Object.create(null) as Installations
-  const out: Installations = Object.create(null) as Installations
-  for (const [id, value] of Object.entries(raw)) {
-    if (/^[\w-]{1,80}$/.test(id) && record(value) && value.schema === 1 && value.instance === id && isWidgetKind(value.kind) && Number.isSafeInteger(value.generation) && Number(value.generation) > 0 && record(value.active) && record(value.active.source) && record(value.active.snapshot)) out[id] = value as Installation
-  }
-  return out
-}
+import { admission, INSTANCE_ID, isTombstone, mergeInstallations as mergeRecords, normalizeInstallations as normalize, tombstone, type Installation, type Installations, type Revision } from './records'
+export type { Installation, Revision }
+export const mergeInstallations = (local: Installations, remote: Installations) => mergeRecords(local, remote) as Installations
 export const installations: Synced<Installations> = { ...canonicalInstallations, get: () => normalize(canonicalInstallations.get()), set: next => canonicalInstallations.set(all => { const current=normalize(all);return {...all,...(typeof next==='function'?next(current):next)} }), use: useInstallationRecords, onRemote: listener => canonicalInstallations.onRemote(raw=>listener(normalize(raw))) }
 function useInstallationRecords(){const raw=canonicalInstallations.use();return useMemo(()=>normalize(raw),[raw])}
 export const installation = (id: string) => installations.get()[id]
 export const installationIdentity = (value?: Installation) => JSON.stringify([value?.generation ?? 0, value?.active.snapshot.digest, value?.active.source, value?.previous?.snapshot?.digest, value?.previous?.source])
 /** Presence is independent of validity: corrupt/unknown records must never select a default. */
 export const useInstallationPresence = (id: string) => Object.hasOwn(canonicalInstallations.use(), id)
+/** A custom widget the user removed (here or on another device). Its placement may still be on the desktop. */
+export const useInstallationRemoved = (id: string) => { const raw = canonicalInstallations.use(); return Object.hasOwn(raw, id) && isTombstone(raw[id]) }
 export function installationVersion(id: string) {
   const raw = canonicalInstallations.get()[id]
   const valid = normalize({ [id]: raw })[id]
   return { generation: record(raw) && Number.isSafeInteger(raw.generation) && Number(raw.generation) > 0 ? Number(raw.generation) : 0, identity: valid ? installationIdentity(valid) : JSON.stringify(['unavailable', raw]) }
 }
-export async function activate(instance: string, kind: Installation['kind'], revision: Revision, expectedGeneration: number, expectedIdentity = installationVersion(instance).identity) {
+export async function activate(instance: string, kind: InstanceKind, revision: Revision, expectedGeneration: number, expectedIdentity = installationVersion(instance).identity) {
   assertSource(revision.source)
   if (!accountGuard() || !getAccount().user) throw new Error('Sign in to install a package')
   const account = getAccount().user!.id
-  if (!/^[\w-]{1,80}$/.test(instance) || !isWidgetKind(kind) || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) throw new Error('Invalid installation identity')
+  if (kind === CUSTOM_KIND && revision.source.kind === 'system') throw new Error('Custom widgets come from a folder, not a system source')
+  if (!INSTANCE_ID.test(instance) || !isInstanceKind(kind) || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) throw new Error('Invalid installation identity')
   const snapshot = await verifySnapshot(revision.snapshot)
   if (!supportsCapabilities(kind, snapshot.manifest.capabilities)) throw new Error('Capabilities do not match instance resource')
   assertSource(revision.source)
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
-  const fallback = { source: { kind: 'system' as const, path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }
+  const fallback = kind === CUSTOM_KIND ? undefined : { source: { kind: 'system' as const, path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }
   assertSource(revision.source)
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   if (!widgetsHydrated()) throw new Error('Widget state is not hydrated; retry activation after sync')
@@ -56,8 +43,12 @@ export async function activate(instance: string, kind: Installation['kind'], rev
     const version = installationVersion(instance)
     if (version.generation !== expectedGeneration || version.identity !== expectedIdentity || !Number.isSafeInteger(expectedGeneration + 1)) { conflict = 'Installation changed; reload before activating'; return all }
     const raw = canonicalInstallations.get()
-    if (!Object.hasOwn(raw, instance) && Object.keys(raw).length >= 12) { conflict = 'Installation limit reached (12 records); existing revisions remain editable'; return all }
-    const next: Installations = { ...all, [instance]: { schema: 1, instance, kind, generation: expectedGeneration + 1, active: { source: revision.source, snapshot }, previous: current?.active ?? fallback } }
+    if (isTombstone(raw[instance])) { conflict = 'This widget was removed; create a new one instead'; return all }
+    if (current && current.kind !== kind) { conflict = 'Installation kind cannot change'; return all }
+    conflict = admission(raw, instance)
+    if (conflict) return all
+    const previous = current?.active ?? fallback
+    const next: Installations = { ...all, [instance]: { schema: 1, instance, kind, generation: expectedGeneration + 1, active: { source: revision.source, snapshot }, ...(previous ? { previous } : {}) } }
     if (canonicalInstallationBytes({ ...raw, ...next }) > 480 * 1024) { conflict = 'Widget state exceeds the 480 KiB installation budget'; return all }
     return next
   })
@@ -66,6 +57,24 @@ export async function activate(instance: string, kind: Installation['kind'], rev
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   const installed = installation(instance)
   if (installed?.active.snapshot.digest !== snapshot.digest || JSON.stringify(installed.active.source) !== JSON.stringify(revision.source)) throw new Error('Installation changed; reload before activating')
+}
+/** Removes a custom widget's installation (explicit user action). Builtins are never removable. */
+export async function removeInstallation(instance: string, expectedGeneration: number, expectedIdentity = installationVersion(instance).identity) {
+  if (!accountGuard() || !getAccount().user) throw new Error('Sign in to remove a widget')
+  const account = getAccount().user!.id
+  if (!widgetsHydrated()) throw new Error('Widget state is not hydrated; retry after sync')
+  let conflict = ''
+  installations.set(all => {
+    const current = all[instance]
+    const version = installationVersion(instance)
+    if (!current || current.kind !== CUSTOM_KIND) { conflict = 'Only installed custom widgets can be removed'; return all }
+    if (version.generation !== expectedGeneration || version.identity !== expectedIdentity || !Number.isSafeInteger(expectedGeneration + 1)) { conflict = 'Installation changed; reload before removing'; return all }
+    return { [instance]: tombstone(instance, expectedGeneration + 1) } as unknown as Installations
+  })
+  if (conflict) throw new Error(conflict)
+  await installations.flush?.()
+  if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
+  if (!isTombstone(canonicalInstallations.get()[instance])) throw new Error('Removal was not committed; reload and retry')
 }
 export async function recover(instance: string, expectedGeneration: number, expectedIdentity = installationIdentity(installation(instance))) {
   const current = installation(instance)

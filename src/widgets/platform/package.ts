@@ -1,13 +1,17 @@
 import type { BrokerProjection } from './brokerTypes'
 /** Widget package format. Data only: no host imports, npm resolution, HTML or build hooks. */
 export const BUILD_ID = 'mvlos-descriptors-1.2/quickjs-emscripten-0.32.0/release-sync'
-export const LIMITS = Object.freeze({ files: 48, sourceBytes: 128 * 1024, fileBytes: 32 * 1024, outputBytes: 64 * 1024, nodes: 256, depth: 12, memory: 8 * 1024 * 1024, stack: 256 * 1024, cpuMs: 40, jobs: 16, workers: 8, noteWindowBytes: 8 * 1024, noteWindowLines: 64, noteBytes: 256 * 1024 })
+export const LIMITS = Object.freeze({ customStateBytes: 4096, files: 48, sourceBytes: 128 * 1024, fileBytes: 32 * 1024, outputBytes: 64 * 1024, nodes: 256, depth: 12, memory: 8 * 1024 * 1024, stack: 256 * 1024, cpuMs: 40, jobs: 16, workers: 8, noteWindowBytes: 8 * 1024, noteWindowLines: 64, noteBytes: 256 * 1024 })
 export const WIDGET_KINDS = ['sticky', 'weather', 'agenda', 'inbox', 'status', 'minecraft'] as const
 export type WidgetKind = typeof WIDGET_KINDS[number]
-export type Capability = 'note.read' | 'note.write' | 'weather.read' | 'agenda.read' | 'agenda.act' | 'inbox.read' | 'inbox.navigate' | 'status.read' | 'status.navigate' | 'minecraft.read' | 'minecraft.act'
-export const KIND_CAPABILITIES: Record<WidgetKind, readonly Capability[]> = { sticky: ['note.read','note.write'], weather: ['weather.read'], agenda: ['agenda.read','agenda.act'], inbox: ['inbox.read','inbox.navigate'], status: ['status.read','status.navigate'], minecraft: ['minecraft.read','minecraft.act'] }
+/** Custom widgets are the open-ended seventh class: any number of instances, each from its own package folder. */
+export const CUSTOM_KIND = 'custom'
+export type InstanceKind = WidgetKind | typeof CUSTOM_KIND
+export type Capability = 'custom.state' | 'note.read' | 'note.write' | 'weather.read' | 'agenda.read' | 'agenda.act' | 'inbox.read' | 'inbox.navigate' | 'status.read' | 'status.navigate' | 'minecraft.read' | 'minecraft.act'
+export const KIND_CAPABILITIES: Record<InstanceKind, readonly Capability[]> = { custom: ['custom.state'], sticky: ['note.read','note.write'], weather: ['weather.read'], agenda: ['agenda.read','agenda.act'], inbox: ['inbox.read','inbox.navigate'], status: ['status.read','status.navigate'], minecraft: ['minecraft.read','minecraft.act'] }
 export const isWidgetKind = (v: unknown): v is WidgetKind => WIDGET_KINDS.includes(v as WidgetKind)
-export const supportsCapabilities = (kind: WidgetKind, capabilities: readonly Capability[]) => capabilities.every(c => KIND_CAPABILITIES[kind].includes(c))
+export const isInstanceKind = (v: unknown): v is InstanceKind => v === CUSTOM_KIND || isWidgetKind(v)
+export const supportsCapabilities = (kind: InstanceKind, capabilities: readonly Capability[]) => capabilities.every(c => KIND_CAPABILITIES[kind].includes(c))
 export type Manifest = {
   schema: 1; sdk: 1; id: string; name: string; entry: string
   settings: { appearance: 'panel' | 'sticky' }
@@ -17,8 +21,10 @@ export type Files = Record<string, string>
 export type SourceIdentity = { kind: 'system'; path: string } | { kind: 'browser'; account: number; storeUUID: string; path: string } | { kind: 'seafile'; account: number; repo: string; path: string }
 export type Snapshot = { manifest: Manifest; files: Files; digest: string; build: typeof BUILD_ID }
 export type Descriptor = { type: 'column' | 'row' | 'text' | 'button' | 'editor' | 'link' | 'action' | 'image' | 'dot' | 'details' | 'card'; resource?: string; hint?: string; checked?: boolean; text?: string; event?: string; tone?: 'normal' | 'muted' | 'accent' | 'danger' | 'success' | 'warning'; children?: Descriptor[] }
-export type WidgetInput = BrokerProjection & { note?: { text: string; revision: string; offset?: number; next?: number; continues?: boolean }; weather?: { place: string; units: string; summary: string; hours: string[]; days: string[] }; error?: string }
-export type Mutation = { type: 'note.replace'; text: string; expectedRevision: string } | { type: 'note.edit'; start: number; end: number; text: string; expectedRevision: string }
+/** What a custom widget sees: host clock, and its own small JSON state when it holds custom.state. */
+export type CustomInput = { now: number; today: string; state?: unknown; revision?: string }
+export type WidgetInput = BrokerProjection & { custom?: CustomInput; note?: { text: string; revision: string; offset?: number; next?: number; continues?: boolean }; weather?: { place: string; units: string; summary: string; hours: string[]; days: string[] }; error?: string }
+export type Mutation = { type: 'note.replace'; text: string; expectedRevision: string } | { type: 'note.edit'; start: number; end: number; text: string; expectedRevision: string } | { type: 'custom.replace'; state: unknown; expectedRevision: string }
 const CAPABILITIES = new Set<Capability>(Object.values(KIND_CAPABILITIES).flat())
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 export function record(v: unknown): v is Record<string, unknown> { return !!v && typeof v === 'object' && !Array.isArray(v) }
@@ -92,9 +98,20 @@ export function descriptor(raw: unknown): Descriptor {
   if (new TextEncoder().encode(JSON.stringify(raw)).length > LIMITS.outputBytes) throw new Error('Output limit')
   return walk(raw, 0)
 }
+/** A custom widget's state: any JSON value that serializes to at most LIMITS.customStateBytes. */
+export function customState(value: unknown): unknown {
+  const json = JSON.stringify(value === undefined ? null : value)
+  if (json === undefined || new TextEncoder().encode(json).length > LIMITS.customStateBytes) throw new Error(`Custom state exceeds ${LIMITS.customStateBytes} bytes`)
+  return JSON.parse(json)
+}
 export function mutation(raw: unknown): Mutation | null {
   if (raw === null) return null
   if (!record(raw)) throw new Error('Invalid effect')
+  if (raw.type === 'custom.replace') {
+    exact(raw, ['type', 'state', 'expectedRevision'])
+    if (typeof raw.expectedRevision !== 'string' || raw.expectedRevision.length > 100) throw new Error('Invalid custom state transaction')
+    return { type: 'custom.replace', state: customState(raw.state), expectedRevision: raw.expectedRevision }
+  }
   exact(raw, raw.type === 'note.edit' ? ['type', 'start', 'end', 'text', 'expectedRevision'] : ['type', 'text', 'expectedRevision'])
   if (raw.type === 'note.edit' && (!Number.isSafeInteger(raw.start) || !Number.isSafeInteger(raw.end) || Number(raw.start) < 0 || Number(raw.end) < Number(raw.start))) throw new Error('Invalid note range')
   if (!['note.replace', 'note.edit'].includes(String(raw.type)) || typeof raw.text !== 'string' || new TextEncoder().encode(raw.text).length > LIMITS.fileBytes || typeof raw.expectedRevision !== 'string' || raw.expectedRevision.length > 100) throw new Error('Invalid note transaction')

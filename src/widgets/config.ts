@@ -17,6 +17,15 @@ export function setWidgetConfig(id: string, patch: Record<string, unknown>) {
   store.set((all) => ({ ...all, [id]: { ...all[id], ...patch } }))
 }
 
+/** Removes one key from a widget's settings (a custom widget's saved state). */
+export function unsetWidgetConfig(id: string, key: string) {
+  store.set((all) => {
+    if (!all[id] || !(key in all[id])) return all
+    const { [key]: _, ...rest } = all[id]
+    return { ...all, [id]: rest }
+  })
+}
+
 export function dropWidgetConfig(id: string) {
   store.set((all) => {
     if (!(id in all)) return all

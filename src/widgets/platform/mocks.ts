@@ -2,6 +2,7 @@ import type { WidgetInput } from './package'
 // Preview has no resource handles: rendered data is synthetic and every effect is inert.
 const page = { total: 1, shown: 1, page: 0, pages: 1, truncated: false }
 export const MOCK_INPUT: WidgetInput = {
+  custom: { now: 1_793_000_000_000, today: '2026-10-30', state: null, revision: 'mock:1' },
   note: { text: 'Sample note\n- [ ] Try a checklist', revision: 'mock:1' },
   weather: { place: 'Sample city', units: 'c', summary: '☀ 18° · Clear sky', hours: ['12:00 18°', '13:00 19°'], days: ['Tomorrow 20° / 12°'] },
   agenda: { state: 'ready', now: 0, today: '2026-10-30', page, errors: [], days: [{ key: '2026-10-30', label: 'Today', tasks: [{ title: 'Sample recurring task', notes: 'Mock task details', due: '2026-10-30', time: 'today', allDay: true, open: '', complete: '', color: '' }], events: [{ title: 'Sample meeting', time: '10:00', calendar: 'Sample calendar', location: 'Office', start: 1, end: 2, allDay: false, open: '', color: '', mark: { glyph: '📝', title: 'Sample linked note' } }] }] },

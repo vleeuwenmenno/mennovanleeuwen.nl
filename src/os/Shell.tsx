@@ -639,7 +639,7 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
   const style = def.useFrame?.(id)
   const menuItems = def.useMenu?.(id, wm) ?? []
   return (
-    <Window win={w} title={def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
+    <Window win={w} title={def.useTitle?.(id) ?? def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
       {APP_META.widget.render(w)}
     </Window>
   )

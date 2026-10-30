@@ -6,8 +6,10 @@ import { accountGuard } from '../../os/accountSpace'
 import { isMobile, useIsMobile } from '../../os/useIsMobile'
 import { useWM, type WinState } from '../../os/wm'
 import { defaultBuild } from './defaults'
-import { hasGrant, useRevisionGrant, allowRevision, revokeRevision, installations, installationVersion, useInstallationPresence, type Revision } from './installations'
-import { isWidgetKind, supportsCapabilities, descriptor, verifySnapshot, sourceIdentityOf, type Capability, type Descriptor, type Snapshot, type WidgetInput } from './package'
+import { hasGrant, useRevisionGrant, allowRevision, revokeRevision, installations, installationVersion, useInstallationPresence, useInstallationRemoved, type Revision } from './installations'
+import { CUSTOM_KIND, customState, isInstanceKind, supportsCapabilities, descriptor, verifySnapshot, sourceIdentityOf, type Capability, type Descriptor, type Snapshot, type WidgetInput } from './package'
+import { customInput, customRevision } from './records'
+import { getWidgetConfig, setWidgetConfig, useWidgetConfig } from '../config'
 import { allowNativeText, applyPackageEdit, projectNote, sameNote } from './noteTransactions'
 import { Renderer } from './Renderer'
 import { execute } from './runtime'
@@ -37,9 +39,13 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const account = useAccount()
   const all = useAllNotes()
   const records = installations.use()
-  const kind = isWidgetKind(win.props.kind) ? win.props.kind : 'weather'
+  const kind = isInstanceKind(win.props.kind) ? win.props.kind : 'weather'
+  const custom = kind === CUSTOM_KIND
   const current = records[id]
   const unavailable = useInstallationPresence(id) && !current
+  const removed = useInstallationRemoved(id)
+  const stored = useWidgetConfig<{ state?: unknown }>(id, {}).state
+  const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60000))
   const version = installationVersion(id)
   const note = kind === 'sticky' ? all.find(n => n.id === id) : undefined
   const alive = !!note && !note.deleted && !note.purged
@@ -58,6 +64,8 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const [pages, setPages] = useState<number[]>([0])
   const revision: Revision | null = current ? verified?.current === current ? verified.revision : null : !unavailable && builtin ? { source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: builtin } : null
   const permitted = useRevisionGrant(id, revision)
+  const holdsState = !!revision?.snapshot.manifest.capabilities.includes('custom.state')
+  const stateProblem = custom && holdsState ? (() => { try { customState(stored); return '' } catch { return 'Stored widget state is invalid or too large. Reset it from Source.' } })() : ''
   const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent, permitted])
   const latest = useRef({ identity, visible })
   latest.current = { identity, visible }
@@ -69,7 +77,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const brokerRef=useRef(presentedBroker);brokerRef.current=presentedBroker
   const present=useCallback((value:BrokerPresentation|null)=>setBroker(value?{identity,value}:null),[identity])
   const start = Math.min(pages[pages.length - 1], note?.text.length ?? 0)
-  const input = useMemo<WidgetInput>(() => domain ? presentedBroker?.input ?? {} : kind === 'weather' ? revision?.snapshot.manifest.capabilities.includes('weather.read') ? weather : {} : alive && note && revision?.snapshot.manifest.capabilities.includes('note.read') ? { note: projectNote(note, start) } : { error: 'Waiting for note sync' }, [kind, weather, alive, note?.text, note?.edited, note?.updated, revision?.snapshot.digest, start, presentedBroker, domain])
+  const input = useMemo<WidgetInput>(() => custom ? { custom: customInput(stateProblem ? null : stored, holdsState, minute * 60000) } : domain ? presentedBroker?.input ?? {} : kind === 'weather' ? revision?.snapshot.manifest.capabilities.includes('weather.read') ? weather : {} : alive && note && revision?.snapshot.manifest.capabilities.includes('note.read') ? { note: projectNote(note, start) } : { error: 'Waiting for note sync' }, [kind, weather, alive, note?.text, note?.edited, note?.updated, revision?.snapshot.digest, start, presentedBroker, domain, custom, stored, holdsState, stateProblem, minute])
   useEffect(() => {
     if (!current) return
     let live = true
@@ -82,7 +90,8 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
     }).catch(() => live && setError('Installed package unavailable; rebuild or recover in Source'))
     return () => { live = false }
   }, [current, kind])
-  useEffect(() => { let live = true; defaultBuild(kind).then(value => live && setBuiltin(value), () => live && setError('Default package build failed')); return () => { live = false } }, [kind])
+  useEffect(() => { if (!custom) return; if (!visible) return; const timer = setInterval(() => setMinute(Math.floor(Date.now() / 60000)), 30_000); return () => clearInterval(timer) }, [custom, visible])
+  useEffect(() => { if (custom) return; let live = true; defaultBuild(kind).then(value => live && setBuiltin(value), () => live && setError('Default package build failed')); return () => { live = false } }, [kind, custom])
   useLayoutEffect(() => () => { renderAbort.current?.abort(); eventAbort.current?.abort() }, [identity, visible])
   useEffect(() => { if (note?.deleted || note?.purged) wm.close(win.pid) }, [note?.deleted, note?.purged, win.pid, wm])
   useEffect(() => {
@@ -116,6 +125,12 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
     eventAbort.current = controller
     try {
       const effect = await execute(revision.snapshot, presented.input, event, controller.signal, { owner: `widget:${id}`, eligible: () => validNow(presented.identity) })
+      if (effect && effect.type === 'custom.replace') {
+        const live = customRevision(getWidgetConfig<{ state?: unknown }>(id, {}).state ?? null)
+        if (revision.snapshot.manifest.capabilities.includes('custom.state') && validNow(presented.identity) && !controller.signal.aborted && presented.input.custom?.revision === live && effect.expectedRevision === live) setWidgetConfig(id, { state: customState(effect.state) })
+        else if (!controller.signal.aborted) setError('Widget state changed meanwhile; the action was not applied')
+        return
+      }
       const latestNote = getNote(id)
       if (effect && 'expectedRevision' in effect && validNow(presented.identity) && !controller.signal.aborted && presented.note && presented.input.note && latestNote && !latestNote.deleted && !latestNote.purged && revision.snapshot.manifest.capabilities.includes('note.write')) {
         const next = applyPackageEdit(latestNote, presented.note, presented.input.note, effect)
@@ -135,7 +150,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const token = (value?: string) => value === 'compact' ? '4px' : value === 'roomy' ? '14px' : '8px'
   const shown = permitted && view?.identity === identity ? view : null
   const actionsEnabled = !!shown && shown.input === input && (!shown.note || !!note && sameNote(note, shown.note)) && visible
-  return <div ref={root} className="wp-package" data-package-digest={revision?.snapshot.digest} style={{ '--wp-gap': token(spacing.gap), padding: token(spacing.padding) } as CSSProperties}>
+  return <div ref={root} className="wp-package" data-package-digest={revision?.snapshot.digest} style={{ '--wp-gap': token(spacing.gap), padding: token(spacing.padding), ...(custom && revision ? { minHeight: revision.snapshot.manifest.sizing.height } : {}) } as CSSProperties}>
     {domain&&visible&&permitted&&revision?.snapshot.manifest.capabilities.includes(`${kind}.read` as Capability)&&<DomainBroker kind={kind as DomainKind} id={id} lifecycle={identity} page={domainPage} tick={tick} capabilities={revision.snapshot.manifest.capabilities} eligible={()=>validNow()} present={present}/>}
     <div className="wp-controls">
       {domain&&<button onClick={()=>setTick(value=>value+1)}>Refresh</button>}
@@ -144,7 +159,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       {permitted && revision?.source.kind !== 'system' && <button onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }}>Pause access</button>}
       {kind === 'sticky' && <button onClick={() => wm.open('notebook', { id })}>Notebook & links</button>}
     </div>
-    {!permitted && revision ? <button onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError(error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally') } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : kind+' data and selected actions'}</button> : <>
+    {!permitted && revision ? <button onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError(error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally') } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button> : <>
       <Renderer key={identity} view={shown?.tree ?? EMPTY_VIEW} note={permitted && input.note ? note?.text : undefined} write={revision?.snapshot.manifest.capabilities.includes('note.write') ? write : undefined} event={event} actionsEnabled={actionsEnabled} resource={resource} />
       {input.note && <div className="wp-controls" aria-label="Checklist pages">
         <button disabled={pages.length <= 1} onClick={() => setPages(value => value.slice(0, -1))}>Previous items</button>
@@ -153,7 +168,9 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       {domainPaging&&<div className="wp-controls" aria-label="Data pages"><span>{domainPaging.shown} of {domainPaging.total} · page {domainPaging.page+1}/{domainPaging.pages}</span><button disabled={domainPaging.page===0} onClick={()=>setDomainPage(domainPaging.page-1)}>Previous results</button><button disabled={domainPaging.page+1>=domainPaging.pages} onClick={()=>setDomainPage(domainPaging.page+1)}>Next results</button></div>}
       {!shown && <span>Loading widget…</span>}
     </>}
-    {unavailable && <p role="status">Installed metadata unavailable. Rebuild default or source in Source, then activate explicitly to repair.</p>}
+    {custom && !current && <p role="status" data-custom-unavailable>{removed ? 'This custom widget was removed. Take it off the desktop from its menu, or recreate it in the Workshop.' : unavailable ? 'This custom widget\'s installation record is unreadable and was kept untouched. Open the Workshop to rebuild and activate it again.' : 'This custom widget is not installed on this device (yet). It was kept on the desktop; wait for sync, or open the Workshop to install it again.'} <button onClick={() => wm.open('widgetworkshop', { kind: CUSTOM_KIND })}>Open Workshop</button></p>}
+    {stateProblem && <p role="status">{stateProblem}</p>}
+    {unavailable && !custom && <p role="status">Installed metadata unavailable. Rebuild default or source in Source, then activate explicitly to repair.</p>}
     {error && <p role="status">{error}</p>}
   </div>
 }

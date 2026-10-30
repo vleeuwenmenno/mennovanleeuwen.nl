@@ -141,6 +141,8 @@
     "check:widget-builtins": "node scripts/widget-builtins-check.ts",
     "check:widget-canonical": "node scripts/widget-canonical-check.ts",
     "check:widget-builtins-ui": "node scripts/widget-builtins-e2e.ts",
+    "check:widget-custom": "node scripts/widget-custom-check.ts",
+    "check:widget-custom-ui": "node scripts/widget-custom-e2e.ts",
     "check:widgets-sync-ui": "node scripts/widgets-sync-e2e.ts",
     "check:widget-review1-ui": "node scripts/widget-review1-e2e.ts",
     "check:widget-review2-ui": "node scripts/widget-review2-e2e.ts",

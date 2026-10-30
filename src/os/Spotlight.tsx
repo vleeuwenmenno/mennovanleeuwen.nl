@@ -1015,7 +1015,7 @@ export function Spotlight() {
     if (sub === 'widgets')
       return widgetDefs()
         .filter((d) => !query || `${d.name} ${d.blurb}`.toLowerCase().includes(query))
-        .map<Result>((d) => ({ id: `widget-${d.kind}`, group: 'Widgets', title: d.name, subtitle: d.blurb, icon: <Glyph>{d.glyph}</Glyph>, run: () => addWidget(wm, d.kind), enterLabel: 'Add' }))
+        .map<Result>((d) => ({ id: `widget-${d.instance ?? d.kind}`, group: 'Widgets', title: d.name, subtitle: d.blurb, icon: <Glyph>{d.glyph}</Glyph>, run: () => addWidget(wm, d.kind, d.instance), enterLabel: 'Add' }))
 
     if (goAlias !== null) return goRows(goAlias)
 

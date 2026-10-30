@@ -172,7 +172,7 @@ export function Launchpad() {
       {
         label: 'Widgets',
         icon: ICONS.widgets,
-        children: () => widgetDefs().map((d) => ({ label: d.name, icon: <span className="om-glyph">{d.glyph}</span>, run: () => addWidget(wm, d.kind) })),
+        children: () => widgetDefs().map((d) => ({ label: d.name, icon: <span className="om-glyph">{d.glyph}</span>, run: () => addWidget(wm, d.kind, d.instance) })),
       },
       {
         label: 'Games',

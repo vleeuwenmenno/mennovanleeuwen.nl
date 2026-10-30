@@ -113,6 +113,76 @@ aborts it and prevents late adoption. Logout/provider changes cancel the old rea
 No arbitrary exports, logging, RPC or model forwarding APIs.
 Package grants never authorize forwarding private data to a model.
 
+## Custom widgets
+
+A custom widget is a seventh, open-ended kind of widget: any number of instances, each from
+its own package folder (instance id custom-xxxxxxxx, kind custom). It is created in the
+Widget Workshop: "New custom widget template" writes the starter below to a folder in your
+browser files or Seafile, edit src/main.js in Xed, "Build & mock preview", tick the opt-in
+and "Activate as new widget". That places it on the desktop. It then appears under
+Add widget (desktop menu, Spotlight, All apps) and survives reload and sync through the same
+installation records as the built-ins (12 live widget records in total per account, 480 KiB
+budget). Closing it only takes it off the desktop; "Remove this widget" in the Workshop deletes
+the installation and its saved state. A custom revision never runs until you grant that exact
+revision for that instance (per session, like every other fork). A custom widget whose
+installation is missing or unreadable stays on the desktop and says so.
+
+The manifest id and name are the package's own (id: a-z, 0-9, -). The only capability is
+custom.state, optional. input.custom is always {now, today} (host clock in milliseconds, and the local
+date as YYYY-MM-DD). With custom.state it also holds state (any JSON, null until first saved)
+and revision. event(input, eventID) may return null or
+{type:'custom.replace', state, expectedRevision: input.custom.revision}; state serializes to
+at most 4096 bytes of JSON and is applied only if the saved state still has that revision.
+State is stored per instance, syncs with the account and is not readable by other widgets.
+There is no text input, network, notes, domain data or other host access.
+
+Starter package (src/widgets/packages/custom-template, also at /usr/share/mvlos/widgets/custom-template):
+
+manifest.json
+```json
+{"schema":1,"sdk":1,"id":"daily-tally","name":"Daily tally","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":240,"height":160},"capabilities":["custom.state"]}
+```
+
+src/main.js
+```js
+import { column, row, text, button } from '@mvlos/widget';
+
+// Daily tally: count things (glasses of water, pages read) per day. It keeps
+// { day, count, total } in this widget's own saved state (custom.state, at most 4 KiB).
+// input.custom = { now, today, state, revision }. Changing state is an explicit effect:
+// event() returns { type: 'custom.replace', state, expectedRevision }, and the host only
+// applies it if the state is still the one it was computed from.
+
+function read(input) {
+  const c = input.custom || {};
+  const s = c.state && typeof c.state === 'object' ? c.state : {};
+  const total = typeof s.total === 'number' ? s.total : 0;
+  const count = s.day === c.today && typeof s.count === 'number' ? s.count : 0;
+  return { today: c.today, count, total };
+}
+
+export function render(input) {
+  const v = read(input);
+  return column(
+    text('Daily tally', 'accent'),
+    text(String(v.count), v.count > 0 ? 'success' : 'muted'),
+    row(button('+1', 'inc'), button('-1', 'dec'), button('Reset today', 'reset')),
+    text(v.total + ' all time · ' + v.today, 'muted')
+  );
+}
+
+export function event(input, name) {
+  const v = read(input);
+  let count = v.count;
+  let total = v.total;
+  if (name === 'inc') { count += 1; total += 1; }
+  else if (name === 'dec' && count > 0) { count -= 1; total -= 1; }
+  else if (name === 'reset') { total -= count; count = 0; }
+  else return null;
+  return { type: 'custom.replace', state: { day: v.today, count, total }, expectedRevision: input.custom.revision };
+}
+```
+
 ## Build and activation
 
 Both defaults and forks use the same verifier, digest and loader. The digest covers

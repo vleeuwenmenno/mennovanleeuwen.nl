@@ -30,7 +30,7 @@ export function projectNote(note: NoteState, start = 0): NonNullable<WidgetInput
 export function sameNote(note: NoteState, bound: { text: string; revision: string }) { return note.text === bound.text && noteRevision(note) === bound.revision }
 /** Whole-note replacement is retained only for older small packages with a complete projection. */
 export function applyPackageEdit(note: NoteState, bound: { text: string; revision: string }, projection: NonNullable<WidgetInput['note']>, effect: Mutation): string | null {
-  if (!sameNote(note, bound) || effect.expectedRevision !== projection.revision || effect.expectedRevision !== bound.revision) return null
+  if (effect.type === 'custom.replace' || !sameNote(note, bound) || effect.expectedRevision !== projection.revision || effect.expectedRevision !== bound.revision) return null
   if (effect.type === 'note.replace') {
     if (projection.offset || projection.next !== undefined || projection.text !== note.text) return null
     return allowNativeText(note.text, effect.text) ? effect.text : null

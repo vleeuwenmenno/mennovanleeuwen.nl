@@ -71,10 +71,12 @@ export async function readSource(identity: SourceIdentity): Promise<Files> {
   return files
 }
 /** Clones are idempotent only when every source byte already matches. Never overwrites edits. */
-export async function cloneDefault(kind: string, target: string) {
+export const cloneDefault = (kind: string, target: string) => cloneFiles(defaultFiles(kind), target)
+/** The starter for a new custom widget (src/widgets/packages/custom-template, also documented in SDK.md). */
+export const cloneTemplate = (target: string) => cloneFiles(defaultFiles('custom-template'), target)
+async function cloneFiles(files: Files, target: string) {
   const identity = await sourceIdentity(target)
   if (identity.kind === 'system') throw new Error('System sources are immutable')
-  const files = defaultFiles(kind)
   await buildPackage(files)
   const root = identity.path
   const guard = { check: () => assertSource(identity) }

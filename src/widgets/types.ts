@@ -29,6 +29,12 @@ export type WidgetDef = {
   useFrame?: (id: string) => CSSProperties | undefined
   /** Its own right-click items, shown above the window items (a hook, so it can read state) */
   useMenu?: (id: string, wm: WM) => MenuItem[]
+  /** A custom widget's entry in "Add widget": the installed instance it places (kind stays 'custom') */
+  instance?: string
+  /** Replaces placing a widget: the entry does something else (opens the Workshop) */
+  onAdd?: (wm: WM) => void
+  /** Window title for an instance (a hook); default: name */
+  useTitle?: (id: string) => string
   /** Makes a new instance and returns its id (a sticky makes a note); default: a random id */
   create?: () => string
 }
