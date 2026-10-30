@@ -5,8 +5,8 @@ import { editedNote, noteNow, relinkedNote, restoredNote, trashedNote } from './
 
 // Notes of your own: each one can sit on the desktop as a sticky (the "sticky" widget, see
 // apps/Sticky.tsx) and is listed in the Notebook app. Kept per browser for visitors, synced for the
-// signed-in user. Deleting for good leaves a tombstone (kept TOMBSTONE_DAYS, so the list doesn't
-// grow without end) so another device or tab can't bring the note back when the two merge. Two tabs of one browser merge the same way as two
+// signed-in user. Deleting for good leaves a tombstone until acknowledged server state prunes it,
+// so another device or tab can't bring the note back when the two merge. Two tabs of one browser merge the same way as two
 // devices (the note replica journal). A note can be linked to calendar events (src/data/noteEvents.ts): other
 // apps add to the Notebook and the sticky through the hooks at the end (src/os/noteEventLinks.tsx).
 

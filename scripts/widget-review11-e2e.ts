@@ -79,13 +79,13 @@ try {
   check('Signing in preserves visitor staged sticky-note content',transferred.notes.some(n=>n.id==='note1'&&n.text==='OLD'));
   check('Signing in retains the staged sticky placement',Object.values(transferred.places.places).some((p:any)=>p.id==='note1'));
   await signed.close();
-  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.setItem('mvlos.u.1.sync.notes',JSON.stringify({value:[{id:'note1',text:'',color:'yellow',tilt:0,created:1,updated:Date.now(),purged:true}],base:100,dirty:false}))`);
+  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.removeItem('mvlos.u.1.notes:inputs-consumed:v1');localStorage.setItem('mvlos.u.1.sync.notes',JSON.stringify({value:[{id:'note1',text:'',color:'yellow',tilt:0,created:1,updated:Date.now(),purged:true}],base:100,dirty:false}))`);
   const tombstone=await open();await hydrate(tombstone);await flush(tombstone);
   check('Pre-cutover account note tombstone takes precedence over visitor stage',await tombstone.eval(`import('/src/data/notes.ts').then(m=>!m.getNote('note1')&&m.allNotes().some(n=>n.id==='note1'&&n.purged))`));
   await tombstone.close();
   // A prior startup wrote moved and the canonical transfer intent, but not its note dependency.
   // This fixture represents the earlier v2 cache, before the visitor's new note checkpoint.
-  await control.eval(`for(const k of Object.keys(localStorage))if(k==='mvlos.visitor.notes:state:v1'||k.startsWith('mvlos.visitor.notes:pending:v1:'))localStorage.removeItem(k)`);
+  await control.eval(`for(const k of Object.keys(localStorage))if(k==='mvlos.visitor.notes:state:v1'||k==='mvlos.visitor.notes:inputs-consumed:v1'||k.startsWith('mvlos.visitor.notes:pending:v1:'))localStorage.removeItem(k)`);
   const guestEnvelope=await control.eval(`localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')`);
   await control.eval(`for(const k of Object.keys(localStorage))if(k.startsWith('mvlos.u.1.'))localStorage.removeItem(k);localStorage.setItem('mvlos.u.1.moved','1');localStorage.setItem('mvlos.u.1.widget-move:guest:v2',JSON.stringify({source:${JSON.stringify(guestEnvelope)},target:null}));localStorage.setItem('mvlos.visitor.widget-cache:v2:notes',JSON.stringify({value:[{id:'note1',text:'VISITOR-CACHE',color:'yellow',tilt:0,created:1,updated:2}],base:0,dirty:true}))`);
   const partialGuest=await open(false,{},`const dependencySet=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('mvlos.u.1.widget-stage:v1:mvlos.sync.notes:')&&!sessionStorage.getItem('dependency-failed')){sessionStorage.setItem('dependency-failed','1');throw new DOMException('Synthetic dependency denial','QuotaExceededError')}return dependencySet.call(this,k,v)}`);
@@ -131,7 +131,7 @@ try {
   const corrupt=await open();await corrupt.eval('window.__releaseMe()');await corrupt.waitFor(`import('/src/os/synced.ts').then(m=>m.getSyncStatus().state==='error')`);
   check('Unreadable note cache blocks hydration and retains source',await corrupt.eval(`import('/src/os/synced.ts').then(m=>m.getSyncedHydration()===null&&localStorage.getItem('mvlos.u.1.notes:state:v1')!==null)`));
   await corrupt.close();
-  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.removeItem('mvlos.u.1.widget-cache:v2:notes');localStorage.setItem('mvlos.u.1.sync.notes','')`);
+  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.removeItem('mvlos.u.1.notes:inputs-consumed:v1');localStorage.removeItem('mvlos.u.1.widget-cache:v2:notes');localStorage.setItem('mvlos.u.1.sync.notes','')`);
   const emptyTarget=await open();await emptyTarget.eval('window.__releaseMe()');await emptyTarget.waitFor(`import('/src/os/synced.ts').then(m=>m.getSyncStatus().state==='error')`);
   check('Empty unreadable ordinary note envelope is not an absent store',await emptyTarget.eval(`import('/src/os/synced.ts').then(m=>m.getSyncedHydration()===null&&localStorage.getItem('mvlos.u.1.sync.notes')==='')`));
   await emptyTarget.close();
@@ -157,7 +157,7 @@ try {
   const mergedNotes=await merged.eval(`import('/src/data/notes.ts').then(m=>m.allNotes())`);
   check('Concurrent note cache writes survive together offline',mergedNotes.some(n=>n.id==='note-a')&&mergedNotes.some(n=>n.id==='note-b'),mergedNotes);
   await merged.close();
-  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.setItem('mvlos.u.1.widget-cache:v2:notes',JSON.stringify({value:[${JSON.stringify(noteA)}],base:100,dirty:false}))`);
+  await control.eval(`localStorage.removeItem('mvlos.u.1.notes:state:v1');localStorage.removeItem('mvlos.u.1.notes:inputs-consumed:v1');localStorage.setItem('mvlos.u.1.widget-cache:v2:notes',JSON.stringify({value:[${JSON.stringify(noteA)}],base:100,dirty:false}))`);
   const removed=await open(false,{notes:{value:[],updatedAt:200}});await hydrate(removed);await flush(removed);
   check('Clean obsolete cache cannot resurrect server-pruned notes',await removed.eval(`import('/src/data/notes.ts').then(m=>m.allNotes().length===0)`));
   await removed.close();

@@ -37,11 +37,11 @@ export const NOTE_COLORS: Record<NoteColor, { bg: string; fg: string; label: str
 
 const TOMBSTONE_DAYS = 90
 
-export function normalizeNotes(v: unknown): Note[] {
+export function normalizeNotes(v: unknown, expirePurged = true): Note[] {
   if (!Array.isArray(v)) return []
   const cutoff = Date.now() - TOMBSTONE_DAYS * 864e5
   return v
-    .filter((n): n is Note => !!n && typeof n.id === 'string' && !(n.purged && n.updated < cutoff))
+    .filter((n): n is Note => !!n && typeof n.id === 'string' && !(expirePurged && n.purged && n.updated < cutoff))
     .map((n) => {
       const events = cleanNoteEvents(n.events)
       return { ...n, color: NOTE_COLORS[n.color] ? n.color : 'yellow', ...(events ? { events } : { events: undefined }) }

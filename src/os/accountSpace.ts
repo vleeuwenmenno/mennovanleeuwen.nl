@@ -1,4 +1,4 @@
-import { NOTE_STATE_KEY, NOTE_PENDING_PREFIX, hasNoteProjection, readNoteProjection, parseNoteMeta } from './notePersistence'
+import { NOTE_STATE_KEY, NOTE_PENDING_PREFIX, NOTE_INPUTS_FENCE_KEY, sealNoteInputs, readNoteProjection, parseNoteMeta } from './notePersistence'
 import { storageTransaction, WIDGET_STORAGE_KEY, WIDGET_JOURNAL_PREFIX } from './storageTransaction'
 // Whose browser storage this tab uses, and the guard that keeps one account's state out of
 // another's.
@@ -212,7 +212,7 @@ export function clearAccountSpace(): Promise<void> {
   const canonical = accountKey(WIDGET_STORAGE_KEY), journals = accountKey(WIDGET_JOURNAL_PREFIX)
   // Retain cutover and unfinished migration intents across logout: the plain legacy source is
   // intentionally retained and must not be imported again when this account signs back in.
-  const migrationKeys = new Set([`${SPACE}moved`, `${SPACE}widget-move:plain:v2`, `${SPACE}widget-move:guest:v2`, `${SPACE}widget-move:plain:done:v2`, `${SPACE}legacy-copy:v1`])
+  const migrationKeys = new Set([accountKey(NOTE_INPUTS_FENCE_KEY), `${SPACE}moved`, `${SPACE}widget-move:plain:v2`, `${SPACE}widget-move:guest:v2`, `${SPACE}widget-move:plain:done:v2`, `${SPACE}legacy-copy:v1`])
   const widgetKey = (key: string) => key === accountKey(NOTE_STATE_KEY) || key.startsWith(accountKey(NOTE_PENDING_PREFIX)) || key === accountKey(WIDGET_NOTE_CACHE_KEY) || key === canonical || key === journals || key.startsWith(journals + ':')
   try {
     for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && k !== REVOCATION_KEY && !migrationKeys.has(k) && !k.startsWith(`${SPACE}legacy-copy:v2:`) && !k.startsWith(`${SPACE}widget-stage:v1:`) && !widgetKey(k)) localStorage.removeItem(k)
@@ -221,6 +221,9 @@ export function clearAccountSpace(): Promise<void> {
   // It follows any already-running writer, including a tab paused inside its native storage call.
   return storageTransaction(() => {
     localStorage.setItem(REVOCATION_KEY, crypto.randomUUID())
+    // A failed fence write leaves the revoked checkpoint as proof that migration already
+    // committed. Only its still-unacknowledged migration revisions can cross generations.
+    sealNoteInputs(SPACE)
     for (const k of Object.keys(localStorage)) if (widgetKey(k)) localStorage.removeItem(k)
   })
 }
@@ -364,12 +367,11 @@ function stageVisitorWidgets() {
     let source: string | null
     if (key === 'mvlos.sync.notes') {
       const generation = localStorage.getItem('mvlos.visitor.revocation:v1')
-      if (hasNoteProjection('mvlos.visitor.', generation)) {
-        source = JSON.stringify(readNoteProjection('mvlos.visitor.', generation, () => {
-          const fallback = legacySource()
-          return fallback === null ? { value: [], base: 0, dirty: false } : parseNoteMeta(fallback)
-        }))
-      } else source = legacySource()
+      const projection = readNoteProjection('mvlos.visitor.', generation, () => {
+        const fallback = legacySource()
+        return fallback === null ? null : parseNoteMeta(fallback)
+      })
+      source = projection === null ? null : JSON.stringify(projection)
     } else source = legacySource()
     if (source !== null) {
       const m = JSON.parse(source)

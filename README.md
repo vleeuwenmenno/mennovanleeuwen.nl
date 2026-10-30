@@ -4459,6 +4459,20 @@ an ordinary key. A newer server baseline replaces clean old rows, while real dir
 the existing per-field merge and final-purge rules. Server acknowledgements consume only revisions
 they actually contain, so an edit made while a request was in flight remains dirty.
 
+Every note read collects checkpoint, input fence and immutable journal records, then validates
+their checkpoint revision and key membership again before exposing a projection or applying an
+edit. Startup, storage events, visitor transfer and checkpoint writes use this same read boundary.
+A journal consumed between enumeration and reading causes a bounded retry when its checkpoint or
+receipt proves cleanup. Eight moving snapshots reject the attempt without latching a permanent
+data error; an actual storage exception or unexplained missing record still fails closed. This is
+snapshot validation, not an atomic localStorage read/check/write claim. New checkpoint writes carry
+unique revisions, so a state that changes and changes back cannot evade validation.
+
+Persistence normalization never expires tombstones by wall-clock age. In particular, a purge
+waiting more than 90 days offline still hides its old live server row and remains uploadable.
+An acknowledged tombstone leaves the checkpoint when a newer server snapshot prunes it; aging
+alone cannot invalidate a checkpoint or discard pending deletion evidence.
+
 Before the first note checkpoint, ordinary account notes take precedence over the earlier
 `widget-cache:v2:notes` cache and immutable staged inputs. That first commit waits for migration
 inputs to be resolved; a pending startup transfer resumes when account discovery settles, even
@@ -4468,11 +4482,24 @@ An unreadable checkpoint, source or journal fails closed. A rejected journal wri
 edit; a failed checkpoint leaves the admitted journal recoverable across reloads. Admission
 stops at 256 visible pending records (1 MiB per edit). Concurrent admissions can exceed that soft
 count limit and are still replayed and drained. The checkpoint has a 2 MiB limit; receipts cover
-only extant records, not every tab ever opened. Receipt
-cleanup follows the successful checkpoint write, and failed cleanup can retry without replay.
+only extant records, not every tab ever opened. Receipt cleanup follows the successful checkpoint
+write, and failed cleanup can retry without replay.
+
+A verified note checkpoint also writes an account-bound `notes:inputs-consumed:v1` fence. It
+closes the old input channel across logout, so an acknowledged, purged and server-pruned note
+cannot return from retained migration sources. The fence keeps a continuation of only the
+initial imported notes still awaiting acknowledgement, including their current deletion state.
+Those unfinished imports remain retryable across logout, even when other imported notes have
+already been acknowledged and pruned. Later ordinary edits are not migration continuations.
+The checkpoint records which notes still belong to this migration; for pre-field checkpoints,
+their unsaved revisions are conservatively treated as unfinished imports on upgrade.
 
 Note checkpoints and journals carry the account-space revocation generation. Logout advances it
-under the gate and clears the checkpoint and journals. A non-gated admission paused before its
+under the gate, repairs the input fence from the verified checkpoint, then clears checkpoint and
+journals while retaining the fence. If the fence write fails, the revoked checkpoint remains as
+consumption proof and a continuation of unfinished imports for the next generation; the old
+source channel stays closed. A failed first checkpoint creates no fence and its authorized
+source can still retry. A non-gated admission paused before its
 native write may leave an old-generation physical record after cleanup, but it cannot replay in
 the new generation or another account. If cleanup itself fails, the retained data stays in that
 account's namespace. Visitor transfer reads the current checkpoint plus admitted journals, so an

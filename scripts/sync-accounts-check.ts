@@ -640,12 +640,15 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   reset()
   signIn(0)
   const V = await openTab()
-  as(V.win, () => V.notes.set(['as-a-visitor']))
+  // Visitor migration validates the real Note wire format; the other cases exercise generic
+  // synced-store account isolation with string arrays instead.
+  const visitorNote = { id: 'visitor-note', text: 'as-a-visitor', color: 'yellow', tilt: 0, created: 1, updated: 1 }
+  as(V.win, () => V.notes.set([visitorNote]))
   check('visitor: kept in the visitor space', spaceText(null).includes('as-a-visitor'))
   signIn(1)
   check('visitor: the visitor’s page stops when the browser signs in', !as(V.win, () => V.space.accountGuard()) && V.space.accountFrozen())
   const A = await openTab()
-  check('visitor: the account’s new space starts with the visitor’s notes', A.notes.get().join() === 'as-a-visitor')
+  check('visitor: the account’s new space starts with the visitor’s notes', (A.notes.get() as { id: string; text: string }[]).some(n => n.id === visitorNote.id && n.text === visitorNote.text))
   await sleep(1200)
   check('visitor: and they reach the account', JSON.stringify([...stateOf(1)]).includes('as-a-visitor'))
 }

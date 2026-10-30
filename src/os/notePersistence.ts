@@ -3,21 +3,28 @@ import { storageTransaction } from './storageTransaction'
 
 export const NOTE_STATE_KEY = 'mvlos.notes:state:v1'
 export const NOTE_PENDING_PREFIX = 'mvlos.notes:pending:v1:'
+export const NOTE_INPUTS_FENCE_KEY = 'mvlos.notes:inputs-consumed:v1'
 /** Startup authority can become ready without a reload. A failed data read cannot. */
 export class NoteStartupPending extends Error {}
+class NoteSnapshotBusy extends NoteStartupPending {}
 export type NoteMeta = { value: Note[]; base: number; dirty: boolean }
 type Remote = { value: unknown; updatedAt: number }
 type State = NoteMeta & {
   schema: 1
   generation: string | null
+  revision?: string
   server: Note[]
   edits: Note[]
+  /** Input notes whose initial migration has not been acknowledged yet. */
+  migration: string[]
   consumed: string[]
 }
 type Operation = { generation: string | null; changes: Note[] }
 const json = JSON.stringify
 const keyIn = (space: string, key: string) => space + key.slice('mvlos.'.length)
-const canonical = (value: unknown) => { const notes = normalizeNotes(value); return mergeNotes(notes, notes) }
+// Persistence validity cannot change as the clock advances. In particular, an unacknowledged
+// purge must continue to dominate its old live server row however long the browser is offline.
+const canonical = (value: unknown) => { const notes = normalizeNotes(value, false); return mergeNotes(notes, notes) }
 const validBase = (base: unknown): base is number => typeof base === 'number' && Number.isFinite(base) && base >= 0
 const validGeneration = (value: unknown): value is string | null => value === null || typeof value === 'string'
 
@@ -35,48 +42,93 @@ function project(state: State): State {
     const saved = byId.get(n.id)
     return !saved || json(mergeNotes([n], [saved])) !== json([saved])
   })
-  return { ...state, server, edits: unsaved, value: mergeNotes(server, unsaved), dirty: unsaved.length > 0 }
+  const pendingIds = new Set(unsaved.map(note => note.id))
+  const migration = state.migration.filter(id => pendingIds.has(id))
+  return { ...state, server, edits: unsaved, migration, value: mergeNotes(server, unsaved), dirty: unsaved.length > 0 }
 }
 function initial(meta: NoteMeta, generation: string | null): State {
-  return project({ ...meta, schema: 1, generation, server: meta.dirty ? [] : meta.value, edits: meta.dirty ? meta.value : [], consumed: [] })
+  return project({ ...meta, schema: 1, generation, server: meta.dirty ? [] : meta.value, edits: meta.dirty ? meta.value : [], migration: meta.dirty ? meta.value.map(note => note.id) : [], consumed: [] })
 }
-function checkpoint(space: string, generation: string | null): State | null {
-  const raw = localStorage.getItem(keyIn(space, NOTE_STATE_KEY))
+function checkpoint(raw: string | null): State | null {
   if (raw === null) return null
   const s = JSON.parse(raw)
-  if (!s || s.schema !== 1 || !validGeneration(s.generation) || !validBase(s.base) || !Array.isArray(s.server) || !Array.isArray(s.edits) || !Array.isArray(s.value) || typeof s.dirty !== 'boolean' || !Array.isArray(s.consumed) || s.consumed.some((id: unknown) => typeof id !== 'string')) throw new Error('Note checkpoint is unreadable; originals retained')
-  // A logout may have advanced the generation but failed to delete some physical records.
-  // They are retained, but cannot become this generation's state.
-  if (s.generation !== generation) return null
-  const state = project(s)
+  if (!s || s.schema !== 1 || !validGeneration(s.generation) || (s.revision !== undefined && typeof s.revision !== 'string') || !validBase(s.base) || !Array.isArray(s.server) || !Array.isArray(s.edits) || !Array.isArray(s.value) || typeof s.dirty !== 'boolean' || !Array.isArray(s.consumed) || s.consumed.some((id: unknown) => typeof id !== 'string')) throw new Error('Note checkpoint is unreadable; originals retained')
+  if (s.migration !== undefined && (!Array.isArray(s.migration) || s.migration.some((id: unknown) => typeof id !== 'string'))) throw new Error('Note migration continuation is unreadable; originals retained')
+  // Checkpoints written before this field cannot distinguish imports from other pending edits.
+  // Conservatively preserve their unsaved revisions across the one-time protocol upgrade.
+  const state = project({ ...s, migration: s.migration ?? canonical(s.edits).map(note => note.id) })
   if (json(canonical(s.value)) !== json(state.value)) throw new Error('Note checkpoint projection is inconsistent; originals retained')
   return state
 }
-function operations(space: string, generation: string | null): [string, Operation][] {
+function operationKeys(space: string, generation: string | null): string[] {
   const prefix = keyIn(space, NOTE_PENDING_PREFIX) + encodeURIComponent(generation ?? 'initial') + ':'
-  const result: [string, Operation][] = []
-  for (const key of Object.keys(localStorage).filter(k => k.startsWith(prefix)).sort()) {
-    const raw = localStorage.getItem(key)
-    if (raw === null) throw new Error('Note journal unavailable; originals retained')
-    const op = JSON.parse(raw)
-    if (!op || op.generation !== generation || !Array.isArray(op.changes)) throw new Error('Note journal unreadable; originals retained')
-    result.push([key, { generation, changes: canonical(op.changes) }])
-    // Admission's count limit is deliberately not a read limit: concurrent tabs can each
-    // observe the last free slot. Every already-admitted record must remain replayable.
-  }
-  return result
+  return Object.keys(localStorage).filter(k => k.startsWith(prefix)).sort()
 }
-function load(space: string, generation: string | null, fallback: () => NoteMeta) {
-  let state = checkpoint(space, generation) ?? initial(fallback(), generation)
-  const pending = operations(space, generation)
-  for (const [key, op] of pending) if (!state.consumed.includes(key)) state = { ...state, edits: mergeNotes(state.edits, op.changes) }
-  return { state: project(state), pending }
+function inputFence(raw: string | null, space: string): { pending: Note[] } | null {
+  if (raw === null) return null
+  const fence = JSON.parse(raw)
+  if (!fence || fence.schema !== 1 || fence.space !== space || !validGeneration(fence.generation) || !validGeneration(fence.checkpoint) || !Array.isArray(fence.pending)) throw new Error('Note input fence is unreadable; originals retained')
+  return { pending: canonical(fence.pending) }
+}
+const migrationPending = (state: State) => {
+  const ids = new Set(state.migration)
+  return state.edits.filter(note => ids.has(note.id))
+}
+/** Called only under the shared gate, after a checkpoint was written and verified. Logout
+ * repairs this fence before deleting that checkpoint. Neither source keys nor stages change. */
+export function sealNoteInputs(space: string) {
+  const key = keyIn(space, NOTE_INPUTS_FENCE_KEY)
+  const previous = localStorage.getItem(key)
+  inputFence(previous, space) // Never overwrite an unreadable ownership/continuation record.
+  const state = checkpoint(localStorage.getItem(keyIn(space, NOTE_STATE_KEY)))
+  if (!state) return // No durable consumption yet: a failed transfer must remain retryable.
+  const raw = json({ schema: 1, space, generation: state.generation, checkpoint: state.revision ?? null, pending: migrationPending(state) })
+  if (raw !== previous) localStorage.setItem(key, raw)
+  if (localStorage.getItem(key) !== raw) throw new Error('Note input fence was not verified; checkpoint retained')
+}
+function load(space: string, generation: string | null, fallback: () => NoteMeta | null) {
+  const stateKey = keyIn(space, NOTE_STATE_KEY), fenceKey = keyIn(space, NOTE_INPUTS_FENCE_KEY)
+  const currentGeneration = () => localStorage.getItem(keyIn(space, 'mvlos.revocation:v1')) === generation
+  for (let attempt = 0; attempt < 8; attempt++) {
+    if (!currentGeneration()) throw new NoteStartupPending('Note snapshot account authority changed')
+    const raw = localStorage.getItem(stateKey), fenceRaw = localStorage.getItem(fenceKey)
+    const saved = checkpoint(raw), fence = inputFence(fenceRaw, space)
+    // Even a revoked checkpoint proves that legacy inputs already crossed cutover. If logout
+    // could not write the fence, it leaves this proof and unacknowledged migration revisions
+    // in place. Other old-generation note values and journal records cannot replay.
+    const useFallback = !saved && !fence
+    const input = useFallback ? fallback() : null
+    const keys = operationKeys(space, generation)
+    const records = keys.map(key => [key, localStorage.getItem(key)] as const)
+    const inputAgain = useFallback ? fallback() : null
+    const keysAgain = operationKeys(space, generation)
+    const fenceAgain = localStorage.getItem(fenceKey), rawAgain = localStorage.getItem(stateKey)
+    if (!currentGeneration()) throw new NoteStartupPending('Note snapshot account authority changed')
+    // The checkpoint revision prevents ABA. Immutable records cannot be replaced, and the two
+    // key enumerations detect admissions. No callback or mutation sees a torn collection.
+    if (raw !== rawAgain || fenceRaw !== fenceAgain || json(input) !== json(inputAgain)) continue
+    const removed = keys.filter(key => !keysAgain.includes(key))
+    if (removed.some(key => !saved?.consumed.includes(key))) throw new Error('Uncommitted note journal disappeared; originals retained')
+    if (json(keys) !== json(keysAgain)) continue
+    const pending: [string, Operation][] = records.map(([key, record]) => {
+      if (record === null) throw new Error('Note journal unavailable; originals retained')
+      const op = JSON.parse(record)
+      if (!op || op.generation !== generation || !Array.isArray(op.changes)) throw new Error('Note journal unreadable; originals retained')
+      return [key, { generation, changes: canonical(op.changes) }]
+    })
+    const continuation = saved ? migrationPending(saved) : fence?.pending
+    let state = saved?.generation === generation ? saved : initial(continuation ? { value: continuation, base: 0, dirty: continuation.length > 0 } : input ?? { value: [], base: 0, dirty: false }, generation)
+    for (const [key, op] of pending) if (!state.consumed.includes(key)) state = { ...state, edits: mergeNotes(state.edits, op.changes) }
+    return { state: project(state), pending, present: !!saved || !!fence || input !== null || pending.length > 0 }
+  }
+  // Contention is recoverable on the next storage event or explicit retry, not corrupt data.
+  throw new NoteSnapshotBusy('Note snapshot kept changing; retry after concurrent writes settle')
 }
 /** Visitor transfer includes admitted edits even if its last tab closed before checkpointing. */
-export function readNoteProjection(space: string, generation: string | null, fallback: () => NoteMeta): NoteMeta {
-  return load(space, generation, fallback).state
+export function readNoteProjection(space: string, generation: string | null, fallback: () => NoteMeta | null): NoteMeta | null {
+  const snapshot = load(space, generation, fallback)
+  return snapshot.present ? snapshot.state : null
 }
-export const hasNoteProjection = (space: string, generation: string | null) => !!checkpoint(space, generation) || operations(space, generation).length > 0
 
 /** One protocol for edits, hydration, acknowledgements, storage events and reloads.
  * Journal writes are immutable admission records. Checkpoints and their receipts are serialized;
@@ -119,10 +171,16 @@ export function noteReplica(space: string, generation: string | null, guard: () 
     }
     // Receipt retention is bounded by extant immutable records, not browser/tab lifetime.
     state = { ...state, consumed: pending.map(([key]) => key) }
-    const raw = json(state)
+    let raw = json(state)
+    if (localStorage.getItem(keyIn(space, NOTE_STATE_KEY)) !== raw) {
+      state = { ...state, revision: crypto.randomUUID() }
+      raw = json(state)
+    }
     if (new TextEncoder().encode(raw).length > 2 * 1024 * 1024) throw new Error('Note checkpoint limit reached; edits retained')
     authority()
     if (localStorage.getItem(keyIn(space, NOTE_STATE_KEY)) !== raw) localStorage.setItem(keyIn(space, NOTE_STATE_KEY), raw)
+    if (localStorage.getItem(keyIn(space, NOTE_STATE_KEY)) !== raw) throw new Error('Note checkpoint was not verified; journals retained')
+    sealNoteInputs(space)
     remotes.splice(0, count)
     // No speculative receipt can remove a journal. On a failed deletion, the next load skips
     // the already-committed operation using the receipt and retries cleanup.
@@ -158,12 +216,11 @@ export function noteReplica(space: string, generation: string | null, guard: () 
     verify,
     set(next: Note[] | ((notes: Note[]) => Note[])) {
       authority(); verify()
-      const fresh = load(space, generation, fallback).state
+      const { state: fresh, pending } = load(space, generation, fallback)
       const before = typeof next === 'function' ? fresh.value : view.value
       const after = typeof next === 'function' ? next(fresh.value) : next
       const changes = changedNotes(before, after)
       if (!changes.length) { publish(fresh); return }
-      const pending = operations(space, generation)
       if (pending.length >= 256) throw new Error('Note journal limit reached; edit not admitted')
       const key = keyIn(space, NOTE_PENDING_PREFIX) + encodeURIComponent(generation ?? 'initial') + ':' + crypto.randomUUID()
       const raw = json({ generation, changes })
