@@ -234,6 +234,38 @@ try {
     check('Completed account transfer never reimports a later old-client write',(await configs(recover))['move-seed'].days===4)
   }finally{await recover.close()}
 
+  // Legacy tabs bypass the IDB gate. Stop the importing tab just after its copy, then let a
+  // second tab replace the plain source before migration completes.
+  const legacy=await newPage(b,1500,1000,'');await legacy.send('Page.navigate',{url:origin+'/package.json'})
+  const legacySource=(owner:string,days:number)=>JSON.stringify({value:{schema:2,configs:{[owner]:{at:days,value:{days}}},placements:{places:{},removed:''},installations:{}},base:days,dirty:true})
+  for(const retry of [false,true]) for(const foreignOwner of [false,true]) {
+    const initial=legacySource('owner1',1),replacement=legacySource(foreignOwner?'owner2':'owner1',7),marker=foreignOwner?'2':'1'
+    await legacy.eval(`localStorage.clear();localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(initial)})`)
+    if(retry){const denied=await open(false,{},`Object.defineProperty(window,'indexedDB',{value:{open(){throw new DOMException('Synthetic IDB denial','SecurityError')}},configurable:true});`);await denied.close()}
+    const mover=await newPage(b,1500,1000,inject(false,{},`const nativeSet=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){const result=nativeSet.call(this,k,v);if(k==='mvlos.u.1.sync.widgets:state:v2'&&!window.__migrationPaused){window.__migrationPaused=true;debugger}return result}`))
+    try {
+      await mover.send('Debugger.enable');const stopped=new Promise<void>(resolve=>onPause=resolve)
+      await mover.send('Page.navigate',{url:origin});await Promise.race([stopped,sleep(15000).then(()=>{throw Error('migration copy did not pause')})])
+      await legacy.eval(`localStorage.setItem('mvlos.account',${JSON.stringify(marker)});localStorage.setItem('mvlos.sync.widgets:state:v2',${JSON.stringify(replacement)})`)
+      onPause=undefined;await mover.send('Debugger.resume');await mover.send('Debugger.disable');await mover.waitFor(`document.querySelector('.desktop')&&!document.querySelector('.boot')&&!!window.__releaseMe`,90000)
+      await mover.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`)
+      const result=await legacy.eval(`({source:localStorage.getItem('mvlos.sync.widgets:state:v2'),marker:localStorage.getItem('mvlos.account'),target:JSON.parse(localStorage.getItem(${JSON.stringify(key)})),done:localStorage.getItem('mvlos.u.1.widget-move:plain:done:v2')})`)
+      check(`${retry?'Retry':'Initial'} migration retains ${foreignOwner?'foreign':'same'} owner replacement`,result.source===replacement&&result.marker===marker&&result.target?.value.configs.owner1.value.days===1&&result.done==='1',result)
+      await hydrate(mover);await flush(mover);await reload(mover)
+      check('Reload does not replay replacement into canonical state',(await configs(mover)).owner1?.days===1&&!(await configs(mover)).owner2)
+      await mover.eval(`(async()=>{const a=await import('/src/os/accountSpace.ts');a.freezeAccount(false);await a.clearAccountSpace()})()`)
+      const ownerGone=await legacy.eval(`localStorage.getItem('mvlos.u.1.moved')==='1'&&localStorage.getItem('mvlos.u.1.widget-move:plain:done:v2')==='1'&&localStorage.getItem('mvlos.sync.widgets:state:v2')===${JSON.stringify(replacement)}&&localStorage.getItem('mvlos.account')===${JSON.stringify(marker)}`)
+      check('Logout retains cutover receipt, source and ownership',ownerGone)
+      const change=await newPage(b,1500,1000,'');await change.send('Network.deleteCookies',{name:'mvlos_uid',url:origin});await change.close()
+      const visitor=await open()
+      try {await visitor.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Visitor cannot import retained account source',await visitor.eval(`localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')===null`))} finally {await visitor.close()}
+      const restore=await newPage(b,1500,1000,'');await restore.send('Network.setCookie',{name:'mvlos_uid',value:'1',url:origin});await restore.close()
+      const returning=await open()
+      try {await returning.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Sign-in after logout cannot reimport retained legacy source',await returning.eval(`localStorage.getItem(${JSON.stringify(key)})===null`))} finally {await returning.close()}
+    } finally {onPause=undefined;await mover.send('Debugger.resume').catch(()=>{});await mover.close()}
+  }
+  await legacy.close()
+
   const stale=await open(true,{},`localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2','owner-one');Object.defineProperty(window,'indexedDB',{value:{open(){throw new DOMException('Synthetic IDB denial','SecurityError')}},configurable:true});`)
   try {await stale.eval(`localStorage.setItem('mvlos.account','2');localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify('owner-two'))`)} finally {await stale.close()}
   const foreign=await open()
@@ -249,10 +281,10 @@ try {
   const unbound=await open(true,{},`localStorage.setItem('mvlos.u.1.moved','1');localStorage.setItem('mvlos.u.1.widget-move:plain:v2','1');localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2','unbound-source')`)
   try {await unbound.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Old unbound migration intent fails closed',await unbound.eval(`localStorage.getItem('mvlos.u.1.widget-move:plain:v2')==='1'&&localStorage.getItem('mvlos.sync.widgets:state:v2')==='unbound-source'&&localStorage.getItem('mvlos.account')==='1'`))} finally {await unbound.close()}
   const older=await open(true,{},`localStorage.setItem('mvlos.owner','legacy-owner');localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify('older-owned'))`)
-  try {await older.waitFor(`JSON.parse(localStorage.getItem('mvlos.u.1.sync.widgets:state:v2'))==='older-owned'`);check('Older ownership marker permits its bound transfer',await older.eval(`localStorage.getItem('mvlos.owner')===null&&localStorage.getItem('mvlos.sync.widgets:state:v2')===null`))} finally {await older.close()}
+  try {await older.waitFor(`JSON.parse(localStorage.getItem('mvlos.u.1.sync.widgets:state:v2'))==='older-owned'`);check('Older ownership marker and source survive bound transfer',await older.eval(`localStorage.getItem('mvlos.owner')==='legacy-owner'&&JSON.parse(localStorage.getItem('mvlos.sync.widgets:state:v2'))==='older-owned'`))} finally {await older.close()}
   const noUid=await newPage(b,1500,1000,'');await noUid.send('Network.deleteCookies',{name:'mvlos_uid',url:origin});await noUid.close()
   const guestMove=await open(true,{},`localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify('visitor-owned'))`)
-  try {await guestMove.waitFor(`JSON.parse(localStorage.getItem('mvlos.visitor.sync.widgets:state:v2'))==='visitor-owned'`);check('Unowned legacy source transfers to visitor',await guestMove.eval(`localStorage.getItem('mvlos.sync.widgets:state:v2')===null`))} finally {await guestMove.close()}
+  try {await guestMove.waitFor(`JSON.parse(localStorage.getItem('mvlos.visitor.sync.widgets:state:v2'))==='visitor-owned'`);check('Unowned legacy source is retained after visitor import',await guestMove.eval(`JSON.parse(localStorage.getItem('mvlos.sync.widgets:state:v2'))==='visitor-owned'`))} finally {await guestMove.close()}
   const restoreUid=await newPage(b,1500,1000,'');await restoreUid.send('Network.setCookie',{name:'mvlos_uid',value:'1',url:origin});await restoreUid.close()
 
   const Q=await open(true)

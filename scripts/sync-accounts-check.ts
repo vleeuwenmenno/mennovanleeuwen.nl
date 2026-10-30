@@ -619,7 +619,7 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   signIn(1)
   const A = await openTab()
   check('moving in: account 1 takes its own', A.notes.get().join() === 'old-release-note' && A.space.accountStorage.get('mvlos.history') === '["ls"]')
-  check('moving in: the plain keys go, the browser’s own stay', !storage.has('mvlos.sync.notes') && !storage.has('mvlos.history') && !storage.has('mvlos.account') && storage.has('mvlos.theme'))
+  check('moving in: ordinary plain keys move, ownership marker and browser preferences remain', !storage.has('mvlos.sync.notes') && !storage.has('mvlos.history') && storage.get('mvlos.account') === '1' && storage.has('mvlos.theme'))
   // An old tab writes the plain key again later: never read.
   storage.set('mvlos.sync.notes', JSON.stringify({ value: ['written-by-old-tab'], base: 0, dirty: true }))
   const A2 = await openTab()

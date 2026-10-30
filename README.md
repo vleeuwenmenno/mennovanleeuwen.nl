@@ -1307,8 +1307,10 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
   whose session ran out gets nothing. A page whose account hasn't turned push on in this browser
   (a visitor, or someone else) unsubscribes one still there. Empires only gives a multiplayer seat
   back for a kept token to the same account.
-- **Signing out** clears that account's space. A session that just ran out doesn't: the page
-  starts again as a visitor and the account's unsynced changes come back when it signs in again.
+- **Signing out** clears account data from its space, retaining migration receipts and any
+  unfinished migration intents to prevent retained legacy widget data from being imported again.
+  A session that just ran out doesn't clear it: the page starts again as a visitor and the
+  account's unsynced changes come back when it signs in again.
 - **Moving in.** The first time a space is used, what the release before spaces kept in plain keys
   moves into it, if the old marker says it was that account's; later writes to those keys (by a
   tab still running the old release) are never read. A visitor signing in brings their synced
@@ -4429,6 +4431,10 @@ account's namespace. Ordinary synced stores keep their synchronous persistence b
 Deferred legacy widget transfers bind their intent to the exact source and ownership markers.
 If either changes before the transfer, or an older unbound transfer intent remains, the source
 and intent stay untouched for recovery; they are not attributed to the current account.
+The plain legacy widget envelope and its ownership markers remain in browser storage after a
+successful copy and after logout: older tabs can write them without participating in the gate.
+The account-scoped cutover receipt survives logout and prevents that retained source from being
+imported again. A visitor cannot import a source marked as belonging to an account.
 
 Writers store patches rather than stale whole views and never erase another writer's log.
 A late tab or reload cannot reapply an already consumed edit or resurrect a consumed addition.

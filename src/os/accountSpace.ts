@@ -123,9 +123,12 @@ export const isAccountKey = (storageKey: string | null, key: string) => storageK
 /** Removes this tab's whole account space (signing out: the account's state leaves this browser). */
 export function clearAccountSpace(): Promise<void> {
   const canonical = accountKey(WIDGET_STORAGE_KEY), journals = accountKey(WIDGET_JOURNAL_PREFIX)
+  // Retain cutover and unfinished migration intents across logout: the plain legacy source is
+  // intentionally retained and must not be imported again when this account signs back in.
+  const migrationKeys = new Set([`${SPACE}moved`, `${SPACE}widget-move:plain:v2`, `${SPACE}widget-move:guest:v2`, `${SPACE}widget-move:plain:done:v2`])
   const widgetKey = (key: string) => key === canonical || key === journals || key.startsWith(journals + ':')
   try {
-    for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && k !== REVOCATION_KEY && !widgetKey(k)) localStorage.removeItem(k)
+    for (const k of Object.keys(localStorage)) if (k.startsWith(SPACE) && k !== REVOCATION_KEY && !migrationKeys.has(k) && !widgetKey(k)) localStorage.removeItem(k)
   } catch { return Promise.reject(new Error('Account storage cleanup unavailable')) }
   // Logout is authorized cleanup after revocation, so it intentionally does not call accountGuard.
   // It follows any already-running writer, including a tab paused inside its native storage call.
@@ -165,7 +168,7 @@ const OLDER_MARKER = 'mvlos.owner'
 function moveIn() {
   try {
     if (typeof localStorage === 'undefined') return
-    const flag = `${SPACE}moved`, plainPlan = `${SPACE}widget-move:plain:v2`, guestPlan = `${SPACE}widget-move:guest:v2`
+    const flag = `${SPACE}moved`, plainPlan = `${SPACE}widget-move:plain:v2`, guestPlan = `${SPACE}widget-move:guest:v2`, plainDone = `${SPACE}widget-move:plain:done:v2`
     if (!localStorage.getItem(flag)) {
       const keys = Object.keys(localStorage)
       const marker = localStorage.getItem(OLD_MARKER)
@@ -174,7 +177,7 @@ function moveIn() {
       // Failed IDB must not reopen other stores' import or discard the original envelope.
       // Bind the intent to both the ownership markers and exact source, not merely the account
       // that happened to observe them. A later legacy writer may replace either before IDB opens.
-      if (theirs && localStorage.getItem(WIDGET_STORAGE_KEY) !== null) localStorage.setItem(plainPlan, JSON.stringify({ marker, older: localStorage.getItem(OLDER_MARKER), source: localStorage.getItem(WIDGET_STORAGE_KEY) }))
+      if (theirs && !localStorage.getItem(plainDone) && localStorage.getItem(WIDGET_STORAGE_KEY) !== null) localStorage.setItem(plainPlan, JSON.stringify({ marker, older: localStorage.getItem(OLDER_MARKER), source: localStorage.getItem(WIDGET_STORAGE_KEY) }))
       if (TAB_UID) localStorage.setItem(guestPlan, '1')
       if (theirs) {
         for (const k of keys) if (LEGACY.some(r => r.test(k)) && k !== WIDGET_STORAGE_KEY) {
@@ -182,12 +185,8 @@ function moveIn() {
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
           localStorage.removeItem(k)
         }
-        // The canonical envelope still lives in the plain space until the transaction below.
-        // Its ownership markers must outlive a blocked/failed transfer, including sign-out.
-        if (localStorage.getItem(WIDGET_STORAGE_KEY) === null) {
-          localStorage.removeItem(OLD_MARKER)
-          localStorage.removeItem(OLDER_MARKER)
-        }
+        // Legacy writers can create or replace the widget envelope at any time. Never remove
+        // ownership markers, even when no envelope was present during this startup.
       }
       if (TAB_UID) for (const k of keys) if (k.startsWith('mvlos.visitor.sync.') && k !== 'mvlos.visitor.sync.widgets:state:v2') {
         const to = SPACE + k.slice('mvlos.visitor.'.length)
@@ -202,20 +201,16 @@ function moveIn() {
         if (!accountGuard()) return
         const to = accountKey(WIDGET_STORAGE_KEY)
         const plan = localStorage.getItem(plainPlan)
-        if (plan) {
+        if (plan && !localStorage.getItem(plainDone)) {
           let claim: { marker: string | null; older: string | null; source: string } | undefined
           try { claim = JSON.parse(plan) } catch { /* older unbound intent is not proof of ownership */ }
           const marker = localStorage.getItem(OLD_MARKER), older = localStorage.getItem(OLDER_MARKER)
           const v = localStorage.getItem(WIDGET_STORAGE_KEY)
           if (!claim || typeof claim.source !== 'string' || claim.marker !== marker || claim.older !== older || claim.source !== v || !(TAB_UID ? marker === TAB_UID || (!marker && !!older) : !marker && !older)) throw new Error('Widget migration source changed; original data retained')
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
-          if (localStorage.getItem(WIDGET_STORAGE_KEY) !== v || localStorage.getItem(OLD_MARKER) !== marker || localStorage.getItem(OLDER_MARKER) !== older) throw new Error('Widget migration source changed; original data retained')
-          if (v !== null) localStorage.removeItem(WIDGET_STORAGE_KEY)
-          // Do not remove markers another account may have established in the meantime.
-          if (TAB_UID ? marker === TAB_UID || (!marker && !!localStorage.getItem(OLDER_MARKER)) : !marker && !localStorage.getItem(OLDER_MARKER)) {
-            localStorage.removeItem(OLD_MARKER)
-            localStorage.removeItem(OLDER_MARKER)
-          }
+          // Non-cooperating legacy tabs do not use this gate. Their source and ownership markers
+          // can change at any point, so this migration never removes or rewrites either.
+          localStorage.setItem(plainDone, '1')
         }
         if (localStorage.getItem(guestPlan) && localStorage.getItem(to) === null) {
           const v = localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')
