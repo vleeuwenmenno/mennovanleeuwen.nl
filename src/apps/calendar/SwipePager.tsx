@@ -155,16 +155,22 @@ export function SwipePager({ pageKey, group, prevKey, nextKey, enabled, onTurn, 
 
   const down = (ev: ReactPointerEvent<HTMLDivElement>) => {
     if (!enabled || ev.pointerType !== 'touch' || phaseRef.current === 'settle') return
-    // A second finger is not a swipe: let go of it.
     const g = gesture.current
-    if (g) {
-      if (ev.pointerId !== g.id) {
+    // A second finger is not a swipe: let go of it.
+    if (!ev.isPrimary) {
+      if (g) {
         // Settling back may end the gesture on the spot (no animation wanted): keep what is needed first.
         const swiping = g.axis === 'x' && phaseRef.current === 'drag'
         g.axis = 'y'
         if (swiping) settle(0)
       }
       return
+    }
+    // A first finger with a gesture still on record: that one's lift never came (the browser took
+    // over a pinch, say), so it is stale.
+    if (g) {
+      if (phaseRef.current === 'drag') finish(0)
+      gesture.current = null
     }
     gesture.current = { id: ev.pointerId, x: toUi(ev.clientX), y: toUi(ev.clientY), axis: null, dx: 0, width: rootRef.current?.clientWidth ?? 0, samples: [{ t: ev.timeStamp, x: toUi(ev.clientX) }] }
   }

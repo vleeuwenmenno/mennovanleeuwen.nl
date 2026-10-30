@@ -1354,7 +1354,8 @@ When nothing can be imported the notice says why (`1 event found, but its start 
 **Swiping between pages.** On a touch screen, swipe sideways to turn the page, in every view: it goes where
 the ‹ › arrows go (`step(shownView, …)`: a day, 3 days, a week, a month or a year; swiping left in 3 days shows
 the next 3 days). The page follows the finger with the real previous and next pages beside it (their events,
-birthdays and due tasks, fetched ahead for the range in view, so nothing slides in blank), and on letting go it
+birthdays and due tasks, fetched ahead for the range in view and normally there before the finger is; on a slow
+connection a neighbour's events can still arrive while it slides in), and on letting go it
 slides on to the next page (past 28% of the width, or a quick flick) or back (`src/apps/calendar/SwipePager.tsx`,
 the rules in `swipe.ts`). Up and down still scrolls the hours (the browser's, `touch-action: pan-y`); a tap still
 opens an event or makes one, and a swipe never also taps. Mouse and pen are untouched, so dragging events and
