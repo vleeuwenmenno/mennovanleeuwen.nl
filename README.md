@@ -165,6 +165,13 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+Settings → Dock → *Show the dock* picks when the dock shows (always, auto-hide when a window covers
+it, or always auto-hide). Windows snapped left, right or to a corner keep room for the dock unless
+it always auto-hides; turning off *Reserve dock space for snapped windows* (on this device only,
+[`src/os/dockPrefs.ts`](src/os/dockPrefs.ts)) lets them use the height under the dock too, with the
+top bar and the usual gaps kept. Snapped windows re-fit when it changes. Maximized windows are not
+affected: they only leave room when the dock is always shown.
+
 ## Moving windows with a key
 
 Like Hyprland, a window can be dragged by holding a key and dragging anywhere on it
@@ -759,36 +766,202 @@ and parser for highlighting and syntax diagnostics. Diagnostics show filename, l
 and the offending expression. Analysis is limited to 512 KB; larger files remain editable.
 Nothing is executed to lint a file.
 
-**Debug saved file** launches `msh 'path'` through the normal command table, file reads and
-permission checks, using the project directory. Save changes first: this executes the saved
-file and can perform the same actions as running it in Terminal. The debugger starts paused
-at the launch command; **Step** enters the script. **Continue** runs until a breakpoint,
-**Step** stops before the next command/compound command, **Pause** requests a stop at the next
-checkpoint, and **Stop** aborts the session, including an awaited pause. Pauses show source
-location, status and variables. Click the location to open it. **Breakpoint line N** toggles
-a breakpoint at the editor caret; the breakpoint list shows its filename and line.
+**msh symbols and navigation.** Ctrl+Click (or Cmd+Click) a function or variable reference
+to go to a reliable parsed definition. With the caret on a symbol, **Go to Definition**
+(Alt+G) does the same; its button also works by touch. **Back** (Alt+Left while editing)
+returns to the previous location, with at most 32 entries per window. Ordinary copy/paste,
+browser shortcuts and debugger gutter actions keep their meanings.
 
-**Attach debug session** lists only explicitly opted-in sessions in this page. It does not
-inspect ordinary terminals, agents, other browser tabs or server processes. Xed cancels its
-own sessions when its window closes; attaching does not transfer lifetime ownership.
+The **Static** strip follows the caret or pointer and names parameter/local/global/function
+origins and their file and line. Expand **Symbols** for signatures, source locations and
+uncertainty explanations. This is source information, distinct from the debugger's paused
+runtime values. **Complete** (Ctrl+Space in the textarea) offers matching visible variables
+after `$`/`${`, and functions with their parameter signatures or real msh builtins at command
+positions. Choose a suggestion by button (keyboard focus or touch); completion never runs it.
+Command completion replaces the parsed literal word, including from inside or just after its
+quotes. It preserves surrounding quotes and arguments, and normalizes mixed/escaped command
+spellings to a quoted literal so they still suppress aliases. Variable completion replaces only
+the referenced name; dynamic command expressions are never replaced with a literal command suggestion.
+Backslash-newline continuations use the lexer's normalization: continuations alone do not
+suppress aliases, while genuine quotes or escapes still do after completion.
+Parameters/locals shadow global suggestions, and another function's locals are not offered.
+
+Indexing uses the shared msh parser, including named parameters, assignments, local/export
+commands and literal `source`/`.` statements. It does not execute shell, `eval`, substitutions
+or arbitrary network requests. Open buffers, including unsaved sourced files, take precedence.
+Closed local/browser files are read through the existing permission-checked file API. Remote
+sources must already be open in this window: automatic symbol discovery does not download
+Seafile files. A literal relative source is resolved from the project/launch working directory,
+not from the source file's directory. Sources outside the project, dynamic paths, or relative
+sources after a possible `cd` are reported as unknown rather than guessed.
+This includes possible directory changes in nested, conditional or repeated sourced files;
+an unavailable source also makes subsequent relative source paths unknown. The index does
+not execute `cd` to discover the new directory. Literal quoted or escaped command names
+have their normal shell meaning, including `"source"`, `'cd'`, `\eval` and quoted local/export
+commands; dynamic command names remain uncertain.
+Functions that shadow declaration/source builtins, including imported functions, also weaken
+those static facts to candidates.
+
+msh has dynamic scope, not lexical closures. A free variable in a function may come from a
+caller local: the index shows known assignment candidates and says so. Conditional declarations,
+multiple function definitions, dynamic sources and `eval` prevent a definitive jump; choose an
+explicit candidate instead. Parameters and unconditional local declarations with unambiguous
+command identity in the current function have reliable origins. This is intentionally not a
+full LSP or data-flow proof:
+command/arithmetic substitution internals, heredoc expansions, `read`/`getopts`-generated
+bindings and external commands are not resolved. A syntax-invalid file keeps its parser
+Problems but has no symbol index until it parses again. No React/TypeScript intelligence is
+implied.
+
+Each window attempts at most 16 source file reads (including unavailable files), 8 source edges
+deep and 512 KB total, with at most 4096 symbol facts per file and 40 completion suggestions.
+Indexing is debounced, cancelled on
+file/buffer/root changes or window close, and discards stale asynchronous results. Before a
+jump into a closed source, its text is checked again; a changed file is reindexed instead of
+navigating to an outdated location. Account
+changes clear navigation/index state and disable intelligence in that old window; reopen Xed
+under the current account. No symbol index or navigation history is persisted.
+
+**Running and debugging.** The editor bar of every open file has the debugger toolbar: Run
+(or Continue while paused), Pause, Stop, Step Over, Step Into and Step Out, followed by the
+session state (not running, running, paused with its reason and location, completed or failed
+with the exit status, or stopped). The keys are the familiar ones:
+
+| Key | Action |
+| --- | --- |
+| F5 | Run the active script, or continue when paused |
+| Shift+F5 | Stop |
+| F6 | Pause at the next command |
+| F9 | Toggle a breakpoint on the caret's line |
+| F10 | Step over (when nothing runs: start and stop at the first command) |
+| F11 | Step into (likewise) |
+| Shift+F11 | Step out |
+
+Xed takes these keys only while its window is focused (the window manager's focused window),
+whether or not the caret is in the text; another app's text field keeps them. They are caught
+before anything inside the Xed window sees them, so a program in Xed's terminal panel (nano,
+say) does not take F5 from the debugger; every other key still reaches it. In a focused Xed
+window F5 and Shift+F5 are always Xed's, so a page reload cannot throw away unsaved edits;
+there F5 on a file that cannot run says why in the status bar. Outside Xed, F5 is left to the
+browser. F6, F9, F10 and F11 are taken only in an msh file or while a session is selected.
+A browser may keep some function keys for itself (F11 for full screen in some browsers): the
+toolbar buttons do the same, and their tooltips and `aria-keyshortcuts` name the keys. Alt+1…9
+are not used.
+
+Run launches `msh 'path'` through the normal command table, file reads and permission checks,
+in the project folder. It runs the saved file: when the editor has unsaved changes the button
+reads **Save & Run** and saves first, and if saving fails nothing runs. While the save is on
+its way (Seafile and browser-kept files take a moment) the state reads "Saving before the run"
+and Stop cancels the run. The run does not start if the window closed in the meantime, another
+file was brought to the front, or the text was edited during the save (it would run the older
+saved copy): the status bar says so, and F5 again saves and runs the new text. A second F5
+before the run has started is ignored, so one press is one run. Run stops only at
+breakpoints; Step Over or Step Into while nothing runs starts the script and stops at its first
+command. Only msh scripts run (`.msh`, `.sh`, or an msh shebang); there is no way to run other
+files, and arguments cannot be passed yet.
+
+**Stepping** is per command: simple commands, `(( ))`, and the heads of `for` and `case`.
+Lists, pipelines, groups and `if`/`while` are made of commands that stop on their own, so one
+place is never stopped at twice. The session keeps a call stack of scripts (the launched file,
+`source`, `msh file`, `./script`), function calls and `$(…)` substitutions, which crosses the
+interpreter's child shells. Step Into stops at the next command anywhere, Step Over at the next
+command in the same frame or one it returns to, and Step Out at the first command after the
+current function, sourced file or substitution returns. `$(…)` text has no file of its own, so
+stepping passes over it into what it calls (a function stepped into from `$(f)` shows in its
+own file). Pause stops at the next command; a long-running external command pauses when it
+returns.
+
+**Breakpoints** are set by clicking the gutter left of a line number (tapping on touch screens)
+or with F9. They belong to canonical absolute paths, are shared by every Xed window in the page
+and are not saved. The Breakpoints list shows them all with a checkbox to disable or enable
+each, a link to the line, and a remove button. A breakpoint on a line without a command (a
+comment, `done`, a blank line) is drawn hollow and flagged as never stopping. Editing a file
+moves its breakpoints with their text and removes those on deleted lines; renaming or deleting
+a file in the project panel takes its breakpoints along. A breakpoint fires on a line event,
+as in Python's debugger: when execution reaches another line, or jumps back to an earlier
+point on a line (a loop), so `a=1; b=2` stops once and a loop line stops on every iteration.
+Sessions Xed starts use these breakpoints; another session only does after it is attached.
+
+**While paused** the current line gets a highlight and a gutter arrow, separate from the
+breakpoint dot, and a pause in another file opens that file's tab and scrolls to it without
+moving the caret or selection of the file you are in. Each file keeps its selection when the
+debugger moves to another file and back (stepping into a function in another file and out
+again leaves the caller's selection where it was), and the editor keeps the keyboard focus if it
+had it. The panel under the editor (resizable
+from its top edge, shown and hidden with the bug button in the status bar) has **Output**,
+**Variables** (positional arguments, named **Parameters**, ordinary **Locals**, inherited **Caller scope** and **Globals**),
+**Watch**, **Breakpoints**, **Call stack** (click a frame to inspect its bindings and see its line) and **Problems**
+(syntax diagnostics, also marked in the gutter). Hovering a variable in the editor shows its
+value at the pause (the value is read from the current pause when drawn; a step or choosing
+another session hides it until the pointer moves); with a keyboard or on a touch screen, putting the caret on a variable shows
+it in the panel. Values are only shown while paused, from the pause's snapshot: when the
+session resumes or ends they are cleared rather than shown as if current, and a hover on a
+file that is not in the paused call stack says so.
+
+Every invocation has a stable, distinct frame identity, including recursive calls of the same
+function. Selecting a caller reconstructs its shadowed bindings and positional arguments;
+Watches and runtime hover use that selected frame. A hover in a different file asks you to
+select its frame rather than displaying the executing function's value under another name.
+Dynamic caller locals are labelled as inherited scope. Parameters are visible before the
+first body command. `(unset)` and `(empty)` are distinct, and omitted/cut values are labelled.
+Inside `( ... )`, the current frame shows the executing subshell's copied bindings and
+positionals, including parameters in a function with a subshell body. Caller frames retain
+their own bindings; leaving the subshell restores the enclosing view without adding a frame
+or comparing copied bindings as changes to their originals. A shared capture limit can cut
+even a short value to zero characters: Variables, Watch and hover label that truncation,
+never as an empty string.
+The Variables view highlights changes as previous → current only for the same session,
+invocation and binding. Comparisons use complete captured values only; previous display text
+is limited to 120 characters. Switching sessions resets comparisons. Ending a session or
+changing account clears its captured current and previous values.
+
+**Watches** are read from the snapshot and never evaluated as shell: a name, `$name`,
+`${name}`, `${#name}`, `$1`…`$9`, `${10}` and higher, `$#`, `$@` and `$?`, with plain text around them.
+As in msh, `$10` means `$1` followed by `0`; use `${10}` for the tenth argument. Command and
+arithmetic substitution, backticks and `${x:-…}`-style operators are refused, so a watch
+cannot run anything or change a variable. At most 20 watches of 200 characters; values are
+built up to 4096 characters and shown up to 1000. Snapshots are bounded (below), but keep what
+the bounds left out: `${#x}` and `$#` give the script's real length and count, a cut value is
+marked as cut with its real length, and an argument or variable past the bound reads as "not
+captured" rather than "not set". The Variables view says the same.
+
+**Unsaved and changed source.** A session remembers a hash of each file it parsed. When the
+editor's text of a file differs from what the session is running (edited while paused, or
+changed on disk), the panel says so and the paused line is drawn as stale; stop and run again
+to use the new text.
+
+**Sessions.** The session picker lists only explicitly opted-in sessions in this page. It does
+not inspect ordinary terminals, agents, other browser tabs or server processes. Choosing a
+session Xed did not start attaches to it: Xed shows its pauses and it starts stopping at the
+editor's breakpoints, but its output stays with whoever started it, and Xed does not take over
+its lifetime. Xed cancels its own sessions when its window closes. With several Xed windows,
+each has its own session and panel; the keys go to the focused one.
+
 The registry holds at most 16 sessions (evicting completed ones), each with at most 256
-breakpoints and 256 displayed variables, capped at 4096 characters each. Output retains the
-last 32 KB. Debug launches also bound interpreter capture and screen chunks to 32768 UTF-16
-code units, streaming partial lines when needed; ordinary `runLine` output remains unlimited
-unless its optional `captureLimit` is supplied. Controls wrap on phones and use the active theme.
+breakpoints. One pause shares 256 variables, 64 arguments and 65,536 characters across the
+executing frame and its callers (at most 128 frames), with each value capped at 4096 characters; the
+editor keeps at most 256 breakpoints. The previous pause uses the same bound; snapshot work
+and retained change text also charge the shared execution budget. Output retains the last 32 KB. Debug launches also bound
+interpreter capture and screen chunks to 32768 UTF-16 code units, streaming partial lines when
+needed; ordinary `runLine` output remains unlimited unless its optional `captureLimit` is
+supplied. The toolbar and panel use the active theme, wrap to phone widths and have 36 px touch
+targets on touch screens.
 
 Xed debug launches use the shared execution budget (60 seconds including pauses,
 100,000 steps and the normal intermediate/total-output limits by default). Stop
 or deadline expiry releases a paused checkpoint; continuing cannot bypass file
-policy or resume mutations after exhaustion. The bounded debug screen keeps its
-existing 32,768-character tail. Rich jq remains interactive-only outside bounded
+policy or resume mutations after exhaustion. Rich jq remains interactive-only outside bounded
 debug runs; use `jq-safe` while debugging. `check:msh-debug` covers cancellation,
 paused deadlines, policy and shared JSON accounting.
 
 There is one interpreter. `parse.ts` adds token offsets and command `span` metadata;
-`interp.ts` awaits optional `Base.debug.checkpoint` hooks before execution. `debug.ts` owns
-session state and subscriptions. `launchDebug(line, base, label?)` returns `{ session, done }`
+`interp.ts` awaits optional `Base.debug.checkpoint` hooks before each command and reports
+frames with `enter`. `debug.ts` owns session state, frames, step modes, the editor breakpoints
+and subscriptions; `watch.ts` evaluates watches and finds the variable under a hover.
+`launchDebug(line, base, label?, { start?, editorBreakpoints? })` returns `{ session, done }`
 and follows normal `runLine` execution; callers must supply their existing permission context.
+`start` is `'first'` (the default: stop before the first command, the launch line), `'run'`
+(breakpoints only) or `{ entry: path }` (the first command of that file).
 `runCapturedStreams(source, base, filename?)` returns distinct `{ stdout, stderr, status }`;
 `runCaptured` retains its existing combined-output API. `set -x` trace goes to stderr.
 
@@ -796,20 +969,31 @@ File-backed debugger locations use absolute, normalized source paths for navigat
 and breakpoints. This applies to `source`, nested `msh file`, and executable scripts,
 including relative paths after `cd`. Session display labels and script `$0` retain
 their existing spelling; normalizing source identity does not rewrite invocation
-arguments. Inline commands and substitutions keep their `-c` coordinates.
+arguments, and error messages keep their file, line, column and expression. Inline commands,
+substitutions and alias expansions keep their `-c` coordinates.
 
-Stepping is command-granular, not expression-level or step-over/step-out. Command substitution
-and alias expansions currently use their own `-c` coordinates. Breakpoints are filename/line
-based, can stop more than once on a loop line, and do not move when text is edited. Long-running
-commands pause only when they return to a checkpoint; Stop uses their normal abort signal.
 The debug panel does not supply interactive stdin or a full terminal for fullscreen commands;
-use Xed's terminal panel for those. The initial launch location is `-c`, followed by the file's
-own source coordinates. Variable snapshots can contain script secrets, just as Terminal output
-can; they stay in this page and are not persisted.
+use Xed's terminal panel for those. Variable snapshots can contain script secrets, just as
+Terminal output can; they stay in this page and are not persisted. Watches and breakpoints are
+not persisted either.
 
-Checks: `pnpm check:msh-debug` runs real interpreter/command regressions with separated streams;
-`pnpm check:xed-debug-ui` drives the actual editor through the repository's muted Chromium
-harness against a caller-started scratch dev server (`XED_TEST_PORT`, default 5276).
+Checks: `pnpm check:msh-debug` runs real interpreter/command regressions with separated streams,
+including step into/over/out across functions, sourced files and substitutions, line events,
+editor breakpoints and watches. `pnpm check:xed-debug-ui` drives the actual editor through the
+repository's muted Chromium harness against a caller-started scratch dev server
+(`XED_TEST_PORT`, default 5276): gutter clicks and taps, the Breakpoints list, F5/F6/F9/F10/F11
+with focus inside and outside the text, two Xed windows, the paused marker and source reveal,
+watches and hover (also across a session switch), stale-source warnings, save before run
+(closing the window, Stop, edits and a double F5 while the save is pending), the caller's
+selection after stepping out of another file, F5 with nano focused in the terminal panel,
+attach, stop and window close, named parameters and recursive caller-frame inspection, static
+modified-click/keyboard/touch navigation, unsaved source precedence and symbol completion,
+a phone-sized touch screen, and that F5 outside Xed is not
+taken. The save-before-run checks use a file in /tmp, whose save is quick; they act within the
+same task so the save's await is still pending, which is the same gap a slower Seafile or
+browser save has. Headless Chromium has no reload
+accelerator, so that last check proves the key is not cancelled rather than that the page
+reloads.
 
 ### The shell, agents and skills
 
@@ -821,6 +1005,44 @@ and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts (`./scrip
 `chmod +x`, see Permissions above). `man msh` shows the
 reference ([`src/data/mshReference.ts`](src/data/mshReference.ts)), which the agents read as the
 built-in `msh` skill.
+
+**Named function parameters.** Optional comma-separated names replace manual
+`local parcel="$1"; local cost="$2"` bindings:
+
+```sh
+deliver(parcel, cost) {
+    printf 'Delivering %s for %s fuel\n' "$parcel" "$cost"
+}
+deliver "Space Potato" 3
+```
+
+`function deliver(parcel, cost) { …; }` works too. Whitespace, newlines and comments
+between parameters are allowed. Names must be unique plain shell identifiers
+(`[A-Za-z_][A-Za-z0-9_]*`); `RANDOM` is computed by msh and cannot be a parameter.
+There are no defaults, rest parameters, destructuring, type annotations or expression-style
+calls such as `deliver("Space Potato", 3)`. Commas in ordinary command words stay literal.
+Existing `name()`, `function name()` and `function name` declarations keep their argument handling.
+
+A **nonempty** parameter list requires exactly that many arguments. Empty strings count as
+arguments. A wrong count fails with status 1 and a diagnostic naming the function, parameter
+names, received count and call site, before the body (including its redirects) runs. Normal
+argument expansion and call-site redirection still follow shell evaluation order. `set -e`
+handles this failure like any other command failure. `msh -n` checks declarations without
+running them; it cannot predict a call's expanded argument count.
+
+Bindings receive the already expanded strings, never reparse/evaluate them, and are local to
+each invocation, including recursion. `$1`, `$2`, `$#` and `"$@"` remain available; `shift` and
+`set --` change only those positional arguments, not the named snapshots. Named assignments
+can be changed or unset like other locals. Local shadowing and restoration use the same path
+as `local`, on return, error, exit, cancellation and budget exhaustion. Nested calls follow
+msh's dynamic scope: they can read a caller's locals until they shadow them. Arrays and
+read-only variables are not implemented by msh; declarations pretending to use them are
+syntax errors. Ordinary names such as `IFS` retain their existing local-variable effects.
+Missing arguments are rejected with or without `set -u`; for legacy functions, msh still
+expands a missing positional argument to the empty string even under `set -u`.
+
+`help --json` / `terminal_capabilities` advertise named-parameter syntax in `shell.syntax`.
+The shell version remains 2.0; this is a language feature, not an OS release.
 
 **Aliases and `~/.mvshrc`.** `alias ll='ls -l'` gives a command another name; `alias` lists them,
 `alias ll` shows one, `unalias ll` (or `unalias -a`) removes them. An alias replaces the first word
@@ -1680,6 +1902,34 @@ already, by their UID, are skipped, and the notice says how many (the UID is kep
 a UTF-8 or UTF-16 text (BOM or not, [`src/data/decodeText.ts`](src/data/decodeText.ts)), lowercase names, `VALUE=DATE-TIME`, a
 quoted TZID, `X-WR-TIMEZONE` for times with no zone, and extended ISO dates (`2026-10-15T14:00:00+02:00`).
 When nothing can be imported the notice says why (`1 event found, but its start time couldn't be read (...)`).
+
+**The sidebar** (a month to get around, the calendars, birthdays and task lists to show) follows the window's own width, as
+Mail does, not the screen's. From 720px up it sits beside the calendar and the ☰ button (like the toolbar's other icon buttons, 28px with a mouse and 40px with a finger, as in Mail) grows and shrinks it (the
+choice is kept while the window is narrow, and its content keeps its width so nothing reflows as it moves). Under 720px the
+window shows one thing at a time: the calendar, or the sidebar as a pane of its own that slides over it from the left
+(☰, or `‹ Calendar` at the top of the pane, goes back; so do `Esc`, picking a day or month, Today, the arrows and the view
+tabs). The calendar behind a pane is never unmounted, so its scroll and swipe paging stay as they were, and ticking a
+calendar or task list in the pane doesn't close it. A hidden pane is inert (no focus, no taps, hidden from screen
+readers), the ☰ button says `aria-expanded` and `aria-controls`, and focus goes into the pane when it opens and back to ☰
+when it closes (also when the window crosses 720px with focus in a pane that goes away). Narrowing the window starts on
+the calendar, and widening it again brings back the desktop sidebar as you left it. The slide is off with *reduce
+motion*, and while the window switches between the two layouts or before its first measure, so a phone never shows a
+wide flash. `node scripts/calendar-swipe-check.ts <scratch server>` covers all of this in headless Chromium.
+
+**Swiping between pages.** On a touch screen, swipe sideways to turn the page, in every view: it goes where
+the ‹ › arrows go (`step(shownView, …)`: a day, 3 days, a week, a month or a year; swiping left in 3 days shows
+the next 3 days). The page follows the finger with the real previous and next pages beside it (their events,
+birthdays and due tasks, fetched ahead for the range in view and normally there before the finger is; on a slow
+connection a neighbour's events can still arrive while it slides in), and on letting go it
+slides on to the next page (past 28% of the width, or a quick flick) or back (`src/apps/calendar/SwipePager.tsx`,
+the rules in `swipe.ts`). Up and down still scrolls the hours (the browser's, `touch-action: pan-y`); a tap still
+opens an event or makes one, and a swipe never also taps. Mouse and pen are untouched, so dragging events and
+empty spots with a mouse works as before. A second finger, the browser taking the gesture over, the window
+resizing, or the arrows, Today or another view being used mid-swipe drop the swipe without turning the page.
+With *reduce motion* set the page still follows the finger, but turns without the slide. The hours (or the year)
+stay scrolled where they were. At rest only the page in view is in the DOM. `pnpm check:calendar-swipe` tests the
+rules; given a scratch Vite server it drives a real swipe in headless Chromium with touch
+(`node scripts/calendar-swipe-check.ts http://127.0.0.1:5290`).
 Calendars can be **hidden** in Settings → Apps → Calendar (*Show in MvL OS*, one switch per calendar, grouped by account, with the
 Contacts birthdays and the task lists too; also *Hide everywhere* in the right-click menu of a calendar in the Calendar's sidebar). That is
 stronger than unticking one in the sidebar, which only filters it from the views: a hidden calendar is left out everywhere, so the
@@ -2385,6 +2635,24 @@ does not come along (the terminal, image generation). The editor says whether th
 match its thread's, with **Use thread's tools again**; `update_task` with `use_thread_tools` does the
 same (only in the thread the task was made in), and its card says when that widens what the task may do. Its model is the thread's, unless one
 is named. Tasks made in the Tasks tab with no thread open keep the safe defaults below.
+
+**A web page the reader could not read.** When a `web_fetch` fails, its card says *Reader couldn’t
+retrieve this page* and opens with the whole address (the one-line title cuts a long one with “…”,
+and its tooltip has all of it). The reader's error is kept as it is under *Error from the reader*:
+it cannot tell a site that blocks the reader from a page that does not exist, so the card claims
+neither, and the agent saw only that error. **Open page** opens the address in a new tab (http and
+https only; nothing opens by itself). **Paste page text…** opens a dialog: copy the page's text in
+your browser and paste it there, and it is added to the end of your message box under a line naming
+the page, for you to read and send; it is never sent for you. Text of 5,000 characters or more (or
+that would make the box too long) goes along as a `Page text.txt` file whose first line names the
+page; with 10 attachments already, the dialog keeps your text and says why. What you had typed and
+attached stays. It is not offered while a queued message is being edited, and if you leave the thread
+before the dialog closes nothing is added. The card does not appear for a read you declined, one nobody
+answered or a cancelled run: those keep their own message. The page text is read from what you paste,
+not from the clipboard by the site, and nothing is fetched by the browser for you. Only a client
+change: the server and the reader are untouched, so a blocked page stays blocked for the agent until
+you paste it. Checked by `pnpm check:agents-web-recovery` (and, against a dev server,
+`pnpm check:agents-web-recovery-ui`).
 
 *A model of its own.* The editor picks from your models; `create_task` and `update_task` take
 `model` ("run my morning brief on GLM from now on"), and the card shows the change ("A → B"). A

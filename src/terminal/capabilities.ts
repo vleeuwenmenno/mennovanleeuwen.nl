@@ -57,12 +57,12 @@ export function optionsOf(usage: string | undefined): { options: CommandOption[]
 
 /** msh's language, as this build has it (man msh has the detail). Each line is true of the interpreter in msh/. */
 const SHELL_FEATURES = {
-  syntax: ['pipelines (a | b)', 'lists (; && ||)', '! negation', 'if/elif/else', 'for', 'while', 'until', 'case', 'functions', '( subshell )', '{ group; }', '# comments', 'line continuation'],
+  syntax: ['pipelines (a | b)', 'lists (; && ||)', '! negation', 'if/elif/else', 'for', 'while', 'until', 'case', 'functions', 'named function parameters: name(a, b) { …; } (exact arity; local string snapshots; command-style calls)', '( subshell )', '{ group; }', '# comments', 'line continuation'],
   redirects: ['>', '>>', '<', '>|', '&>', '2>', '2>>', '2>&1', '>&2', '<<', '<<-', '<<\'EOF\''],
   expansion: ['$var and ${var}', '$1…$9, $#, $@, $*, $?, $0, $$, $RANDOM', '${v:-d} ${v:=d} ${v:+a} ${v:?m}', '${#v}', '${v#p} ${v##p} ${v%p} ${v%%p}', '${v/p/r} ${v//p/r}', '${v:off:len}', '$(cmd) and `cmd`', '$((arithmetic))', '~', 'globbing (* ? [..])'],
   options: ['set -e / +e (errexit)', 'set -u (nounset)', 'set -x (xtrace)', 'set -o pipefail', 'msh -n (syntax check only)', 'msh -x', 'msh -e', 'msh -c'],
   scripts: ['msh file args…', './file (needs the x bit and a #! for msh, sh or bash)', 'source file', 'stdin (echo … | msh)'],
-  notSupported: ['background jobs (& runs in the foreground)', 'job control', 'arrays', 'process substitution <(…)', 'real processes: commands are MvL OS’s own, not a Linux system’s'],
+  notSupported: ['expression-style function calls', 'parameter defaults, rest parameters, destructuring and type annotations', 'readonly variables', 'background jobs (& runs in the foreground)', 'job control', 'arrays', 'process substitution <(…)', 'real processes: commands are MvL OS’s own, not a Linux system’s'],
 }
 
 /** Whether files can be written where a path is: Seafile (unless read-only), the browser's store, and /tmp. */

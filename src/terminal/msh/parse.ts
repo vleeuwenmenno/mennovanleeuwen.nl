@@ -13,9 +13,10 @@ export type Redirect = {
 }
 
 export type SourceSpan = { start: number; end: number; line: number; column: number; filename: string; expression: string }
+export type Parameter = { name: string; start: number; end: number }
 
 export type Node = { span?: SourceSpan } & (
-  | { t: 'simple'; assigns: [string, string][]; words: string[]; redirs: Redirect[] }
+  | { t: 'simple'; assigns: [string, string][]; words: string[]; redirs: Redirect[]; wordsAt?: { start: number; end: number }[]; assignsAt?: { start: number; end: number }[] }
   | { t: 'pipeline'; cmds: Node[]; bang: boolean }
   | { t: 'andor'; first: Node; rest: ['&&' | '||', Node][] }
   | { t: 'list'; items: { node: Node; bg: boolean }[] }
@@ -25,7 +26,7 @@ export type Node = { span?: SourceSpan } & (
   | { t: 'for'; name: string; items: string[] | null; body: Node; redirs: Redirect[] }
   | { t: 'while'; until: boolean; cond: Node; body: Node; redirs: Redirect[] }
   | { t: 'case'; word: string; arms: { patterns: string[]; body: Node | null }[]; redirs: Redirect[] }
-  | { t: 'func'; name: string; body: Node }
+  | { t: 'func'; name: string; params: Parameter[]; body: Node }
   /** (( expression )): true when the arithmetic is not 0 (bash) */
   | { t: 'arith'; expr: string; redirs: Redirect[] }
 )
@@ -160,6 +161,13 @@ function unquoteDelimiter(raw: string): { word: string; quoted: boolean } {
   return { word, quoted }
 }
 
+/** The lexer removes continuations from word spellings, leaving source offsets intact.
+ * An editor caret inside a removed pair has the same prefix as just before that pair. */
+export function stripContinuations(word: string, end = word.length): string {
+  if (word[end - 1] === '\\' && word[end] === '\n') end--
+  return word.slice(0, end).replace(/\\\n/g, '')
+}
+
 export function lex(src: string): Token[] {
   const out: Token[] = []
   const heredocs: { tok: Token & { k: 'word' }; strip: boolean }[] = []
@@ -232,7 +240,7 @@ export function lex(src: string): Token[] {
       else if (c === '`' || (c === '$' && (src[i + 1] === '(' || src[i + 1] === '{'))) i = skipNested(src, i)
       else i++
     }
-    const v = src.slice(start, i).replace(/\\\n/g, '')
+    const v = stripContinuations(src.slice(start, i))
     // `2>file`: digits right before a redirect are its file descriptor.
     if (/^\d$/.test(v) && (src[i] === '<' || src[i] === '>')) out.push({ k: 'io', v, start, end: i })
     else {
@@ -381,16 +389,11 @@ class Parser {
       if (t.v === 'function' && this.toks[this.i + 1]?.k === 'word') {
         this.i++
         const name = (this.next() as { v: string }).v
-        if (this.isOp('(')) {
-          this.i++
-          if (!this.isOp(')')) this.fail()
-          this.i++
-        }
-        return this.funcBody(name)
+        return this.funcBody(name, this.isOp('(') ? this.parameters() : [])
       }
-      if (NAME.test(t.v) && this.isOp('(', this.toks[this.i + 1]) && this.isOp(')', this.toks[this.i + 2])) {
-        this.i += 3
-        return this.funcBody(t.v)
+      if (NAME.test(t.v) && this.isOp('(', this.toks[this.i + 1])) {
+        this.i++
+        return this.funcBody(t.v, this.parameters())
       }
       if (ENDERS.has(t.v)) this.fail()
     }
@@ -405,11 +408,49 @@ class Parser {
     return this.simple()
   }
 
-  private funcBody(name: string): Node {
+  /** Commas are syntax only here: ordinary command words such as a,b stay intact. */
+  private parameters(): Parameter[] {
+    this.i++ // (
+    const params: Parameter[] = []
+    const names = new Set<string>()
+    let wantName = true
+    for (;;) {
+      this.skipNl()
+      const t = this.peek()
+      if (t.k === 'eof') throw new Incomplete('expected function parameter or closing )', t.start)
+      if (this.isOp(')')) {
+        if (wantName && params.length) throw new SyntaxError('expected parameter after comma', t.start)
+        this.i++
+        return params
+      }
+      if (t.k !== 'word') throw new SyntaxError('expected parameter name or closing )', t.start)
+      // Use original text for offsets (the lexer removes backslash-newline continuations).
+      for (const part of this.src.slice(t.start, t.end).matchAll(/[^,]+|,/g)) {
+        const raw = part[0], start = t.start + part.index
+        if (raw === ',') {
+          if (wantName) throw new SyntaxError('expected parameter name before comma', start)
+          wantName = true
+          continue
+        }
+        const name = raw.replace(/\\\n/g, '')
+        if (!name) continue
+        if (!wantName) throw new SyntaxError('expected comma between function parameters', start)
+        if (!NAME.test(name)) throw new SyntaxError(`invalid function parameter '${name}': expected a plain variable name`, start)
+        if (name === 'RANDOM') throw new SyntaxError('RANDOM is computed by the shell and cannot be a parameter', start)
+        if (names.has(name)) throw new SyntaxError(`duplicate function parameter '${name}'`, start)
+        names.add(name)
+        params.push({ name, start, end: start + raw.length })
+        wantName = false
+      }
+      this.i++
+    }
+  }
+
+  private funcBody(name: string, params: Parameter[]): Node {
     this.skipNl()
     const body = this.command()
-    if (body.t === 'simple') throw new SyntaxError(`in function ${name}: the body must be { … } or ( … )`)
-    return { t: 'func', name, body }
+    if (body.t === 'simple') throw new SyntaxError(`in function ${name}: the body must be { … } or ( … )`, body.span?.start)
+    return { t: 'func', name, params, body }
   }
 
   private withRedirs<T extends { redirs: Redirect[] }>(node: T): T {
@@ -435,14 +476,15 @@ class Parser {
   }
 
   private simple(): Node {
-    const node: Node & { t: 'simple' } = { t: 'simple', assigns: [], words: [], redirs: [] }
+    const node: Node & { t: 'simple' } = { t: 'simple', assigns: [], words: [], redirs: [], wordsAt: [], assignsAt: [] }
     for (;;) {
       if (this.atRedirect()) node.redirs.push(this.redirect())
       else if (this.peek().k === 'word') {
-        const v = (this.next() as { v: string }).v
+        const token = this.next() as Token & { k: 'word' }
+        const v = token.v
         const eq = v.indexOf('=')
-        if (!node.words.length && eq > 0 && NAME.test(v.slice(0, eq))) node.assigns.push([v.slice(0, eq), v.slice(eq + 1)])
-        else node.words.push(v)
+        if (!node.words.length && eq > 0 && NAME.test(v.slice(0, eq))) { node.assigns.push([v.slice(0, eq), v.slice(eq + 1)]); node.assignsAt!.push(token) }
+        else { node.words.push(v); node.wordsAt!.push(token) }
       } else break
     }
     if (!node.words.length && !node.assigns.length && !node.redirs.length) this.fail()
@@ -534,6 +576,20 @@ class Parser {
 /** Parses a script or a command line. Throws Incomplete when more input would finish it. */
 export function parse(src: string, filename = '-c'): Node {
   return new Parser(lex(src), src, filename).program()
+}
+
+/** Shared AST traversal for editor analysis. It does not expand or execute words. */
+export function childrenOf(n: Node): Node[] {
+  switch (n.t) {
+    case 'list': return n.items.map(i => i.node)
+    case 'andor': return [n.first, ...n.rest.map(([, node]) => node)]
+    case 'pipeline': return n.cmds
+    case 'func': case 'group': case 'subshell': case 'for': return [n.body]
+    case 'while': return [n.cond, n.body]
+    case 'if': return [...n.clauses.flat(), ...(n.else ? [n.else] : [])]
+    case 'case': return n.arms.flatMap(a => a.body ? [a.body] : [])
+    default: return []
+  }
 }
 
 /** The command names a line runs (first words of each simple command), for permission checks. */

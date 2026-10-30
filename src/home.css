@@ -4437,9 +4437,10 @@ button.cal-day.is-picked:not(.is-today) {
 }
 .ca-icon {
   display: inline-grid;
+  flex: none;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border: 1px solid transparent;
   color: var(--fg);
   font-size: 16px;
@@ -4449,6 +4450,13 @@ button.cal-day.is-picked:not(.is-today) {
 .ca-icon.is-on {
   border-color: var(--line-strong);
   background: var(--panel-2);
+}
+/* Touch targets as in Mail (.ml-icon): 28px with a mouse, 40px with a finger. */
+@media (pointer: coarse) {
+  .ca-icon {
+    width: 40px;
+    height: 40px;
+  }
 }
 .ca-spin {
   width: 10px;
@@ -4524,16 +4532,94 @@ button.cal-day.is-picked:not(.is-today) {
   color: var(--fg-bright);
 }
 
-/* Sidebar: a month to get around, and the calendars to show. */
+/* Sidebar: a month to get around, and the calendars to show. It is always in the DOM: beside the
+   calendar it grows and shrinks (its content keeps its width, so nothing reflows while it moves);
+   in a narrow window (.ca-main.is-narrow, under 720px) it is a pane of its own that slides in over the
+   calendar, and the calendar, never unmounted, slides out. Hidden, it is inert (and so is the calendar
+   behind it). The slide is off until the first measure and while the window switches between the two. */
+.ca-main {
+  position: relative;
+}
 .ca-side {
-  display: flex;
+  box-sizing: border-box;
   flex: none;
+  width: 211px;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--panel-solid);
+}
+.ca-side-in {
+  display: flex;
   flex-direction: column;
   gap: 14px;
+  box-sizing: border-box;
   width: 210px;
+  height: 100%;
   padding: 10px;
   overflow: auto;
-  border-right: 1px solid var(--line);
+}
+.ca-side.is-hidden {
+  width: 0;
+  border-right-width: 0;
+  visibility: hidden;
+}
+.ca-main.is-animated .ca-side {
+  transition:
+    width 0.22s cubic-bezier(0.22, 0.8, 0.26, 1),
+    border-right-width 0.22s,
+    visibility 0s;
+}
+.ca-main.is-animated .ca-side.is-hidden {
+  transition-delay: 0s, 0s, 0.22s;
+}
+.ca-side-back {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+}
+.ca-main.is-narrow {
+  overflow: hidden;
+}
+.ca-main.is-narrow .ca-side,
+.ca-main.is-narrow .ca-view {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  border-right: 0;
+}
+.ca-main.is-narrow .ca-side-in {
+  width: 100%;
+}
+.ca-main.is-narrow .ca-side {
+  transform: translateX(-100%);
+}
+.ca-main.is-narrow .ca-side:not(.is-hidden) {
+  transform: none;
+}
+.ca-main.is-narrow .ca-side.is-hidden {
+  width: auto;
+}
+.ca-main.is-narrow.has-side .ca-view {
+  transform: translateX(100%);
+}
+.ca-main.is-narrow.is-animated .ca-side,
+.ca-main.is-narrow.is-animated .ca-view {
+  transition:
+    transform 0.24s cubic-bezier(0.22, 0.8, 0.26, 1),
+    visibility 0s;
+}
+.ca-main.is-narrow.is-animated .ca-side.is-hidden {
+  transition-delay: 0s, 0.24s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ca-main.is-animated .ca-side,
+  .ca-main.is-animated .ca-view {
+    transition: none !important;
+  }
 }
 .ca-side-month-head {
   display: flex;
@@ -5352,6 +5438,51 @@ button.cal-day.is-picked:not(.is-today) {
   white-space: pre-wrap;
   word-break: break-all;
 }
+/* A web read that failed (src/apps/AgentsWebRecovery.tsx): the whole address, and the ways on. */
+.agt-recover {
+  padding: 6px 0 2px;
+}
+.agt-recover-title {
+  margin: 0 0 2px;
+  font-weight: 600;
+}
+.agt-recover-why {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.agt-recover-url {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 12px;
+}
+.agt-recover-url a {
+  color: var(--accent);
+}
+.agt-recover-actions {
+  flex-wrap: wrap;
+}
+.agt-recover-actions a.btn {
+  text-decoration: none;
+}
+.agt-recover-raw {
+  margin-top: 6px;
+}
+.agt-recover-raw summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.agt-paste-url {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+.agt-paste-box {
+  min-height: 140px;
+  resize: vertical;
+  box-sizing: border-box;
+}
 /* An email the agent wants to send or save (server/agentMail.ts): its text, whole, in the mail's own font size. */
 .agt-ask-mail {
   max-height: 360px;
@@ -5973,4 +6104,41 @@ button.cal-day.is-picked:not(.is-today) {
   margin: 0;
   border-top: 1px solid var(--line);
   max-height: 11em;
+}
+
+/* Swiping the Calendar from page to page on a touch screen (SwipePager.tsx): sideways is the pager's,
+   up and down the hours' own. At rest the track holds one page; during a swipe, the pages either
+   side with the one in view in the middle, moved by the finger with an inline transform. */
+.ca-pager {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Three pages side by side during a swipe must not widen what the pager sits in (the year's grid is wide). */
+  contain: inline-size;
+  touch-action: pan-y;
+}
+.ca-pager .ca-tg-scroll,
+.ca-pager .ca-year {
+  touch-action: pan-y;
+}
+.ca-pager-track {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.ca-pager-track.is-paged {
+  will-change: transform;
+}
+.ca-pager-track.is-settling {
+  pointer-events: none;
+}
+.ca-page {
+  display: flex;
+  flex: 0 0 100%;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }

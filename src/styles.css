@@ -13016,17 +13016,497 @@ html {
   }
 }
 
-/* Xed's opt-in msh debugger stays usable in narrow windows and with touch. */
-.xed-debug { flex: none; max-height: 36%; overflow: auto; padding: 6px 8px; border-top: 1px solid var(--line); background: var(--bg-dark); }
-.xed-debug-controls { display: flex; flex-wrap: wrap; gap: 4px; }
-.xed-debug button, .xed-debug select { color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); padding: 5px; font: inherit; max-width: 100%; overflow-wrap: anywhere; }
-.xed-debug button:disabled { opacity: .5; }
-.xed-debug pre { max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.xed-diagnostic { display: block; text-align: left; }
-@media (pointer: coarse) { .xed-debug-controls button, .xed-debug select { min-height: 36px; } }
+/* Xed's msh debugger: the run/step toolbar in the editor bar, breakpoint dots and the paused-line
+   arrow in the gutter, the paused line, the hover over variables and the panel under the editor. */
+.zed-main {
+  container: xed-main / inline-size;
+}
+/* Narrow windows scroll the editor bar sideways rather than cutting off its buttons. */
+.zed-crumbs {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.zed-crumb-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.xed-dbg-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.xed-dbg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.xed-dbg-btn:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--fg-bright);
+}
+.xed-dbg-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.xed-dbg-btn:focus-visible,
+.xed-dbg-tab:focus-visible,
+.xed-link:focus-visible,
+.xed-x:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.xed-dbg-btn.is-run {
+  color: var(--green);
+}
+.xed-dbg-btn.is-stop:not(:disabled) {
+  color: var(--red);
+}
+.xed-dbg-label {
+  color: var(--fg-bright);
+  font-size: 11.5px;
+}
+.xed-dbg-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 3px;
+  background: var(--line);
+}
+.xed-dbg-state {
+  max-width: 30ch;
+  margin-left: 6px;
+  padding: 1px 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+.xed-dbg-state.is-running {
+  border-color: color-mix(in srgb, var(--blue) 45%, transparent);
+  color: var(--blue);
+}
+.xed-dbg-state.is-paused {
+  border-color: color-mix(in srgb, var(--yellow) 55%, transparent);
+  color: var(--yellow);
+}
+.xed-dbg-state.is-completed {
+  color: var(--green);
+}
+.xed-dbg-state.is-failed {
+  color: var(--red);
+}
+.xed-dbg-short {
+  display: none;
+}
+@container xed-main (max-width: 620px) {
+  .xed-dbg-label,
+  .zed-crumb-heading,
+  .zed-crumbs > .muted {
+    display: none;
+  }
+  .xed-dbg-state {
+    max-width: 16ch;
+  }
+  /* The session picker gets its own row under the view tabs. */
+  .xed-dbg-head {
+    flex-wrap: wrap;
+  }
+  .xed-dbg-head .xed-dbg-tabs {
+    flex-basis: calc(100% - 40px);
+  }
+  .xed-dbg-head .xed-dbg-session {
+    order: 3;
+    flex: 1 1 100%;
+    margin-top: 0;
+  }
+}
+@container xed-main (max-width: 460px) {
+  .zed-crumb-file {
+    display: none;
+  }
+  /* Still read by screen readers. */
+  .xed-dbg-long {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .xed-dbg-short {
+    display: inline;
+  }
+  .xed-dbg-state {
+    margin-left: 2px;
+  }
+}
+/* Gutter: a breakpoint dot left of the number, the paused arrow right of it, separate columns. */
+.zed-gutter > div {
+  position: relative;
+}
+.zed-gutter.is-debug {
+  padding-left: 22px;
+  cursor: pointer;
+}
+.zed-gutter.is-debug > div::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: -17px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.zed-gutter.is-debug > div:hover::before {
+  background: color-mix(in srgb, var(--red) 35%, transparent);
+}
+.zed-gutter.is-debug > .has-bp::before {
+  background: var(--red);
+}
+.zed-gutter.is-debug > .has-bp.is-off::before {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--muted);
+}
+.zed-gutter.is-debug > .has-bp.is-dead::before {
+  background: color-mix(in srgb, var(--red) 25%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--red);
+}
+.zed-gutter > .is-paused {
+  color: var(--yellow);
+}
+.zed-gutter > .is-paused::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: -12px;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid var(--yellow);
+}
+.zed-gutter > .has-error {
+  color: var(--red);
+}
+.zed-pause-hl {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: color-mix(in srgb, var(--yellow) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--yellow);
+  pointer-events: none;
+}
+.zed-pause-hl.is-stale {
+  background: color-mix(in srgb, var(--yellow) 7%, transparent);
+  box-shadow: inset 2px 0 0 var(--yellow), inset 0 0 0 1px color-mix(in srgb, var(--yellow) 45%, transparent);
+}
+.xed-hover {
+  position: absolute;
+  z-index: 3;
+  max-width: min(60ch, 90%);
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-light);
+  color: var(--fg-bright);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+/* The panel under the editor: views in tabs, resized from its top edge like the terminal panel. */
+.xed-dbg {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 90px;
+  max-height: 70%;
+  border-top: 1px solid var(--line);
+  background: var(--bg-dark);
+  font-size: 12px;
+}
+.xed-dbg-head {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+.xed-dbg-tabs {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.xed-dbg-tab {
+  flex: none;
+  padding: 5px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.xed-dbg-tab:hover {
+  color: var(--fg-bright);
+}
+.xed-dbg-tab.is-active {
+  border-bottom-color: var(--accent);
+  color: var(--fg-bright);
+}
+.xed-dbg-count {
+  margin-left: 5px;
+  padding: 0 5px;
+  background: var(--panel-2);
+  font-size: 10.5px;
+}
+.xed-dbg-tab.has-problems .xed-dbg-count {
+  background: color-mix(in srgb, var(--red) 30%, transparent);
+  color: var(--fg-bright);
+}
+.xed-dbg-session {
+  flex: 0 1 190px;
+  min-width: 0;
+  margin: 3px 4px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.xed-dbg-caret,
+.xed-dbg-frame,
+.xed-dbg-warn {
+  flex: none;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.xed-dbg-caret {
+  font-family: var(--mono);
+}
+.xed-dbg-warn {
+  background: color-mix(in srgb, var(--yellow) 8%, transparent);
+  color: var(--yellow);
+}
+.xed-dbg-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 10px;
+  font-family: var(--mono);
+}
+.xed-dbg-output {
+  margin: 0;
+  color: var(--text);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.xed-dbg-empty {
+  margin: 2px 0 6px;
+  color: var(--muted);
+}
+.xed-vars {
+  width: 100%;
+  border-collapse: collapse;
+}
+.xed-vars th,
+.xed-vars td {
+  padding: 1px 10px 1px 0;
+  font-weight: normal;
+  text-align: left;
+  vertical-align: top;
+}
+.xed-vars th {
+  width: 1%;
+  white-space: nowrap;
+}
+.xed-var-name {
+  color: var(--blue);
+}
+.xed-var-value {
+  color: var(--fg-bright);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.xed-var-error {
+  color: var(--muted);
+  font-style: italic;
+}
+.xed-var-tag {
+  margin-left: 6px;
+  color: var(--magenta);
+  font-size: 10.5px;
+}
+.xed-var-note {
+  display: block;
+  color: var(--yellow);
+  font-size: 11px;
+}
+.xed-link,
+.xed-x {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.xed-link:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.xed-x {
+  min-width: 20px;
+  color: var(--muted);
+  text-align: center;
+}
+.xed-x:hover {
+  color: var(--red);
+}
+.xed-bps,
+.xed-watches,
+.xed-stack {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.xed-bps li,
+.xed-watches li,
+.xed-stack li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+.xed-watches li > .xed-var-value,
+.xed-watches li > .xed-var-error,
+.xed-watches li > .muted {
+  flex: 1;
+  min-width: 0;
+}
+.xed-bps li.is-off .xed-link {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.xed-bp-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xed-bp-note {
+  color: var(--yellow);
+  font-size: 11px;
+}
+.xed-stack li.is-top .xed-frame-name {
+  color: var(--yellow);
+}
+.xed-dbg-actions,
+.xed-watch-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.xed-dbg-actions button,
+.xed-watch-add button {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.xed-dbg-actions button:disabled,
+.xed-watch-add button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.xed-watch-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg-bright);
+  font: inherit;
+}
+.xed-diagnostic {
+  display: block;
+  color: var(--red);
+}
+.xed-status-debug {
+  display: inline-flex;
+  gap: 3px;
+}
+.xed-status-debug.has-problems {
+  color: var(--red);
+}
+@media (pointer: coarse) {
+  .zed-crumbs {
+    height: auto;
+    min-height: 30px;
+  }
+  .xed-dbg-btn {
+    min-width: 36px;
+    height: 36px;
+  }
+  .xed-dbg-tab {
+    padding: 10px 12px;
+  }
+  .xed-dbg-session {
+    min-height: 36px;
+  }
+  .xed-bps li,
+  .xed-watches li,
+  .xed-stack li {
+    min-height: 36px;
+  }
+  .xed-x {
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .xed-dbg-actions button,
+  .xed-watch-add button,
+  .xed-watch-add input {
+    min-height: 36px;
+  }
+}
 /* Widget content can grow without moving its grip or any neighbouring widget. */
 .window.chrome-note.widget .window-body {
   max-height: var(--widget-body-max);
   overflow: auto;
   overscroll-behavior: contain;
 }
+
+.xed-vars .is-changed .xed-var-value { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.xed-var-previous { color: var(--muted); }
+.xed-dbg-frame { font-size: 11px; color: var(--muted); }
+.xed-vars caption { text-align: left; overflow-wrap: anywhere; color: var(--muted); }
+
+/* Static shell intelligence uses the same theme and wraps on touch-sized editors. */
+.xed-symbols { flex: none; border-top: 1px solid var(--line); font-size: 11px; }
+.xed-symbol-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 8px; align-items: center; }
+.xed-symbol-actions button, .xed-symbol-details button { color: var(--accent); background: var(--bg); border: 1px solid var(--line); border-radius: 3px; font: inherit; padding: 4px 6px; cursor: pointer; }
+.xed-symbol-actions button:disabled { opacity: .45; cursor: default; }
+.xed-symbol-summary { min-width: 0; overflow-wrap: anywhere; color: var(--muted); }
+.xed-symbol-details { padding: 0 8px 6px; max-height: 150px; overflow: auto; overflow-wrap: anywhere; }
+.xed-symbol-details p { margin: 4px 0; }
+.xed-symbol-details ul { list-style: none; margin: 0; padding: 0; }
+.xed-symbol-details li { margin: 3px 0; }
+.xed-symbol-details button { text-align: left; max-width: 100%; overflow-wrap: anywhere; }
+@media (pointer: coarse) { .xed-symbols button { min-height: 36px; } }

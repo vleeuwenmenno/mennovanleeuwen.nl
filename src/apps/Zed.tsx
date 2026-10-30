@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import { useWM, type WinState } from '../os/wm'
 import { fileKind, HOME, KIND_LABEL, kindOfName, lookup as siteLookup, prettyPath, type DirNode, type Node } from '../terminal/vfs'
 import { lookup, makeDir, MAX_TEXT, prepare, readFileText, removePath, touchFile, transfer, walk } from '../terminal/fs'
@@ -15,9 +15,11 @@ import { Terminal } from './Terminal'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useMediaQuery } from '../os/useMediaQuery'
 import { MarkdownPreview } from '../data/markdown/MarkdownPreview'
-import { XedDebug, MshHighlight, isMsh } from './XedDebug'
+import { MshHighlight, isMsh, useXedDebug, XedDebugPanel, XedDebugToolbar } from './XedDebug'
+import { breakpointsIn, editorBreakpoints, moveBreakpoints, removeBreakpoints, shiftBreakpoints, subscribeDebug, debugRevision } from '../terminal/msh/debug'
 import { analyzeMsh } from '../terminal/msh/analysis'
 import { toUi } from '../os/uiScale'
+import { useXedSymbols, XedSymbolsPanel } from './XedSymbols'
 
 // The Markdown preview moved to its own module; other apps still import it from here.
 export { MarkdownPreview }
@@ -225,6 +227,7 @@ export function Zed({ win }: { win: WinState }) {
   const clip = useClipboard()
   const text = useRef<HTMLTextAreaElement>(null)
   const editor = useRef<HTMLDivElement>(null)
+  const selectionRevision = useRef(0)
   const rootEl = useRef<HTMLDivElement>(null)
   useEdgeSwipe(rootEl, { enabled: narrow, open: drawer, onOpen: () => setDrawer(true), onClose: () => setDrawer(false) })
   const findInput = useRef<HTMLInputElement>(null)
@@ -239,6 +242,7 @@ export function Zed({ win }: { win: WinState }) {
 
   /** Opens a file in a tab (or focuses its tab); answers the path it is open under. */
   const openFile = (raw: string, at?: Omit<Jump, 'path'>) => {
+    selectionRevision.current++
     const path = normalize(raw)
     setTabs((ts) => (ts.includes(path) ? ts : [...ts, path]))
     const { sf, browser } = locate(path)
@@ -385,40 +389,54 @@ export function Zed({ win }: { win: WinState }) {
     if (active === path) setActive(rest[Math.min(i, rest.length - 1)] ?? null)
   }
 
-  const save = () => {
-    if (!buf || !active) return
+  /** Saves the active file; resolves true once it is saved (Run waits for this). */
+  const save = async (): Promise<boolean> => {
+    if (!buf || !active) return false
     const { sf, ro } = locate(active)
     if (sf) {
-      if (buf.loading || buf.error) return
-      if (ro) return setStatus(`Not saved: ${libraryName(parseSf(sf)!.repo)} is read-only for you`)
+      if (buf.loading || buf.error) return false
+      if (ro) {
+        setStatus(`Not saved: ${libraryName(parseSf(sf)!.repo)} is read-only for you`)
+        return false
+      }
       const path = active
       const text = buf.text
       setStatus(`Saving ${where(path)}…`)
-      writeText(sf, text)
+      return writeText(sf, text)
         .then(() => {
           setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
           setStatus(`Saved ${where(path)} to Seafile`)
+          return true
         })
-        .catch((e: Error) => setStatus(`Not saved: ${e.message}`))
-      return
+        .catch((e: Error) => {
+          setStatus(`Not saved: ${e.message}`)
+          return false
+        })
     }
     if (locate(active).browser) {
-      if (buf.loading || buf.error) return
+      if (buf.loading || buf.error) return false
       const path = active
       const text = buf.text
-      saveText(path, text)
+      return saveText(path, text)
         .then(() => {
           setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
           setStatus(`Saved ${prettyPath(path)} in this browser`)
           // Once per device: where it went, and what that means.
           notify({ title: 'Saved in this browser only', body: "Files in ~ are kept in this browser until Seafile is set up: clearing the site's data deletes them.", action: { app: 'settings', props: { section: 'integrations', sub: 'seafile' } }, once: 'browser-files-first-save', transient: true })
+          return true
         })
-        .catch((e: Error) => setStatus(`Not saved: ${e.message}`))
-      return
+        .catch((e: Error) => {
+          setStatus(`Not saved: ${e.message}`)
+          return false
+        })
     }
-    if (!write(active, buf.text)) return setStatus('Read-only file system. Only /tmp, ~ and Seafile are writable.')
+    if (!write(active, buf.text)) {
+      setStatus('Read-only file system. Only /tmp, ~ and Seafile are writable.')
+      return false
+    }
     setBuffers((bs) => ({ ...bs, [active]: { ...bs[active], saved: bs[active].text } }))
     setStatus(`Saved ${prettyPath(active)}`)
+    return true
   }
 
   // --- project panel: changing files ------------------------------------------------------------
@@ -427,6 +445,7 @@ export function Zed({ win }: { win: WinState }) {
   const rekey = (from: string, to: string) => {
     const move = (p: string) => (p === from ? to : p.startsWith(`${from}/`) ? to + p.slice(from.length) : p)
     const moveKeys = <T,>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [move(k), v]))
+    moveBreakpoints(from, to)
     setTabs((ts) => ts.map(move))
     setActive((a) => a && move(a))
     setSel((s) => s && move(s))
@@ -438,6 +457,7 @@ export function Zed({ win }: { win: WinState }) {
   /** Tabs of something deleted close (the dialog said their changes go too). */
   const forget = (path: string) => {
     const keep = <T,>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).filter(([k]) => !inside(k, path)))
+    for (const p of new Set(editorBreakpoints().map((b) => b.path))) if (inside(p, path)) removeBreakpoints(p)
     setTabs((ts) => ts.filter((t) => !inside(t, path)))
     setBuffers(keep)
     setViews(keep)
@@ -690,11 +710,21 @@ export function Zed({ win }: { win: WinState }) {
     onLocked: (sf) => wm.openNew('files', { path: sf }),
   }
 
-  const edit = (value: string) => active && setBuffers((bs) => ({ ...bs, [active]: { ...bs[active], text: value } }))
+  const edit = (value: string) => {
+    selectionRevision.current++
+    if (!active) return
+    if (buf && breakpointsIn(active).size) followEdit(active, buf.text, value)
+    dbg.edited(active, value)
+    setBuffers((bs) => ({ ...bs, [active]: { ...bs[active], text: value } }))
+  }
 
+  /** Each file's last selection, so the debugger can show another file and come back without losing it. */
+  const carets = useRef(new Map<string, { start: number; end: number }>())
   const track = () => {
+    selectionRevision.current++
     const el = text.current
     if (!el) return
+    if (active && active !== SEARCH) carets.current.set(active, { start: el.selectionStart, end: el.selectionEnd })
     const before = el.value.slice(0, el.selectionStart)
     const line = before.split('\n').length - 1
     setCursor({ line, col: before.length - before.lastIndexOf('\n') - 1 })
@@ -705,6 +735,97 @@ export function Zed({ win }: { win: WinState }) {
   const togglePreview = (split = false) => {
     if (!active || !markdown) return
     setViews((v) => ({ ...v, [active]: (v[active] ?? 'edit') === 'edit' ? (split ? 'split' : 'preview') : 'edit' }))
+  }
+
+  // --- the msh debugger ------------------------------------------------------------------------------
+  useSyncExternalStore(subscribeDebug, debugRevision)
+  /** switched: another file's editor replaces this one; focus: the editor had the keyboard focus. */
+  const [revealAt, setRevealAt] = useState<{ path: string; line: number; switched: boolean; focus: boolean } | null>(null)
+  /**
+   * A pause in some file: its tab comes to the front (opened if needed) and scrolls to the line. The
+   * file's own selection comes back when it is shown again (stepping out to the caller), and the
+   * editor keeps the keyboard focus if it had it.
+   */
+  const revealSource = (raw: string, line: number) => {
+    const path = normalize(raw)
+    const el = text.current
+    const switched = path !== active
+    const focus = !!el && document.activeElement === el
+    if (switched && el && active && active !== SEARCH) carets.current.set(active, { start: el.selectionStart, end: el.selectionEnd })
+    if (!tabs.includes(path)) openFile(path)
+    else setActive(path)
+    setViews((v) => (v[path] === 'preview' ? { ...v, [path]: 'edit' } : v))
+    setRevealAt((r) => ({ path, line, switched: switched || (!!r && r.switched), focus: focus || (!!r && r.focus) }))
+  }
+  const revealLoading = !!revealAt && !!buffers[revealAt.path]?.loading
+  useEffect(() => {
+    const view = editor.current
+    if (!revealAt || revealAt.path !== active || !view || revealLoading) return
+    const el = text.current
+    if (revealAt.switched && el) {
+      const saved = carets.current.get(revealAt.path)
+      if (saved) {
+        const n = el.value.length
+        el.setSelectionRange(Math.min(saved.start, n), Math.min(saved.end, n))
+        const before = el.value.slice(0, el.selectionStart)
+        setCursor({ line: before.split('\n').length - 1, col: before.length - before.lastIndexOf('\n') - 1 })
+      }
+      if (revealAt.focus) el.focus({ preventScroll: true })
+    }
+    const top = PAD + revealAt.line * LINE
+    if (top < view.scrollTop + LINE || top + LINE * 2 > view.scrollTop + view.clientHeight) view.scrollTop = Math.max(0, top - view.clientHeight / 2)
+    setRevealAt(null)
+  }, [revealAt, active, revealLoading])
+  const caretOffset = useMemo(() => (buf ? buf.text.split('\n').slice(0, cursor.line).reduce((n, l) => n + l.length + 1, 0) + cursor.col : 0), [buf?.text, cursor.line, cursor.col])
+  const dbg = useXedDebug({
+    path: active && active !== SEARCH ? active : null,
+    text: buf?.text ?? '',
+    dirty: !!buf && buf.text !== buf.saved,
+    ready: !!buf && !buf.loading && !buf.error,
+    root,
+    caret: caretOffset,
+    save,
+    reveal: revealSource,
+    say: setStatus,
+    lineHeight: LINE,
+    pad: PAD,
+  })
+  const intelligence = useXedSymbols({
+    path: active && active !== SEARCH ? active : null, buffers, root, caret: caretOffset,
+    go: (path, line, col, len) => openFile(path, { line, col, len }),
+    insert: c => {
+      const el = text.current
+      if (!el || !buf || el.selectionStart !== c.caret) return
+      edit(buf.text.slice(0, c.start) + c.insertText + buf.text.slice(c.end))
+      const revision = selectionRevision.current
+      requestAnimationFrame(() => {
+        if (text.current !== el || selectionRevision.current !== revision) return
+        el.focus(); el.setSelectionRange(c.start + c.insertText.length, c.start + c.insertText.length); track()
+      })
+    },
+    say: setStatus, lineHeight: LINE, pad: PAD,
+  })
+  const points = active && dbg.msh ? breakpointsIn(active) : null
+  const errorLines = new Set(mshAnalysis?.diagnostics.map((d) => d.line) ?? [])
+
+  /** The debugger's keys, as in VS Code. F5 and Shift+F5 are always Xed's here (no page reload with unsaved work); the others only around msh. */
+  const debugKey = (e: globalThis.KeyboardEvent) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || !/^F(5|6|9|10|11)$/.test(e.key)) return false
+    if (e.key === 'F10' && e.shiftKey) return false // the context menu key
+    if (e.key !== 'F5' && !dbg.msh && !dbg.session) return false
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.repeat) return true
+    if (e.key === 'F5') {
+      if (e.shiftKey) dbg.actions.stop()
+      else if (!dbg.paused && dbg.runnable && dbg.state !== 'running') setStatus(`F5 runs msh scripts: ${dbg.runnable}`)
+      else dbg.actions.run()
+    } else if (e.key === 'F6') dbg.actions.pause()
+    else if (e.key === 'F9') dbg.actions.toggleBreakpoint(cursor.line)
+    else if (e.key === 'F10') dbg.actions.stepOver()
+    else if (e.shiftKey) dbg.actions.stepOut()
+    else dbg.actions.stepInto()
+    return true
   }
 
   const onKey = (e: globalThis.KeyboardEvent) => {
@@ -745,6 +866,11 @@ export function Zed({ win }: { win: WinState }) {
   }
 
   const onEditorKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (intelligence.enabled && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key.toLowerCase() === 'g' || e.key === 'ArrowLeft')) {
+      e.preventDefault(); e.stopPropagation(); if (e.key === 'ArrowLeft') intelligence.back(); else intelligence.definition(); return
+    }
+    if (intelligence.enabled && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'Space') { e.preventDefault(); e.stopPropagation(); intelligence.complete(); return }
+    if (e.key === 'Escape' && intelligence.expanded) { intelligence.setExpanded(false); return }
     if (e.key === 'Escape' && find) return closeFind(false)
     if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey) return
     e.preventDefault()
@@ -767,15 +893,24 @@ export function Zed({ win }: { win: WinState }) {
   // but leave typing in another app's field (Spotlight, say) alone.
   const keys = useRef(onKey)
   keys.current = onKey
+  const debugKeys = useRef(debugKey)
+  debugKeys.current = debugKey
   useEffect(() => {
     if (wm.focusedPid !== win.pid) return
-    const listen = (e: globalThis.KeyboardEvent) => {
+    const outside = () => {
       const el = document.activeElement
-      if (el && !rootEl.current?.contains(el) && el.matches('input, textarea, [contenteditable]')) return
-      keys.current(e)
+      return !!el && !rootEl.current?.contains(el) && el.matches('input, textarea, [contenteditable]')
     }
+    const listen = (e: globalThis.KeyboardEvent) => !outside() && keys.current(e)
+    // The debugger's keys are caught on the way down, before anything inside Xed (the terminal panel
+    // running nano, say) can take them; every other key is left to the normal order.
+    const debug = (e: globalThis.KeyboardEvent) => !outside() && debugKeys.current(e)
+    window.addEventListener('keydown', debug, true)
     window.addEventListener('keydown', listen)
-    return () => window.removeEventListener('keydown', listen)
+    return () => {
+      window.removeEventListener('keydown', debug, true)
+      window.removeEventListener('keydown', listen)
+    }
   }, [wm.focusedPid, win.pid])
 
   const closePicker = () => {
@@ -880,6 +1015,7 @@ export function Zed({ win }: { win: WinState }) {
                   </>
                 )}
                 <span className="spacer" />
+                <XedDebugToolbar ctl={dbg} />
                 {markdown && (
                   <button
                     className={`zed-icon-btn ${view !== 'edit' ? 'is-on' : ''}`}
@@ -950,15 +1086,40 @@ export function Zed({ win }: { win: WinState }) {
               <div className={`zed-panes is-${view}`}>
                 {view !== 'preview' && (
                   <div className="zed-editor" key={active} ref={editor}>
-                    <div className="zed-gutter" aria-hidden>
-                      {lines.map((_, i) => (
-                        <div key={i} className={i === cursor.line ? 'is-current' : ''}>
-                          {i + 1}
-                        </div>
-                      ))}
+                    {/* msh files: clicking a line's gutter toggles its breakpoint (F9 and the Breakpoints list do it from the keyboard). */}
+                    <div
+                      className={`zed-gutter ${points ? 'is-debug' : ''}`}
+                      aria-hidden
+                      onClick={
+                        points
+                          ? (e) => {
+                              const row = (e.target as HTMLElement).closest<HTMLElement>('[data-line]')
+                              if (row) dbg.actions.toggleBreakpoint(Number(row.dataset.line))
+                            }
+                          : undefined
+                      }
+                    >
+                      {lines.map((_, i) => {
+                        const bp = points?.get(i + 1)
+                        const cls = [
+                          i === cursor.line ? 'is-current' : '',
+                          bp === undefined ? '' : bp ? 'has-bp' : 'has-bp is-off',
+                          bp !== undefined && mshAnalysis?.commands && !mshAnalysis.commands.has(i + 1) ? 'is-dead' : '',
+                          dbg.pausedLine === i + 1 ? 'is-paused' : '',
+                          errorLines.has(i + 1) ? 'has-error' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')
+                        return (
+                          <div key={i} data-line={points ? i : undefined} className={cls || undefined}>
+                            {i + 1}
+                          </div>
+                        )
+                      })}
                     </div>
                     <div className="zed-code" style={{ height: lines.length * LINE + PAD * 2 }}>
                       <div className="zed-line-hl" style={{ top: PAD + cursor.line * LINE }} />
+                      {dbg.pausedLine !== null && <div className={`zed-pause-hl ${dbg.differs ? 'is-stale' : ''}`} style={{ top: PAD + (dbg.pausedLine - 1) * LINE }} title={dbg.differs ? 'Paused here in the running source, which differs from this text' : undefined} />}
                       {find?.query && findMatches.length > 0 && (
                         <pre className="zed-hl zed-marks" aria-hidden>
                           <Marks text={buf.text} at={findMatches} len={find.query.length} current={current} />
@@ -984,10 +1145,13 @@ export function Zed({ win }: { win: WinState }) {
                           track()
                         }}
                         onKeyDown={onEditorKey}
-                        onKeyUp={track}
-                        onClick={track}
+                        onKeyUp={() => { track(); intelligence.leave() }}
+                        onClick={e => { intelligence.click(e); track() }}
                         onSelect={track}
+                        onMouseMove={e => { if (dbg.paused) dbg.hoverAt(e); intelligence.hover(e) }}
+                        onMouseLeave={() => { dbg.hoverOut(); intelligence.leave() }}
                       />
+                      {dbg.hoverTip}
                     </div>
                   </div>
                 )}
@@ -1001,6 +1165,8 @@ export function Zed({ win }: { win: WinState }) {
           ) : (
             <Welcome root={root} onOpen={openFile} onProject={() => setPicker('project')} />
           )}
+          <XedSymbolsPanel ctl={intelligence} />
+          {dbg.open && (dbg.msh || dbg.session) && <XedDebugPanel ctl={dbg} path={active && active !== SEARCH ? active : null} caretLine={cursor.line} diagnostics={mshAnalysis?.diagnostics ?? []} commands={mshAnalysis?.commands ?? null} jump={(path, line, col) => openFile(path, { line, col, len: 0 })} />}
           {terms.length > 0 && (
             <div className="zed-dock" style={{ height: dockH, display: dock ? undefined : 'none' }}>
               <div className="zed-dock-grip" onPointerDown={resizeDock} role="separator" aria-orientation="horizontal" aria-label="Resize the terminal panel" />
@@ -1040,7 +1206,6 @@ export function Zed({ win }: { win: WinState }) {
         </section>
       </div>
 
-      <XedDebug path={active === SEARCH ? null : active} text={buf?.text ?? ''} saved={!!buf && !buf.loading && !buf.error && buf.text === buf.saved} root={root} line={cursor.line} jump={(path, line, col) => openFile(path, { line, col, len: 0 })} />
       <footer className="zed-status">
         <button className={`zed-status-btn zed-status-icon ${showPanel ? 'is-on' : ''}`} onClick={togglePanel} title={`${showPanel ? 'Hide' : 'Show'} the project panel (Ctrl+B${narrow ? ', or swipe in from the left' : ''})`} aria-label="Toggle project panel" aria-pressed={showPanel}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -1063,6 +1228,20 @@ export function Zed({ win }: { win: WinState }) {
             <span>{kind === 'markdown' ? 'Markdown' : kind && KIND_LABEL[kind] !== 'Text' ? KIND_LABEL[kind] : 'Plain Text'}</span>
             <span>{place?.ro ? 'read-only' : place?.sf ? 'Seafile' : 'UTF-8'}</span>
           </>
+        )}
+        {(dbg.msh || dbg.session) && (
+          <button
+            className={`zed-status-btn zed-status-icon xed-status-debug ${dbg.open ? 'is-on' : ''} ${mshAnalysis?.diagnostics.length ? 'has-problems' : ''}`}
+            onClick={() => dbg.setOpen(!dbg.open)}
+            title={`${dbg.open ? 'Hide' : 'Show'} the debug panel${mshAnalysis?.diagnostics.length ? ` (${mshAnalysis.diagnostics.length} problem)` : ''}`}
+            aria-label="Toggle debug panel"
+            aria-pressed={dbg.open}
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden>
+              <path d="M5.5 5.5h5v5.5a2.5 2.5 0 0 1-5 0zM6.5 5.5a1.5 1.5 0 0 1 3 0M3 8h2.5M10.5 8H13M3.5 12l2-1M12.5 12l-2-1M3.5 4.5l2 1.5M12.5 4.5l-2 1.5" />
+            </svg>
+            {mshAnalysis?.diagnostics.length ? <span>{mshAnalysis.diagnostics.length}</span> : null}
+          </button>
         )}
         <button className={`zed-status-btn zed-status-icon ${dock ? 'is-on' : ''}`} onClick={toggleDock} title={`${dock ? 'Hide' : 'Show'} the terminal (Ctrl+\`)`} aria-label="Toggle terminal panel" aria-pressed={dock}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1480,6 +1659,26 @@ function Welcome({ root, onOpen, onProject }: { root: string; onOpen: (p: string
 // --- Highlighting --------------------------------------------------------------------------------
 // Line based, like a tree-sitter grammar would colour it: headings, quotes, list markers, fences,
 // and inline code, bold, italics and links. Every character stays put so the caret lines up.
+
+/** Breakpoints of `path` follow an edit from `before` to `after`: lines inserted or removed above them move them. */
+function followEdit(path: string, before: string, after: string) {
+  const max = Math.min(before.length, after.length)
+  let p = 0
+  while (p < max && before.charCodeAt(p) === after.charCodeAt(p)) p++
+  let s = 0
+  while (s < max - p && before.charCodeAt(before.length - 1 - s) === after.charCodeAt(after.length - 1 - s)) s++
+  const newlines = (t: string, from: number, to: number) => {
+    let n = 0
+    for (let i = from; i < to; i++) if (t.charCodeAt(i) === 10) n++
+    return n
+  }
+  const removed = newlines(before, p, before.length - s)
+  const added = newlines(after, p, after.length - s)
+  if (removed === added) return
+  // A change that starts mid-line leaves that line where it is; lines after it move.
+  const line = newlines(before, 0, p) + 1
+  shiftBreakpoints(path, p === 0 || before[p - 1] === '\n' ? line : line + 1, removed, added)
+}
 
 function Marks({ text, at, len, current }: { text: string; at: number[]; len: number; current: number }) {
   const out: ReactNode[] = []
