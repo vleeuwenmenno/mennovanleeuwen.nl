@@ -6,7 +6,7 @@ import { accountGuard } from '../../os/accountSpace'
 import { isMobile, useIsMobile } from '../../os/useIsMobile'
 import { useWM, type WinState } from '../../os/wm'
 import { defaultBuild } from './defaults'
-import { hasGrant, allowRevision, revokeRevision, installations, type Revision } from './installations'
+import { hasGrant, allowRevision, revokeRevision, installations, installationVersion, useInstallationPresence, type Revision } from './installations'
 import { isWidgetKind, supportsCapabilities, descriptor, verifySnapshot, sourceIdentityOf, type Capability, type Descriptor, type Snapshot, type WidgetInput } from './package'
 import { allowNativeText, applyPackageEdit, projectNote, sameNote } from './noteTransactions'
 import { Renderer } from './Renderer'
@@ -39,6 +39,8 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const records = installations.use()
   const kind = isWidgetKind(win.props.kind) ? win.props.kind : 'weather'
   const current = records[id]
+  const unavailable = useInstallationPresence(id) && !current
+  const version = installationVersion(id)
   const note = kind === 'sticky' ? all.find(n => n.id === id) : undefined
   const alive = !!note && !note.deleted && !note.purged
   const visible = useRuntimeVisible() && !win.minimized
@@ -54,13 +56,13 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const [domainPage,setDomainPage]=useState(0)
   const [broker,setBroker]=useState<{identity:string;value:BrokerPresentation}|null>(null)
   const [pages, setPages] = useState<number[]>([0])
-  const revision: Revision | null = current ? verified?.current === current ? verified.revision : null : builtin ? { source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: builtin } : null
+  const revision: Revision | null = current ? verified?.current === current ? verified.revision : null : !unavailable && builtin ? { source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: builtin } : null
   const permitted = revision && hasGrant(id, revision)
-  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, current?.generation, consent])
+  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent])
   const latest = useRef({ identity, visible })
   latest.current = { identity, visible }
   const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && !isMobile() && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id
-  const validNow = (expected = identity) => eligible() && latest.current.identity === expected && !!revision && hasGrant(id, revision) && installations.get()[id]?.generation === current?.generation
+  const validNow = (expected = identity) => eligible() && latest.current.identity === expected && !!revision && hasGrant(id, revision) && installationVersion(id).identity === version.identity
   const weather = usePackageForecast(id, kind === 'weather' && visible && !!permitted && !!revision?.snapshot.manifest.capabilities.includes('weather.read'), tick, identity, () => validNow())
   const domain = ['agenda','inbox','status','minecraft'].includes(kind)
   const presentedBroker = broker?.identity===identity?broker.value:undefined
@@ -151,6 +153,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       {domainPaging&&<div className="wp-controls" aria-label="Data pages"><span>{domainPaging.shown} of {domainPaging.total} · page {domainPaging.page+1}/{domainPaging.pages}</span><button disabled={domainPaging.page===0} onClick={()=>setDomainPage(domainPaging.page-1)}>Previous results</button><button disabled={domainPaging.page+1>=domainPaging.pages} onClick={()=>setDomainPage(domainPaging.page+1)}>Next results</button></div>}
       {!shown && <span>Loading widget…</span>}
     </>}
+    {unavailable && <p role="status">Installed metadata unavailable. Rebuild default or source in Source, then activate explicitly to repair.</p>}
     {error && <p role="status">{error}</p>}
   </div>
 }

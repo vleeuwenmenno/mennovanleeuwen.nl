@@ -4372,6 +4372,7 @@ The four domain packages own their headings, item layout, states, details and su
 Capabilities distinguish read data from actions (`agenda.act`, `inbox.navigate`,
 `status.navigate`, `minecraft.act`); action capabilities require the matching read capability.
 Resource handles bind account/connection authority, instance, revision and exact displayed input.
+The live installation identity is rechecked synchronously, including equal-generation conflicts.
 The renderer checks current grants and resource type at every interaction. Provider refs,
 credentials and navigation URLs stay outside the VM. Clipboard writes copy only the fixed
 Minecraft address following a user gesture. Shared reads are scoped to account/connection
@@ -4402,13 +4403,16 @@ removals from legacy config/placements/installations and desktop/mobile layouts.
 remain intact for older clients; later legacy writes cannot overwrite canonical state or resurrect
 removed widgets. Browser source authority still requires this device's store UUID.
 
+Malformed installation metadata stays unavailable until an explicit verified activation repairs it;
+it never selects a default. Unknown records remain in the envelope and its byte budget.
 Hidden/mobile/minimized, unavailable source/runtime and unknown newer widget kinds never imply
 removal. Only an explicit close records a placement tombstone. Width/content-height sizing,
 regular-window two-axis sizing and the under-720-pixel hide rule stay unchanged. Previous revision
 recovery checks the current generation and active source/digest identity, rejecting conflicting
 newer installations; it never restores older config, placement or note contents. Same-revision
 activation retries reconcile idempotently. Config counters continue past known remote counters,
-and installation activation budgets the complete envelope rather than just package bytes.
+and installation activation budgets the complete envelope rather than just package bytes
+(480 KiB, at most twelve new installation records; existing records remain editable).
 
 **Staged gaps.** Calendar link/unlink and backlinks remain in the trusted menu/Notebook. Inline
 Sticky calendar chips and a narrow package calendar operation are still staged. TypeScript/TSX,
@@ -4534,7 +4538,7 @@ wins with a later change. Taking one off is final: its entry's key goes into a l
 keys, kept for good, so a browser or an old saved layout that still has the widget can't bring it
 back (a key is about 9 bytes, so 20,000 removals are under 200 KB). Putting a sticky back after
 taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync` checks
-these rules in memory. `PORT=5273 node scripts/widgets-sync-e2e.ts` checks migration,
+these rules in memory. `pnpm check:widgets-sync-ui` checks migration,
 cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
 accounts and data; it starts and stops its own server.
 Desktop widgets overlap freely. Dragging, resizing or growing one never pushes another aside;

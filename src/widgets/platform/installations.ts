@@ -18,9 +18,9 @@ export function mergeInstallations(local: Installations, remote: Installations):
   return out
 }
 function normalize(raw: unknown): Installations {
-  if (!record(raw)) return {}
-  const out: Installations = {}
-  for (const [id, value] of Object.entries(raw).slice(0, 32)) {
+  if (!record(raw)) return Object.create(null) as Installations
+  const out: Installations = Object.create(null) as Installations
+  for (const [id, value] of Object.entries(raw)) {
     if (/^[\w-]{1,80}$/.test(id) && record(value) && value.schema === 1 && value.instance === id && isWidgetKind(value.kind) && Number.isSafeInteger(value.generation) && Number(value.generation) > 0 && record(value.active) && record(value.active.source) && record(value.active.snapshot)) out[id] = value as Installation
   }
   return out
@@ -28,8 +28,15 @@ function normalize(raw: unknown): Installations {
 export const installations: Synced<Installations> = { ...canonicalInstallations, get: () => normalize(canonicalInstallations.get()), set: next => canonicalInstallations.set(all => { const current=normalize(all);return {...all,...(typeof next==='function'?next(current):next)} }), use: useInstallationRecords, onRemote: listener => canonicalInstallations.onRemote(raw=>listener(normalize(raw))) }
 function useInstallationRecords(){const raw=canonicalInstallations.use();return useMemo(()=>normalize(raw),[raw])}
 export const installation = (id: string) => installations.get()[id]
-export const installationIdentity = (value?: Installation) => JSON.stringify([value?.generation ?? 0, value?.active.snapshot.digest, value?.active.source])
-export async function activate(instance: string, kind: Installation['kind'], revision: Revision, expectedGeneration: number, expectedIdentity = installationIdentity(installation(instance))) {
+export const installationIdentity = (value?: Installation) => JSON.stringify([value?.generation ?? 0, value?.active.snapshot.digest, value?.active.source, value?.previous?.snapshot?.digest, value?.previous?.source])
+/** Presence is independent of validity: corrupt/unknown records must never select a default. */
+export const useInstallationPresence = (id: string) => Object.hasOwn(canonicalInstallations.use(), id)
+export function installationVersion(id: string) {
+  const raw = canonicalInstallations.get()[id]
+  const valid = normalize({ [id]: raw })[id]
+  return { generation: record(raw) && Number.isSafeInteger(raw.generation) && Number(raw.generation) > 0 ? Number(raw.generation) : 0, identity: valid ? installationIdentity(valid) : JSON.stringify(['unavailable', raw]) }
+}
+export async function activate(instance: string, kind: Installation['kind'], revision: Revision, expectedGeneration: number, expectedIdentity = installationVersion(instance).identity) {
   assertSource(revision.source)
   if (!accountGuard() || !getAccount().user) throw new Error('Sign in to install a package')
   const account = getAccount().user!.id
@@ -41,17 +48,19 @@ export async function activate(instance: string, kind: Installation['kind'], rev
   const fallback = { source: { kind: 'system' as const, path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }
   assertSource(revision.source)
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
-  let conflict = false
+  let conflict = ''
   installations.set(all => {
     const current = all[instance]
     if (current?.active.snapshot.digest === snapshot.digest && JSON.stringify(current.active.source) === JSON.stringify(revision.source)) return all
-    if ((current?.generation ?? 0) !== expectedGeneration || installationIdentity(current) !== expectedIdentity) { conflict = true; return all }
-    if (!current && Object.keys(all).length >= 12) { conflict = true; return all }
+    const version = installationVersion(instance)
+    if (version.generation !== expectedGeneration || version.identity !== expectedIdentity || !Number.isSafeInteger(expectedGeneration + 1)) { conflict = 'Installation changed; reload before activating'; return all }
+    const raw = canonicalInstallations.get()
+    if (!Object.hasOwn(raw, instance) && Object.keys(raw).length >= 12) { conflict = 'Installation limit reached (12 records); existing revisions remain editable'; return all }
     const next: Installations = { ...all, [instance]: { schema: 1, instance, kind, generation: expectedGeneration + 1, active: { source: revision.source, snapshot }, previous: current?.active ?? fallback } }
-    if (canonicalInstallationBytes(next) > 480 * 1024) { conflict = true; return all }
+    if (canonicalInstallationBytes({ ...raw, ...next }) > 480 * 1024) { conflict = 'Widget state exceeds the 480 KiB installation budget'; return all }
     return next
   })
-  if (conflict) throw new Error('Installation changed; reload before activating')
+  if (conflict) throw new Error(conflict)
 }
 export async function recover(instance: string, expectedGeneration: number, expectedIdentity = installationIdentity(installation(instance))) {
   const current = installation(instance)

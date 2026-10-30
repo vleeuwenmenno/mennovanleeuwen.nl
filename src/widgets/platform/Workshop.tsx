@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useWM, type WinState } from '../../os/wm'
 import { useAccount } from '../../os/account'
 import { defaultBuild } from './defaults'
-import { activate, allowRevision, installation, installationIdentity, installations, recover, type Revision } from './installations'
+import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, recover, type Revision } from './installations'
 import { isWidgetKind, buildPackage, descriptor, type Descriptor } from './package'
 import { cloneDefault, readSource, sourceIdentity, WIDGET_HOME } from './sources'
 import { execute } from './runtime'
@@ -22,8 +22,8 @@ export function Workshop({ win }: { win: WinState }) {
   const [message, setMessage] = useState('Clone the source folder, edit in Xed, build and preview with mocks, then activate explicitly.')
   const [optIn, setOptIn] = useState(false)
   const [busy, setBusy] = useState(false)
-  const generation = useRef(current?.generation ?? 0)
-  const expectedIdentity = useRef(installationIdentity(current))
+  const generation = useRef(instance ? installationVersion(instance).generation : 0)
+  const expectedIdentity = useRef(instance ? installationVersion(instance).identity : '')
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const run = async (action: () => Promise<void>) => {
@@ -34,8 +34,8 @@ export function Workshop({ win }: { win: WinState }) {
   const preview = async (value: Revision) => {
     const result = descriptor(await execute(value.snapshot, MOCK_INPUT))
     if (!mounted.current) return
-    generation.current = instance ? installation(instance)?.generation ?? 0 : 0
-    expectedIdentity.current = installationIdentity(instance ? installation(instance) : undefined)
+    generation.current = instance ? installationVersion(instance).generation : 0
+    expectedIdentity.current = instance ? installationVersion(instance).identity : ''
     setRevision(value); setView(result); setOptIn(false)
     setMessage(`Mock preview passed. Built ${value.snapshot.digest}. Source saves do not activate.`)
   }
@@ -65,7 +65,7 @@ export function Workshop({ win }: { win: WinState }) {
           await activate(instance, kind, revision, generation.current, expectedIdentity.current)
           allowRevision(instance, revision)
           generation.current = installation(instance)!.generation
-          expectedIdentity.current = installationIdentity(installation(instance))
+          expectedIdentity.current = installationVersion(instance).identity
           setMessage('Revision activated. The desktop now loads this immutable snapshot.'); setOptIn(false)
         })}>Activate built revision</button>
         <button disabled={busy || !current?.previous || !optIn || account.status !== 'user'} onClick={() => void run(async () => {
@@ -73,7 +73,7 @@ export function Workshop({ win }: { win: WinState }) {
           const active = installation(instance)!.active
           allowRevision(instance, active)
           generation.current = installation(instance)!.generation
-          expectedIdentity.current = installationIdentity(installation(instance))
+          expectedIdentity.current = installationVersion(instance).identity
           setMessage('Previous revision restored. Note contents, settings and placement unchanged.'); setOptIn(false)
         })}>Recover previous revision</button>
       </div>
