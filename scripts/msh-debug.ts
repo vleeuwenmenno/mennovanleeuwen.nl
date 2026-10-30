@@ -102,6 +102,30 @@ try {
     const edited = source.slice(0, c.start) + c.insertText + source.slice(c.end)
     eq((await run(edited)).stdout, 'hello\n', `literal command completion must not enable alias expansion: ${head}`)
   }
+  const continuation = '\\' + '\n'
+  const continuationCases: [string, string, string, string][] = [
+    ['continuation only', `deli${continuation}ver`, 'deliver', 'ALIAS hello\n'],
+    ['multiple continuations', `de${continuation}li${continuation}ver`, 'deliver', 'ALIAS hello\n'],
+    ['trailing continuation', `deliver${continuation}`, 'deliver', 'ALIAS hello\n'],
+    ['double quotes', `"deli${continuation}ver"`, '"deliver"', 'FUNCTION:hello\n'],
+    ['single quotes', `'deli${continuation}ver'`, "'deliver'", 'FUNCTION:hello\n'],
+    ['real escape', `de\\li${continuation}ver`, "'deliver'", 'FUNCTION:hello\n'],
+    ['mixed quotes', `deli${continuation}"ver"`, "'deliver'", 'FUNCTION:hello\n'],
+  ]
+  for (const [label, head, replacement, output] of continuationCases) {
+    const header = 'alias deliver="echo ALIAS"\ndeliver(p) { echo "FUNCTION:$p"; }\n'
+    const source = header + head + ' hello'
+    eq(await run(source), { stdout: output, stderr: '', status: 0 }, `continued command dispatch before completion: ${label}`)
+    const positions = new Set([head.length, 3, head.indexOf(continuation), head.indexOf(continuation) + 1, head.indexOf(continuation) + 2])
+    for (const caret of positions) {
+      const choices = symbols.completeSymbols(completionProject(source), '/tmp/complete', header.length + caret, ['printf'])
+      const c = choices.find((c: any) => c.name === 'deliver')
+      check(!!c && !choices.some((c: any) => c.name === 'printf'), `continued prefix matches at ${caret}: ${label}`)
+      const edited = c ? source.slice(0, c.start) + c.insertText + source.slice(c.end) : source
+      eq(edited, header + replacement + ' hello', `completion preserves normalized quoting at ${caret}: ${label}`)
+      eq(await run(edited), { stdout: output, stderr: '', status: 0 }, `completion preserves continued command dispatch at ${caret}: ${label}`)
+    }
+  }
   for (const [word, caret, completed] of [
     ['"$par"', 5, '"$parcel"'], ['"$par"', 3, '"$parcel"'],
     ['"${par}"', 6, '"${parcel}"'], ['"${par:-fallback}"', 5, '"${parcel:-fallback}"'],

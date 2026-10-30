@@ -161,6 +161,13 @@ function unquoteDelimiter(raw: string): { word: string; quoted: boolean } {
   return { word, quoted }
 }
 
+/** The lexer removes continuations from word spellings, leaving source offsets intact.
+ * An editor caret inside a removed pair has the same prefix as just before that pair. */
+export function stripContinuations(word: string, end = word.length): string {
+  if (word[end - 1] === '\\' && word[end] === '\n') end--
+  return word.slice(0, end).replace(/\\\n/g, '')
+}
+
 export function lex(src: string): Token[] {
   const out: Token[] = []
   const heredocs: { tok: Token & { k: 'word' }; strip: boolean }[] = []
@@ -233,7 +240,7 @@ export function lex(src: string): Token[] {
       else if (c === '`' || (c === '$' && (src[i + 1] === '(' || src[i + 1] === '{'))) i = skipNested(src, i)
       else i++
     }
-    const v = src.slice(start, i).replace(/\\\n/g, '')
+    const v = stripContinuations(src.slice(start, i))
     // `2>file`: digits right before a redirect are its file descriptor.
     if (/^\d$/.test(v) && (src[i] === '<' || src[i] === '>')) out.push({ k: 'io', v, start, end: i })
     else {

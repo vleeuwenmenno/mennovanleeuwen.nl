@@ -782,6 +782,8 @@ Command completion replaces the parsed literal word, including from inside or ju
 quotes. It preserves surrounding quotes and arguments, and normalizes mixed/escaped command
 spellings to a quoted literal so they still suppress aliases. Variable completion replaces only
 the referenced name; dynamic command expressions are never replaced with a literal command suggestion.
+Backslash-newline continuations use the lexer's normalization: continuations alone do not
+suppress aliases, while genuine quotes or escapes still do after completion.
 Parameters/locals shadow global suggestions, and another function's locals are not offered.
 
 Indexing uses the shared msh parser, including named parameters, assignments, local/export

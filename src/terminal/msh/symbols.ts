@@ -1,5 +1,5 @@
 import { analyzeMsh } from './analysis'
-import { childrenOf, nestedEnd, type Node } from './parse'
+import { childrenOf, nestedEnd, stripContinuations, type Node } from './parse'
 
 // Conservative static facts from the real msh grammar. A function is a dynamic scope, not a
 // JavaScript closure. Nothing here expands a word, evaluates an expression or reads a file.
@@ -210,11 +210,11 @@ export function completeSymbols(project: SymbolProject, path: string, offset: nu
   const start = span?.start ?? offset, end = span?.end ?? offset
   let prefix = '', quoteWord = ''
   if (span?.kind === 'command') {
-    const raw = file.text.slice(start, end)
+    const source = file.text.slice(start, end), raw = stripContinuations(source)
     if (literalWord(raw) === null) return [] // Never replace an expansion with a command name.
-    prefix = literalWord(raw.slice(0, offset - start), true) ?? ''
+    prefix = literalWord(stripContinuations(source, offset - start), true) ?? ''
     // Replace the whole parser word, retaining its outer quote style where possible.
-    // Mixed/escaped spellings stay quoted, preserving their suppression of aliases.
+    // Real quotes/escapes suppress aliases; removed continuations alone do not.
     if ((raw[0] === '"' || raw[0] === "'") && raw.at(-1) === raw[0] && raw.length >= 2) quoteWord = raw[0]
     else if (/['"\\]/.test(raw)) quoteWord = "'"
   } else if (variable) prefix = file.text.slice(start, offset)

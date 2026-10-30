@@ -674,6 +674,26 @@ try {
   const aliasedEdited = await completeAt(aliasedCompletion, aliasedCompletion.lastIndexOf('de\\l') + 4, 'deliver')
   expect(aliasedEdited.endsWith("'deliver' hello"), 'escaped completion stays quoted to preserve alias suppression', aliasedEdited)
   await runCompleted('hello\n', 'escaped completion invokes the function even when the same name has an alias')
+  const continuation = '\\' + '\n'
+  const continuedCases: [string, string, string, string][] = [
+    ['continuation only', `deli${continuation}ver`, 'deliver', 'ALIAS hello\n'],
+    ['double quotes', `"deli${continuation}ver"`, '"deliver"', 'FUNCTION:hello\n'],
+    ['single quotes', `'deli${continuation}ver'`, "'deliver'", 'FUNCTION:hello\n'],
+    ['real escape', `de\\li${continuation}ver`, "'deliver'", 'FUNCTION:hello\n'],
+    ['mixed quotes', `deli${continuation}"ver"`, "'deliver'", 'FUNCTION:hello\n'],
+  ]
+  for (const [label, head, replacement, output] of continuedCases) {
+    const header = 'alias deliver="echo ALIAS"\ndeliver(p) { echo "FUNCTION:$p"; }\n'
+    const source = header + head + ' hello'
+    await edit(source); await caretAt(source.length)
+    await runCompleted(output, `real continued command dispatch before completion: ${label}`)
+    for (const caret of [head.length, head.indexOf(continuation) + 1]) {
+      const edited = await completeAt(source, header.length + caret, 'deliver')
+      expect(edited === header + replacement + ' hello', `Ctrl+Space keeps continuation-normalized spelling at ${caret}: ${label}`, edited)
+      await page.waitFor(`document.querySelector('.window[data-test="a"] textarea.zed-input')?.selectionStart === ${header.length + replacement.length}`, 5000)
+      await runCompleted(output, `real Ctrl+Space preserves continued command dispatch at ${caret}: ${label}`)
+    }
+  }
   for (const word of ['"$par"', '"${par}"']) {
     const source = `parcel=hello\necho ${word}`
     const edited = await completeAt(source, source.indexOf('par', source.indexOf('\n')) + 2, 'parcel')
