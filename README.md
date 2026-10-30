@@ -4560,7 +4560,7 @@ right-click menu, and no text selection (except a sticky being edited). Desktop 
 dragged too; Settings → Appearance → Motion turns either off. Several icons dragged at once gather
 in a pile under the pointer with a count badge, like Finder, and fan back out into the arrangement
 they had, moved to where you drop them. Add widgets from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
-Today there are six: **Sticky note** (one of your notes, with checklists you can tick),
+Today there are six built-in kinds, plus **custom widgets** you make yourself (see below): **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that
 device; double-click or the menu opens the full **Weather** app), **Agenda** (Google Calendar and
@@ -4590,6 +4590,43 @@ first install. Recovery does not roll back note contents, settings or placement.
 generations reject a stale activation; imported build.json/dist output is ignored and rebuilt.
 Clone retries keep matching bytes, resume missing files and refuse to overwrite edits.
 Guests keep default widgets and their notes, but do not get writable source folders.
+
+### Custom widgets
+
+Besides the six built-ins, anyone signed in (or an agent working in their folders) can make **new**
+widgets from a package folder. Open **Widget Workshop** (Add widget → *New custom widget…*, All apps or
+Spotlight), pick a folder in your browser files or writable Seafile home (default
+`~/.local/share/mvlos/widgets/daily-tally`) and:
+
+1. **New custom widget template** writes a working starter (a daily tally counter that remembers
+   its total) and opens `src/main.js` in Xed. The same starter is a read-only example at
+   `/usr/share/mvlos/widgets/custom-template` and is printed in `SDK.md`.
+2. **Build & mock preview** validates the package and shows it with sample data.
+3. Tick the opt-in and **Activate as new widget**. This makes a new instance (`custom-xxxxxxxx`, an
+   installation record of kind `custom` with the same generation, previous-revision and
+   recovery rules as the built-ins), places it on the desktop and grants that exact revision for
+   this session. Window title, name and a minimum height come from the package manifest.
+
+Custom widgets run through the same loader, verifier, bounded VM and renderer as the built-ins
+(there is no second renderer) and sync through the same account state. They appear in *Add widget*
+(desktop menu, All apps, Spotlight) as long as their installation exists. Closing one only takes it
+off the desktop; add it again from the menu. **Remove this widget** in its Workshop deletes the
+installation (a synced tombstone, so other devices drop it too) and its saved state, after asking.
+The built-in six cannot be removed. At most 12 widget installations can exist per account; removed
+ones free their slot. Hidden/phone-sized screens run nothing, like every widget. A custom widget whose
+installation is missing, unreadable or removed elsewhere stays on the desktop and says so, with a
+button to the Workshop; it is never deleted or replaced by a default.
+
+A custom package has the single optional capability `custom.state`: a small per-widget JSON state of
+at most 4 KiB, read as `input.custom.state` and replaced only by a button event returning
+`{type:'custom.replace', state, expectedRevision}` (refused if the state changed meanwhile or is too
+large). Every package also sees the clock (`input.custom.now`, `input.custom.today`). There is no
+network, notes, other widget data or DOM. As for any fork, a revision never runs until you grant that
+exact revision for that instance in this session; after a reload the widget asks again
+(*Allow this revision…*) and **Pause access** withdraws it. **Reset saved state** in the Workshop
+clears the state. `pnpm check:widget-custom` covers manifest rules, the starter in the VM, the state
+limit and record merge/limits; `pnpm check:widget-custom-ui` runs the whole create, reload, use and remove
+flow in muted Chromium with scratch data.
 
 The first SDK accepts JavaScript modules, relative local imports and `@mvlos/widget` descriptors:
 column, row, text, button, native editor, action, link, image, dot, details and card. Styles accept spacing tokens only. No npm packages,
