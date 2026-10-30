@@ -131,7 +131,7 @@ try {
   try {
     await conflict.eval('window.__releaseMe()');await sleep(300)
     const evidence=await conflict.eval(`({target:JSON.parse(localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')),plan:localStorage.getItem('mvlos.u.1.widget-move:plain:v2'),done:localStorage.getItem('mvlos.u.1.widget-move:plain:done:v2')})`)
-    check('Different existing target cannot mark migration complete',!!evidence.plan&&!evidence.done&&evidence.target.value.configs.existing.value.days===4,evidence)
+    check('Preexisting legitimate target is preserved and marked complete',!evidence.plan&&evidence.done==='1'&&evidence.target.value.configs.existing.value.days===4,evidence)
   } finally {await conflict.close()}
   await control.close();
 } finally {await b.close();vite.kill('SIGTERM');rmSync(data,{recursive:true,force:true})}

@@ -4440,9 +4440,14 @@ eligible account retains that claim across logout. Conflicting older receipts or
 claim store stop the import, and an explicit `mvlos.account` marker takes precedence. Older
 account `moved` flags without an identity-bound intent are ambiguous and prevent automatic
 ownership assignment. All legacy keys are copied from a marker-checked source snapshot and left
-in place for older tabs; a changed marker or source stops the copy. An unresolved widget transfer
-blocks canonical cutover rather than replacing its source with an empty envelope; after a transient
-storage failure, reloading retries the retained intent. A successful
+in place for older tabs; a changed marker or source, or a conflicting ordinary target, stops the
+copy and retains both versions. An unresolved widget transfer
+or startup migration blocks canonical cutover rather than replacing its source with an empty
+envelope, including failures before an intent could be written. Visitor transfers record their
+source and the account target observed at admission; a copied value or preexisting target is
+verified before clearing the intent. An older unbound visitor intent can retry only if no account
+target exists; an existing target stays unresolved for explicit recovery. After a transient storage
+failure, reloading retries the retained source and intent. A successful
 older-marker import reloads the page once so every store reads the claimed account space. A visitor
 cannot import a source marked as belonging to an account.
 

@@ -188,7 +188,7 @@ function sameOwnership(snapshot: LegacySnapshot): boolean {
 }
 /** A retained plan means migration has not yet established canonical cutover. */
 export function widgetMigrationUnresolved(): boolean {
-  try { return legacyMigrationUnresolved || (localStorage.getItem(`${SPACE}widget-move:plain:v2`) !== null && localStorage.getItem(`${SPACE}widget-move:plain:done:v2`) === null) } catch { return true }
+  try { return legacyMigrationUnresolved || localStorage.getItem(`${SPACE}widget-move:guest:v2`) !== null || (localStorage.getItem(`${SPACE}widget-move:plain:v2`) !== null && localStorage.getItem(`${SPACE}widget-move:plain:done:v2`) === null) } catch { return true }
 }
 
 /** Called only under the origin-wide gate. Never reassign an older marker to another account. */
@@ -224,28 +224,39 @@ function claimOlder(older: string): boolean {
   return localStorage.getItem(OLDER_CLAIM) === value
 }
 
-function moveIn(authorized?: LegacySnapshot) {
+function moveIn(authorized?: LegacySnapshot, skipOlder = false) {
+  // Fail closed even if the first read, snapshot, intent write, or ordinary copy fails.
+  if (!authorized) legacyMigrationUnresolved = true
   try {
     if (typeof localStorage === 'undefined') return
     const underGate = !!authorized
     const older = localStorage.getItem(OLDER_MARKER)
     const needsMove = !localStorage.getItem(`${SPACE}moved`) || !!localStorage.getItem(`${SPACE}widget-move:plain:v2`) || !!localStorage.getItem(`${SPACE}widget-move:guest:v2`)
-    if (!underGate && needsMove && TAB_UID && !localStorage.getItem(OLD_MARKER) && older) {
+    if (!underGate && !skipOlder && needsMove && TAB_UID && !localStorage.getItem(OLD_MARKER) && older) {
       const snapshot = snapshotLegacy()
       legacyClaimPending = true
-      legacyMigrationUnresolved = Object.keys(snapshot.values).length > 0
       legacyClaimSettled = storageTransaction(() => {
         if (frozen || cookieUid() !== TAB_UID || !sameOwnership(snapshot) || !claimOlder(older)) return false
         moveIn(snapshot)
         return true
-      }).then(ok => {
+      }).then(async ok => {
         legacyClaimPending = false
         if (ok) {
           legacyMigrationUnresolved = false
           try { location.reload() } catch { /* not in a page */ }
         } else {
           // A claim already bound to another account is not this account's migration.
-          try { const claim = JSON.parse(localStorage.getItem(OLDER_CLAIM) ?? 'null'); if (claim?.marker === older && claim?.owner && claim.owner !== TAB_UID) legacyMigrationUnresolved = false } catch { /* ambiguous: stay blocked */ }
+          try {
+            const claim = JSON.parse(localStorage.getItem(OLDER_CLAIM) ?? 'null')
+            if (claim?.marker === older && claim?.owner && claim.owner !== TAB_UID) {
+              legacyMigrationUnresolved = false
+              if (localStorage.getItem(`${SPACE}widget-move:guest:v2`) || (!localStorage.getItem(`${SPACE}moved`) && localStorage.getItem('mvlos.visitor.sync.widgets:state:v2') !== null)) {
+                const priorSettled = legacyClaimSettled
+                moveIn(undefined, true)
+                if (legacyClaimSettled !== priorSettled) await legacyClaimSettled
+              }
+            }
+          } catch { /* ambiguous: stay blocked */ }
         }
       }, () => { legacyClaimPending = false })
       return
@@ -261,13 +272,18 @@ function moveIn(authorized?: LegacySnapshot) {
       // Failed IDB must not reopen other stores' import or discard the original envelope.
       // Bind the intent to both the ownership markers and exact source, not merely the account
       // that happened to observe them. A later legacy writer may replace either before IDB opens.
-      if (theirs && !localStorage.getItem(plainDone) && Object.hasOwn(snapshot.values, WIDGET_STORAGE_KEY)) localStorage.setItem(plainPlan, JSON.stringify({ marker, older: snapshot.older, source: snapshot.values[WIDGET_STORAGE_KEY] }))
-      if (TAB_UID) localStorage.setItem(guestPlan, '1')
+      if (theirs && !localStorage.getItem(plainDone) && Object.hasOwn(snapshot.values, WIDGET_STORAGE_KEY)) localStorage.setItem(plainPlan, JSON.stringify({ marker, older: snapshot.older, source: snapshot.values[WIDGET_STORAGE_KEY], target: localStorage.getItem(accountKey(WIDGET_STORAGE_KEY)) }))
+      if (TAB_UID && !localStorage.getItem(plainPlan)) {
+        const source = localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')
+        if (source !== null) localStorage.setItem(guestPlan, JSON.stringify({ source, target: localStorage.getItem(accountKey(WIDGET_STORAGE_KEY)) }))
+      }
       if (theirs) {
         for (const [k, v] of Object.entries(snapshot.values)) if (k !== WIDGET_STORAGE_KEY) {
           if (!sameOwnership(snapshot) || localStorage.getItem(k) !== v) throw new Error('Legacy source changed; original data retained')
           const to = accountKey(k)
-          if (localStorage.getItem(to) === null) localStorage.setItem(to, v)
+          const target = localStorage.getItem(to)
+          if (target === null) localStorage.setItem(to, v)
+          else if (target !== v) throw new Error('Legacy target conflicts; original data retained')
         }
         // Legacy writers can create or replace the widget envelope at any time. Never remove
         // ownership markers, even when no envelope was present during this startup.
@@ -281,32 +297,60 @@ function moveIn(authorized?: LegacySnapshot) {
       localStorage.setItem(flag, '1')
     }
     if (localStorage.getItem(plainPlan) || localStorage.getItem(guestPlan)) {
+      let copied = false
       const transfer = () => {
-        if (underGate ? frozen || cookieUid() !== TAB_UID : !accountGuard()) return
+        if (frozen || cookieUid() !== TAB_UID || revocation() !== TAB_REVOCATION) throw new Error('Account changed during widget migration')
         const to = accountKey(WIDGET_STORAGE_KEY)
         const plan = localStorage.getItem(plainPlan)
         if (plan && !localStorage.getItem(plainDone)) {
-          let claim: { marker: string | null; older: string | null; source: string } | undefined
+          let claim: { marker: string | null; older: string | null; source: string; target?: string | null } | undefined
           try { claim = JSON.parse(plan) } catch { /* older unbound intent is not proof of ownership */ }
           const marker = localStorage.getItem(OLD_MARKER), older = localStorage.getItem(OLDER_MARKER)
           const v = localStorage.getItem(WIDGET_STORAGE_KEY)
           if (!claim || typeof claim.source !== 'string' || claim.marker !== marker || claim.older !== older || claim.source !== v || (authorized && !sameOwnership(authorized)) || !(TAB_UID ? marker === TAB_UID || (underGate && !marker && !!older && claimOlder(older)) : !marker && !older)) throw new Error('Widget migration source changed; original data retained')
-          if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
-          if (localStorage.getItem(to) !== v) throw new Error('Widget migration copy not verified; original data retained')
+          const target = localStorage.getItem(to)
+          if (claim.target != null) {
+            if (target !== claim.target) throw new Error('Widget migration target changed; original data retained')
+          } else {
+            if (target === null) { localStorage.setItem(to, v); copied = true }
+            if (localStorage.getItem(to) !== v) throw new Error('Widget migration copy not verified; original data retained')
+          }
           // Non-cooperating legacy tabs do not use this gate. Their source and ownership markers
           // can change at any point, so this migration never removes or rewrites either.
           localStorage.setItem(plainDone, '1')
         }
-        if (localStorage.getItem(guestPlan) && localStorage.getItem(to) === null) {
-          const v = localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')
-          if (v !== null) { const m = JSON.parse(v); localStorage.setItem(to, JSON.stringify({ value: m.value, base: 0, dirty: true })) }
+        const guestRaw = localStorage.getItem(guestPlan)
+        if (guestRaw) {
+          let guest: { source: string; target: string | null } | undefined
+          if (guestRaw === '1' && localStorage.getItem(to) === null) {
+            // Earlier visitor intents had no snapshot. They are safe to bind only while no
+            // account target exists; an existing target is ambiguous and remains untouched.
+            const source = localStorage.getItem('mvlos.visitor.sync.widgets:state:v2')
+            if (source !== null) { guest = { source, target: null }; localStorage.setItem(guestPlan, JSON.stringify(guest)) }
+          } else try { guest = JSON.parse(guestRaw) } catch { /* old unbound intent must fail closed */ }
+          if (!guest || typeof guest.source !== 'string' || !(guest.target === null || typeof guest.target === 'string') || localStorage.getItem('mvlos.visitor.sync.widgets:state:v2') !== guest.source) throw new Error('Visitor widget migration source changed; original data retained')
+          const target = localStorage.getItem(to)
+          if (guest.target !== null) {
+            if (target !== guest.target) throw new Error('Visitor widget migration target changed; original data retained')
+          } else {
+            const m = JSON.parse(guest.source), value = JSON.stringify({ value: m.value, base: 0, dirty: true })
+            if (target === null) { localStorage.setItem(to, value); copied = true }
+            if (localStorage.getItem(to) !== value) throw new Error('Visitor widget migration copy not verified; original data retained')
+          }
         }
         localStorage.removeItem(plainPlan)
         localStorage.removeItem(guestPlan)
       }
       if (underGate) transfer()
-      else void storageTransaction(transfer).catch(() => { /* fail closed; original envelope + scoped plan remain for retry */ })
-    }
+      else {
+        legacyClaimPending = true
+        legacyClaimSettled = storageTransaction(transfer).then(() => {
+          legacyClaimPending = false
+          legacyMigrationUnresolved = false
+          if (copied) try { location.reload() } catch { /* not in a page */ }
+        }, () => { legacyClaimPending = false })
+      }
+    } else if (!underGate) legacyMigrationUnresolved = false
   } catch (error) { if (authorized) throw error; /* storage unavailable: ordinary stores remain usable in memory */ }
 }
 moveIn()
