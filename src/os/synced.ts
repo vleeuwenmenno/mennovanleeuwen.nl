@@ -26,6 +26,19 @@ import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT } 
 type Meta<T> = { value: T; /** server version this value is based on */ base: number; /** changed since */ dirty: boolean }
 type Remote = { value: unknown; updatedAt: number }
 
+/** A successful whole-account read, including keys absent from the account. Unlike onSynced,
+ * this does not require a key to have a server version. Consumers can atomically migrate keys
+ * only after every existing store has reconciled. A failed/offline read never establishes it. */
+export type SyncedHydration = Readonly<Record<string, Remote>>
+let hydration: SyncedHydration | null = null
+const hydrationListeners = new Set<(snapshot: SyncedHydration) => void>()
+export const getSyncedHydration = () => hydration
+export function onSyncedHydration(l: (snapshot: SyncedHydration) => void) {
+  hydrationListeners.add(l)
+  if (hydration) l(hydration)
+  return () => { hydrationListeners.delete(l) }
+}
+
 export type Synced<T> = {
   key: string
   get: () => T
@@ -381,6 +394,8 @@ export function pullAll(): Promise<void> {
     .then((remote) => {
       if (frozen() || !accountGuard()) return
       for (const s of stores.values()) reconcile(s, remote[s.key])
+      hydration = remote
+      hydrationListeners.forEach((l) => l(remote))
       setStatus({ state: 'synced', at: Date.now() })
     })
     .catch((e: Error) => setStatus({ state: 'error', at: status.at, error: e.message }))
@@ -396,6 +411,7 @@ export function startSync() {
     if (now === was) return
     if (now === 'user') void pullAll()
     if (was === 'user' && now === 'anon') {
+      hydration = null
       for (const s of stores.values()) s.reset()
       setStatus({ state: 'local', at: 0 })
     }

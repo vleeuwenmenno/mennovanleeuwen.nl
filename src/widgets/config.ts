@@ -1,13 +1,9 @@
 import type { MenuItem } from '../os/ContextMenu'
-import { synced } from '../os/synced'
+import { canonicalConfigs as store } from './platform/canonicalState'
 
 // Per-widget settings (a weather widget's place and units, any widget's tilt), keyed by the
 // widget's id. Kept in this browser, synced when signed in; where the widget sits on the desktop
-// is part of the window layout instead.
-
-type Configs = Record<string, Record<string, unknown>>
-
-const store = synced<Configs>('widgets', {}, { normalize: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Configs) : {}) })
+// lives in the canonical placement set instead.
 
 /** This widget's settings over `defaults`. */
 export function useWidgetConfig<C extends Record<string, unknown>>(id: string, defaults: C): C {
