@@ -1,4 +1,4 @@
-# Widget SDK 1 / build identity 1.1 (first vertical slice)
+# Widget SDK 1 / build identity 1.2
 
 Packages are UTF-8 folders with manifest.json, src/*.js, styles/tokens.json,
 assets/*.txt or *.json, tests/*.json and README.md. System packages are immutable;
@@ -25,7 +25,10 @@ is distinct from capacity errors. Hidden/covered/mobile desktops do not execute.
 ## Descriptor vocabulary
 
 @mvlos/widget exports column(...children), row(...children), text(value,tone),
-button(label,eventID), editor(). Tones: normal, muted, accent. No raw HTML,
+button(label,eventID), editor(), action(label,handle,options), link(label,handle,options),
+image(handle,alt), dot(handle), details(summary,...body), card(handle,...children).
+Action/link options: hint, children, tone; action also accepts checked (native checkbox role).
+Tones: normal, muted, accent, danger, success, warning. No raw HTML,
 URLs, arbitrary attributes, CSS or host functions. Spacing tokens: compact,
 normal, roomy in styles/tokens.json (gap and padding).
 The parent owns window/menu/theme controls. The editor is native, with immediate
@@ -61,7 +64,51 @@ bound to that identity, so late replies cannot populate a different lifecycle. G
 Errors are plain bounded messages, not raw fetch responses or host objects.
 Default packages use existing instance authority. Fork activation requires explicit
 real-data opt-in. Preview always uses mocks. Revocation/logout cancels pending work.
-No navigation, clipboard, exports, logging, arbitrary RPC or model forwarding APIs.
+## Domain projections and explicit effects
+
+agenda.read supplies agenda.state, today, now, days (label/key, tasks and events),
+errors and page. Task fields: title, notes, due, time, allDay and opaque color/open/complete
+handles. Event fields: title, time, calendar, location, start/end milliseconds, allDay,
+color/open/meet handles, optional linked-note mark (glyph/title/open). The trusted calendar
+and task domains own selected/hidden calendars, task-list preferences and recurrence.
+agenda.act permits only the projected completion/open/meeting/linked-note actions.
+No caller-supplied task patch, provider ref, calendar query or destination is accepted.
+
+inbox.read supplies inbox.state, count, errors, page and sections (key/title/empty/total/items).
+Items have title, repo, number, kind, draft, state, ago, source and an opaque open handle.
+inbox.navigate permits those destinations and the fixed notifications page. Normal click
+uses the existing Git availability check; modified and middle clicks use the original bound
+provider URL. Provider URLs/refs are not included in the VM's projection.
+
+status.read supplies status.state, down count, page and checks (name/address, enabled/down,
+error/downSince, uptime/responseTime, sslDays/sslValid and opaque open handle).
+status.navigate permits the selected updown check and fixed checks page only.
+
+minecraft.read supplies minecraft.state, online/address, motd/version/software/difficulty,
+latency, world (day/clock/phase), players (online/max/totalNamed/list) and page. Each player
+has name, dimension, vitals and an optional image handle. minecraft.act permits the fixed
+server window and copying the fixed server address after an explicit native interaction.
+Package strings never become clipboard text or connection addresses. Head images are fixed
+provider resources for validated Minecraft names; no package-provided image URL is accepted.
+
+controls holds optional host-selected signIn/google/settings/open handles. error is a bounded,
+scrubbed request error. All resource handles are ephemeral and type-checked in the trusted
+renderer against account/connection identity, instance, source revision, grant and exact
+presentation. A handle has no authority outside that presentation. Action capabilities require
+the corresponding read capability; read-only packages keep display content with no actions.
+There is no arbitrary resource lookup, RPC, navigation URL or clipboard/export API.
+
+The host projects at most 8 agenda rows, 5 inbox rows per visible section, 12 status checks
+or 12 player details per page. page = {total,shown,page,pages,truncated}; page is zero-based.
+Previous/Next controls remain host-owned so every accepted item is reachable. Text fields are
+bounded (16–1024 UTF-16 units depending on field), with a visible truncation suffix. Errors
+are at most eight scrubbed 160-unit strings. Inbox/status payload schemas are checked before
+projection; malformed or over-10,000-row sections fail explicitly. The existing 64 KiB input,
+64 KiB output and 256-node limits still apply. Preview has synthetic data and no resource
+handles. Reads refresh only while eligible, cancel on hide/revocation, and share caches only
+inside the same account/connection authority.
+
+No arbitrary exports, logging, RPC or model forwarding APIs.
 Package grants never authorize forwarding private data to a model.
 
 ## Build and activation
@@ -69,19 +116,25 @@ Package grants never authorize forwarding private data to a model.
 Both defaults and forks use the same verifier, digest and loader. The digest covers
 all accepted files plus the pinned SDK/QuickJS build identity. Imported dist/ and
 build.json are discarded; snapshots are rebuilt and verified. Source saves never
-activate. Initial build-1.0 snapshots need explicit rebuild/preview/activation for
+activate. Earlier build-1.0/1.1 snapshots need explicit rebuild/preview/activation for
 the new build identity; imports never silently upgrade granted code. Build and preview first; explicit activation binds the digest and source
-identity. Previous revision recovery requires the current installation digest,
+identity. Previous revision recovery requires the current installation generation and active digest/source identity,
 so a stale device cannot silently roll back a newer installation. Configuration
 and placement are not rolled back. Missing sources/runtime are not removals.
 
 ## Follow-up interfaces
 
-Agenda, inbox, status and Minecraft still use the legacy registry in this slice.
-Their future APIs must project typed results and bind per-resource handles to
-account, instance, digest and revocation epoch. Calendar link/unlink, broader
-catalog, TypeScript compilation, source package tests, agent browser authoring and
-cross-device installation conflict UI are staged work, not implemented APIs.
+All six built-in folders use the same compiler/verifier/worker/renderer as forks.
+Installation overrides, per-config counters and placement geometry/tombstones live in the
+versioned widgets:state:v2 envelope. One-time legacy import waits for complete account/state
+hydration; older clients cannot change canonical records after cutover. Unknown kinds,
+unavailable sources and hidden widgets are recoverable, not removals. Revision recovery
+changes no config, placement or note data. Cross-device conflicting generation/identity
+changes reject stale recovery; same-revision activation retries are idempotent.
+
+Calendar link/unlink and backlinks stay in the trusted menu/Notebook. Inline Sticky calendar
+chips and a package calendar operation, broader catalog, TypeScript/TSX compilation, execution
+of source-defined tests, ClientCalls agent authoring and a cross-device conflict UI remain staged.
 
 ## Runtime selection evidence
 

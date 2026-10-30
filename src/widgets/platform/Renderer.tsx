@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useDropTarget, type DragItem } from '../../os/dnd'
 import { continueList } from './editor'
+import type { BrokerResource, ResourceIntent } from './brokerTypes'
 import type { Descriptor } from './package'
 const linkOf = (item: DragItem) => {
   const launcher = item.kind === 'launcher' ? item : item.kind === 'file' ? item.launcher : null
@@ -60,13 +61,57 @@ export function NativeEditor({ value, write }: { value: string; write: (text: st
       insert(transaction.start, transaction.end, transaction.text)
     }} />
 }
-export function Renderer({ view, note, write, event, actionsEnabled = true }: { view: Descriptor; note?: string; write?: (text: string, expected: string) => string; actionsEnabled?: boolean; event: (id: string) => void }) {
+function ResourceDetails({ children, dismissed }: { children: ReactNode[]; dismissed: () => void }) {
+  const root = useRef<HTMLDetailsElement>(null)
+  const [pinned, setPinned] = useState(false), [hovered, setHovered] = useState(false)
+  useEffect(() => {
+    if (!pinned) return
+    const down = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) { setPinned(false); dismissed() } }
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); setPinned(false); dismissed() } }
+    document.addEventListener('pointerdown', down, true); document.addEventListener('keydown', key, true)
+    return () => { document.removeEventListener('pointerdown', down, true); document.removeEventListener('keydown', key, true) }
+  }, [pinned])
+  return <details ref={root} className="wp-details" open={pinned || hovered} onPointerEnter={event => event.pointerType === 'mouse' && setHovered(true)} onPointerLeave={() => setHovered(false)}>
+    <summary onClick={event => { event.preventDefault(); event.stopPropagation(); setPinned(value => !value) }}>{children[0]}</summary>
+    <div role="status" className="wp-detail-body">{children.slice(1)}</div>
+  </details>
+}
+export function Renderer({ view, note, write, event, actionsEnabled = true, resource }: { view: Descriptor; note?: string; write?: (text: string, expected: string) => string; actionsEnabled?: boolean; event: (id: string) => void; resource?: (handle: string) => BrokerResource | undefined }) {
+  const closedAt = useRef(0)
+  const [feedback, setFeedback] = useState('')
+  const pending = useRef(new Set<string>())
+  const resolve = (node: Descriptor, kind: BrokerResource['kind']) => actionsEnabled && node.resource ? (() => { const value = resource?.(node.resource!); return value?.kind === kind ? value : undefined })() : undefined
+  const perform = (node: Descriptor, expected: 'action' | 'link', intent: ResourceIntent) => {
+    const value = resolve(node, expected)
+    if (!value?.run || !node.resource || pending.current.has(node.resource)) return
+    pending.current.add(node.resource)
+    try { Promise.resolve(value.run(intent)).then(() => setFeedback(value.label === 'Copy address' ? 'Copied ✓' : ''), () => setFeedback('Action unavailable')).finally(() => pending.current.delete(node.resource!)) }
+    catch { pending.current.delete(node.resource); setFeedback('Action unavailable') }
+  }
   const render = (node: Descriptor, path: string): ReactNode => {
     const className = `wp-${node.type} wp-${node.tone ?? 'normal'}`
-    if (node.type === 'text') return <span key={path} className={className}>{node.text}</span>
-    if (node.type === 'button') return <button key={path} className={className} disabled={!node.event || !actionsEnabled} onClick={() => node.event && event(node.event)}>{node.text}</button>
+    const children = node.children?.map((child,index) => render(child,`${path}.${index}`))
+    if (node.type === 'text') return <span key={path} className={className} title={node.hint}>{node.text}</span>
+    if (node.type === 'button') return <button key={path} type="button" className={className} disabled={!node.event || !actionsEnabled} onClick={() => node.event && event(node.event)}>{node.text}</button>
     if (node.type === 'editor') return null
-    return <div key={path} className={className}>{node.children?.map((child, index) => render(child, `${path}.${index}`))}</div>
+    if (node.type === 'image') { const value = resolve(node,'image'); return value?.href ? <img key={path} className="wp-image" src={value.href} alt={node.text ?? ''} title={value.label} width={24} height={24} draggable={false} /> : <span key={path}>{node.text}</span> }
+    if (node.type === 'dot') { const value = resolve(node,'color'); return <span key={path} className="wp-dot" style={{background:value?.color ?? 'var(--accent)'}} /> }
+    if (node.type === 'action') return <button key={path} type="button" className={className} title={node.hint} disabled={!resolve(node,'action')} role={node.checked === undefined ? undefined : 'checkbox'} aria-checked={node.checked} onClick={e => { e.stopPropagation(); perform(node,'action',{modified:false,button:0}) }}>{node.text}{children}</button>
+    if (node.type === 'link') {
+      const value = resolve(node,'link')
+      return <a key={path} className={className} href={value?.href} target="_blank" rel="noopener noreferrer" title={node.hint} aria-disabled={!value} tabIndex={value?0:-1} role={value?.href?undefined:"button"} onKeyDown={e=>{if(!value?.href&&(e.key==="Enter"||e.key===" ")){e.preventDefault();perform(node,"link",{modified:false,button:0})}}} onClick={e => {
+        e.stopPropagation()
+        if (!resolve(node,'link')) { e.preventDefault(); return }
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+        e.preventDefault(); perform(node,'link',{modified:false,button:0})
+      }} onAuxClick={e => { e.stopPropagation(); if (!resolve(node,'link')) e.preventDefault() }}>{node.text}{children}</a>
+    }
+    if (node.type === 'details') return <ResourceDetails key={path} dismissed={() => { closedAt.current = Date.now() }}>{children ?? []}</ResourceDetails>
+    if (node.type === 'card') return <div key={path} className="wp-card" title={node.hint} onClick={e => {
+      if ((e.target as Element).closest('a,button,details,summary,textarea') || Date.now()-closedAt.current<400) return
+      perform(node,'action',{modified:false,button:0})
+    }}>{children}</div>
+    return <div key={path} className={className}>{children}</div>
   }
-  return <>{note !== undefined && write && <NativeEditor key="native-editor" value={note} write={write} />}{render(view, 'root')}</>
+  return <>{note !== undefined && write && <NativeEditor key="native-editor" value={note} write={write} />}{render(view, 'root')}{feedback && <span role="status">{feedback}</span>}</>
 }

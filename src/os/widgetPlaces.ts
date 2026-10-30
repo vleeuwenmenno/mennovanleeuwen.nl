@@ -1,6 +1,6 @@
 import { viewH, viewW } from './uiScale'
 import { canonicalPlacements, hasWidgetCutover } from '../widgets/platform/canonicalState'
-import { importPlaces, num, liveWidgets as liveSet, type WidgetPlace, type WidgetSet } from '../widgets/platform/placementSet'
+import { changeSet, newKey, nextAt, importPlaces, num, liveWidgets as liveSet, type WidgetPlace, type WidgetSet } from '../widgets/platform/placementSet'
 export { changeSet, entriesOf, mergeSets, newKey, nextAt, normalizeSet, placedOnPhone, removedKeys, wins } from '../widgets/platform/placementSet'
 export type { WidgetPlace, WidgetSet } from '../widgets/platform/placementSet'
 
@@ -19,6 +19,16 @@ export function importWidgets(found: Omit<WidgetPlace, 'at'>[]): boolean {
   widgetPlaces.set(cur => importPlaces(cur, found))
   imported.forEach((l) => l())
   return true
+}
+
+/** Explicit new-client placement gesture. Legacy layout import must never call this. */
+export function placeWidgets(found: Omit<WidgetPlace,'at'>[]) {
+  widgetPlaces.set(set=>{
+    let next=set
+    for(const value of found){const existing=Object.entries(next.places).find(([,p])=>p.id===value.id);const key=existing?.[0]??newKey(next,value.id);next=changeSet(next,{[key]:{...value,at:nextAt(existing?.[1])}})}
+    return next
+  })
+  imported.forEach(listener=>listener())
 }
 
 const imported = new Set<() => void>()

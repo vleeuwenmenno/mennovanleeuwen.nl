@@ -1,0 +1,1 @@
+{"schema":1,"sdk":1,"id":"minecraft","name":"Minecraft server","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":250,"height":150},"capabilities":["minecraft.read","minecraft.act"]}

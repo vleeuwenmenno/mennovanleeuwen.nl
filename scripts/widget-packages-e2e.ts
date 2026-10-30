@@ -111,7 +111,7 @@ try {
   await p.waitFor(`document.querySelector('.wp-package')?.textContent.includes('Allow this revision')`)
   check('explicit grant revocation removes package editor', await p.eval(`!document.querySelector('.wp-package textarea')`))
   await p.eval(`(()=>{const native=window.fetch;window.__weatherRequests=[];window.fetch=(url,options)=>{const path=String(url);if(path.includes('geocoding-api.open-meteo.com')){window.__weatherRequests.push(path);return Promise.resolve(Response.json({results:[{name:'Sample city',latitude:52,longitude:5}]}))}if(path.includes('api.open-meteo.com/v1/forecast')){window.__weatherRequests.push(path);return Promise.resolve(Response.json({current:{temperature_2m:18,weather_code:0,is_day:1},hourly:{time:[]},daily:{time:[]}}))}return native(url,options)};})()`)
-  await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>m.importWidgets([{id:'weather-proof',kind:'weather',x:700,y:100,w:290,h:300,vw:1400,vh:1000}]))`)
+  await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>m.placeWidgets([{id:'weather-proof',kind:'weather',x:700,y:100,w:290,h:300,vw:1400,vh:1000}]))`)
   await p.waitFor(`!!document.querySelector('[aria-label="Choose weather place"]')`,5000)
   await button('Choose place')
   await p.eval(`document.querySelector('[aria-label="Search a city"]').focus()`)

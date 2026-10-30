@@ -5,7 +5,14 @@ const SDK = `export const text=(text,tone='normal')=>({type:'text',text:String(t
 export const column=(...children)=>({type:'column',children});
 export const row=(...children)=>({type:'row',children});
 export const button=(text,event)=>({type:'button',text,event});
-export const editor=()=>({type:'editor'});`
+export const editor=()=>({type:'editor'});
+const resourceNode=(type,text,resource,options)=>resource?({type,text,resource,...options}):({type:'column',children:[...(text?[{type:'text',text,tone:'muted'}]:[]),...(options.children||[])]});
+export const action=(text,resource,options={})=>resourceNode('action',text,resource,options);
+export const link=(text,resource,options={})=>resourceNode('link',text,resource,options);
+export const image=(resource,text='')=>({type:'image',resource,text});
+export const dot=(resource)=>resource?({type:'dot',resource}):({type:'dot'});
+export const details=(...children)=>({type:'details',children});
+export const card=(resource,...children)=>resource?({type:'card',resource,children}):({type:'column',children});`
 export function modulePath(base: string, name: string): string {
   if (name === '@mvlos/widget') return name
   if (!name.startsWith('./') && !name.startsWith('../')) throw new Error('External imports are disabled')

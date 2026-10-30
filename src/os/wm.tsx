@@ -865,6 +865,7 @@ export function WindowManagerProvider({
     firstPhone.current = state.phone
     showSet(widgetPlaces.get())
   }, [state.phone, showSet])
+  const explicitWidgetCloses = useRef(new Set<string>())
   const lastWidgets = useRef<Map<string, WinState> | null>(null)
   useLayoutEffect(() => {
     const now = new Map<string, WinState>()
@@ -896,6 +897,8 @@ export function WindowManagerProvider({
     for (const id of before.keys()) {
       if (now.has(id)) continue
       applied.current.delete(id)
+      // Runtime discovery, hydration and visibility are not removal authority.
+      if (!explicitWidgetCloses.current.delete(id)) continue
       for (const e of entriesOf(all, id)) remove.push(e.key)
     }
     if (Object.keys(put).length || remove.length) widgetPlaces.set((cur) => changeSet(cur, put, remove))
@@ -961,14 +964,19 @@ export function WindowManagerProvider({
       open,
       openNew,
       close: (pid) => {
+        const finish = () => {
+          const target=stateRef.current.windows.find(w=>w.pid===pid)
+          if(target?.app==='widget'&&target.props.id)explicitWidgetCloses.current.add(target.props.id)
+          dispatch({type:'close',pid})
+        }
         const guard = closeGuards.get(pid)
-        if (!guard) return dispatch({ type: 'close', pid })
+        if (!guard) return finish()
         if (asking.has(pid)) return // its question is already on screen
         asking.add(pid)
         Promise.resolve()
           .then(guard)
           .catch(() => true)
-          .then((ok) => ok && dispatch({ type: 'close', pid }))
+          .then((ok) => ok && finish())
           .finally(() => asking.delete(pid))
       },
       focus: (pid) => {

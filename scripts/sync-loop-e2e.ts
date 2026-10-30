@@ -166,7 +166,7 @@ try {
   await dragSticky(B, -200, 100)
   await sleep(2500)
   const moved = await B.eval<Record<string, number>>(`window.__puts`)
-  check('a real move in B is saved', (moved['widgets:placed'] ?? 0) >= 1, moved)
+  check('a real move in B is saved', (moved['widgets:state:v2'] ?? 0) >= 1, moved)
   const placeIn = (p: P) => p.eval<string>(`import('/src/os/widgetPlaces.ts').then((m) => JSON.stringify(Object.values(m.widgetPlaces.get().places).map((e) => [e.x, e.y, e.at])))`)
   const [inA, inB] = [await placeIn(A), await placeIn(B)]
   check('and A (the other tab) has the same place', inA === inB, { inA, inB })
@@ -178,7 +178,7 @@ try {
   await dragSticky(C, -100, 50)
   await sleep(3000)
   const one = await puts(C)
-  check('a real move on the single-tab device is saved', (one['widgets:placed'] ?? 0) >= 1, one)
+  check('a real move on the single-tab device is saved', (one['widgets:state:v2'] ?? 0) >= 1, one)
   await idle([C], ['C 1280 (device)'], 'single tab after a real move')
 
   for (const p of [A, B, C]) if (p.errors.length) check('no page errors', false, p.errors.slice(0, 3))

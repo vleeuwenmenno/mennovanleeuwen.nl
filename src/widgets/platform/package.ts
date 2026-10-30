@@ -1,7 +1,13 @@
+import type { BrokerProjection } from './brokerTypes'
 /** Widget package format. Data only: no host imports, npm resolution, HTML or build hooks. */
-export const BUILD_ID = 'mvlos-descriptors-1.1/quickjs-emscripten-0.32.0/release-sync'
+export const BUILD_ID = 'mvlos-descriptors-1.2/quickjs-emscripten-0.32.0/release-sync'
 export const LIMITS = Object.freeze({ files: 48, sourceBytes: 128 * 1024, fileBytes: 32 * 1024, outputBytes: 64 * 1024, nodes: 256, depth: 12, memory: 8 * 1024 * 1024, stack: 256 * 1024, cpuMs: 40, jobs: 16, workers: 8, noteWindowBytes: 8 * 1024, noteWindowLines: 64, noteBytes: 256 * 1024 })
-export type Capability = 'note.read' | 'note.write' | 'weather.read'
+export const WIDGET_KINDS = ['sticky', 'weather', 'agenda', 'inbox', 'status', 'minecraft'] as const
+export type WidgetKind = typeof WIDGET_KINDS[number]
+export type Capability = 'note.read' | 'note.write' | 'weather.read' | 'agenda.read' | 'agenda.act' | 'inbox.read' | 'inbox.navigate' | 'status.read' | 'status.navigate' | 'minecraft.read' | 'minecraft.act'
+export const KIND_CAPABILITIES: Record<WidgetKind, readonly Capability[]> = { sticky: ['note.read','note.write'], weather: ['weather.read'], agenda: ['agenda.read','agenda.act'], inbox: ['inbox.read','inbox.navigate'], status: ['status.read','status.navigate'], minecraft: ['minecraft.read','minecraft.act'] }
+export const isWidgetKind = (v: unknown): v is WidgetKind => WIDGET_KINDS.includes(v as WidgetKind)
+export const supportsCapabilities = (kind: WidgetKind, capabilities: readonly Capability[]) => capabilities.every(c => KIND_CAPABILITIES[kind].includes(c))
 export type Manifest = {
   schema: 1; sdk: 1; id: string; name: string; entry: string
   settings: { appearance: 'panel' | 'sticky' }
@@ -10,10 +16,10 @@ export type Manifest = {
 export type Files = Record<string, string>
 export type SourceIdentity = { kind: 'system'; path: string } | { kind: 'browser'; account: number; storeUUID: string; path: string } | { kind: 'seafile'; account: number; repo: string; path: string }
 export type Snapshot = { manifest: Manifest; files: Files; digest: string; build: typeof BUILD_ID }
-export type Descriptor = { type: 'column' | 'row' | 'text' | 'button' | 'editor'; text?: string; event?: string; tone?: 'normal' | 'muted' | 'accent'; children?: Descriptor[] }
-export type WidgetInput = { note?: { text: string; revision: string; offset?: number; next?: number; continues?: boolean }; weather?: { place: string; units: string; summary: string; hours: string[]; days: string[] }; error?: string }
+export type Descriptor = { type: 'column' | 'row' | 'text' | 'button' | 'editor' | 'link' | 'action' | 'image' | 'dot' | 'details' | 'card'; resource?: string; hint?: string; checked?: boolean; text?: string; event?: string; tone?: 'normal' | 'muted' | 'accent' | 'danger' | 'success' | 'warning'; children?: Descriptor[] }
+export type WidgetInput = BrokerProjection & { note?: { text: string; revision: string; offset?: number; next?: number; continues?: boolean }; weather?: { place: string; units: string; summary: string; hours: string[]; days: string[] }; error?: string }
 export type Mutation = { type: 'note.replace'; text: string; expectedRevision: string } | { type: 'note.edit'; start: number; end: number; text: string; expectedRevision: string }
-const CAPABILITIES = new Set<Capability>(['note.read', 'note.write', 'weather.read'])
+const CAPABILITIES = new Set<Capability>(Object.values(KIND_CAPABILITIES).flat())
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 export function record(v: unknown): v is Record<string, unknown> { return !!v && typeof v === 'object' && !Array.isArray(v) }
 export function relativePath(path: string): string {
@@ -33,7 +39,7 @@ export function manifestOf(v: unknown): Manifest {
   exact(v.sizing, ['width', 'height'])
   for (const key of ['width', 'height']) if (typeof v.sizing[key] !== 'number' || !Number.isInteger(v.sizing[key]) || v.sizing[key] < 120 || v.sizing[key] > 800) throw new Error('Invalid sizing')
   if (!Array.isArray(v.capabilities) || v.capabilities.length > 3 || v.capabilities.some(c => !CAPABILITIES.has(c)) || new Set(v.capabilities).size !== v.capabilities.length) throw new Error('Unknown capability')
-  if (v.capabilities.includes('note.write') && !v.capabilities.includes('note.read')) throw new Error('note.write requires note.read')
+  for (const [write, read] of [['note.write','note.read'],['agenda.act','agenda.read'],['inbox.navigate','inbox.read'],['status.navigate','status.read'],['minecraft.act','minecraft.read']]) if (v.capabilities.includes(write) && !v.capabilities.includes(read)) throw new Error(`${write} requires ${read}`)
   return JSON.parse(JSON.stringify(v)) as Manifest
 }
 export function sourceFiles(raw: unknown): Files {
@@ -72,13 +78,16 @@ export function descriptor(raw: unknown): Descriptor {
   let nodes = 0
   const walk = (v: unknown, depth: number): Descriptor => {
     if (++nodes > LIMITS.nodes || depth > LIMITS.depth || !record(v)) throw new Error('Descriptor limit')
-    exact(v, ['type', 'text', 'event', 'tone', 'children'])
-    if (!['column', 'row', 'text', 'button', 'editor'].includes(String(v.type))) throw new Error('Unknown descriptor')
+    exact(v, ['type', 'text', 'event', 'tone', 'children', 'resource', 'hint', 'checked'])
+    if (!['column', 'row', 'text', 'button', 'editor', 'link', 'action', 'image', 'dot', 'details', 'card'].includes(String(v.type))) throw new Error('Unknown descriptor')
     if (v.text !== undefined && (typeof v.text !== 'string' || v.text.length > LIMITS.fileBytes)) throw new Error('Invalid text')
     if (v.event !== undefined && (typeof v.event !== 'string' || !/^[a-zA-Z0-9:._-]{1,80}$/.test(v.event) || v.type !== 'button')) throw new Error('Invalid event')
-    if (v.tone !== undefined && !['normal', 'muted', 'accent'].includes(String(v.tone))) throw new Error('Invalid tone')
-    if (v.children !== undefined && (!['column', 'row'].includes(String(v.type)) || !Array.isArray(v.children))) throw new Error('Invalid children')
-    return { type: v.type as Descriptor['type'], ...(v.text === undefined ? {} : { text: v.text as string }), ...(v.event ? { event: v.event as string } : {}), ...(v.tone ? { tone: v.tone as Descriptor['tone'] } : {}), ...(Array.isArray(v.children) ? { children: v.children.map(c => walk(c, depth + 1)) } : {}) }
+    if (v.tone !== undefined && !['normal', 'muted', 'accent', 'danger', 'success', 'warning'].includes(String(v.tone))) throw new Error('Invalid tone')
+    if (v.children !== undefined && (!['column', 'row', 'details', 'card', 'link', 'action'].includes(String(v.type)) || !Array.isArray(v.children))) throw new Error('Invalid children')
+    if (v.resource !== undefined && (typeof v.resource !== 'string' || !/^[a-f0-9-]{36}$/.test(v.resource) || !['link','action','image','dot','card'].includes(String(v.type)))) throw new Error('Invalid resource handle')
+    if (v.hint !== undefined && (typeof v.hint !== 'string' || v.hint.length > 1024)) throw new Error('Invalid hint')
+    if (v.checked !== undefined && (typeof v.checked !== 'boolean' || v.type !== 'action')) throw new Error('Invalid checkbox')
+    return { type: v.type as Descriptor['type'], ...(v.resource ? { resource: v.resource as string } : {}), ...(v.hint ? { hint: v.hint as string } : {}), ...(v.checked === undefined ? {} : {checked:v.checked as boolean}), ...(v.text === undefined ? {} : { text: v.text as string }), ...(v.event ? { event: v.event as string } : {}), ...(v.tone ? { tone: v.tone as Descriptor['tone'] } : {}), ...(Array.isArray(v.children) ? { children: v.children.map(c => walk(c, depth + 1)) } : {}) }
   }
   if (new TextEncoder().encode(JSON.stringify(raw)).length > LIMITS.outputBytes) throw new Error('Output limit')
   return walk(raw, 0)
@@ -96,7 +105,7 @@ export function sourceIdentityOf(value: unknown): SourceIdentity {
   if (!record(value) || typeof value.path !== 'string' || !value.path.startsWith('/') || value.path.length > 512 || value.path !== '/' && value.path.split('/').slice(1).some(p => !p || p === '.' || p === '..') || /[\\\u0000-\u001f]/.test(value.path)) throw new Error('Invalid source identity')
   if (value.kind === 'system') {
     exact(value, ['kind', 'path'])
-    if (!/^\/usr\/share\/mvlos\/widgets\/(weather|sticky)$/.test(value.path)) throw new Error('Unknown system source')
+    if (!/^\/usr\/share\/mvlos\/widgets\/(weather|sticky|agenda|inbox|status|minecraft)$/.test(value.path)) throw new Error('Unknown system source')
   } else {
     if (!Number.isSafeInteger(value.account) || Number(value.account) < 1) throw new Error('Invalid source account')
     if (value.kind === 'browser') {

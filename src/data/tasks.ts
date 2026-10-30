@@ -140,6 +140,9 @@ subscribeAccount(() => {
 })
 
 /** Every list and task (lists null while the first load is out). Loads on first use and keeps up. */
+/** Current domain object for revision-bound widget actions; no provider authority is exported to packages. */
+export const currentTask = (id: string) => state.tasks.find(task => task.id === id)
+
 export function useTasks(): TasksState {
   const snapshot = useSyncExternalStore(
     (l) => {

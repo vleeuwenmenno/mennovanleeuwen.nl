@@ -4298,18 +4298,18 @@ CalDAV, see above), **Code inbox**, **Status** (updown.io) and **Minecraft serve
 address to copy, who is on with their heads, and the in-game day and time when RCON is set up; a
 click opens the Minecraft server window).
 
-### Source packages: Weather and Sticky foundation
+### Folder-based widget packages
 
-Weather and Sticky now load executable source folders through the same verifier and bounded
-QuickJS WASM worker used for user forks. The other four widgets still use the earlier registry.
-Files, msh and Xed can read the immutable defaults at `/usr/share/mvlos/widgets/weather` and
-`/usr/share/mvlos/widgets/sticky`: real `manifest.json`, `src/main.js`, `styles/tokens.json`,
+All six built-ins (Weather, Sticky, Agenda, Code inbox, Status and Minecraft) load executable
+source folders through the same verifier, compiler, bounded QuickJS WASM worker and descriptor
+renderer used for user forks. Files, msh and Xed can read immutable defaults at
+`/usr/share/mvlos/widgets/<kind>`: real `manifest.json`, `src/main.js`, `styles/tokens.json`,
 `assets`, `tests` and `README.md`. `/usr/share/mvlos/widgets/SDK.md` describes the scoped SDK.
 These sources produce the layout and checklist transformations; they are not aliases for
 privileged React widget components. Widgets use the Omarchy theme by default; a Sticky's menu
 can opt into **Paper appearance** without changing its saved colour or tilt.
 
-Open **Source** on either widget, or **Widget Workshop** from All apps/Spotlight. Signed in,
+Open **Source** on any widget, or **Widget Workshop** from All apps/Spotlight. Signed in,
 **Clone & edit in Xed** copies the default to `~/.local/share/mvlos/widgets/<kind>` on the backing
 browser store or writable Seafile home. Edit and save `src/main.js`, return to Workshop, choose
 **Build & mock preview**, review the sample output, opt into this instance's data, then
@@ -4322,7 +4322,7 @@ Clone retries keep matching bytes, resume missing files and refuse to overwrite 
 Guests keep default widgets and their notes, but do not get writable source folders.
 
 The first SDK accepts JavaScript modules, relative local imports and `@mvlos/widget` descriptors:
-column, row, text, button and a native editor. Styles accept spacing tokens only. No npm packages,
+column, row, text, button, native editor, action, link, image, dot, details and card. Styles accept spacing tokens only. No npm packages,
 build hooks, raw HTML/CSS, arbitrary URLs, DOM, fetch, cookies, storage, host objects or generic RPC
 are exposed to packages. Snapshots hash every accepted file, manifest permissions, assets, styles
 and the pinned SDK/QuickJS build identity. Each invocation has 8 MiB heap, 256 KiB stack, a 40 ms
@@ -4348,7 +4348,35 @@ to the live session, never imported from build files or synced approval flags. *
 revokes the revision; logout cancels workers and denies stale writes. A reloaded fork needs a fresh local grant. A browser-backed fork arriving on a different browser
 is unavailable until cloned and rebuilt against that browser's own store; its imported UUID is not authority. Weather gets only a forecast projection for a host-selected place:
 search queries come from the trusted user-operated city picker, not package code. Preview uses
-sample data, with no real writes. There is no model-forwarding, navigation, export or clipboard API.
+sample data, with no real writes. Domain actions use opaque, presentation-bound handles; packages
+cannot create destinations or send their own strings to clipboard, navigation or provider APIs.
+There is no model forwarding, arbitrary navigation, export or clipboard API.
+
+The four domain packages own their headings, item layout, states, details and summaries in
+`src/main.js`. Trusted brokers project only the granted fields and selected actions:
+
+- **Agenda:** selected/hidden calendars and 1/3/7-day settings; today's due/overdue tasks from
+  visible lists; timed/all-day, live/past and recurring events; meeting links, partial calendar
+  errors and existing linked-note marks. Completion calls the existing task domain, preserving
+  recurrence; opening tasks/events/notes uses their existing app actions. Eight task/event rows
+  per page keep all results reachable without exceeding descriptor budgets.
+- **Code inbox:** reviews, own pull requests and assigned issues, section filters, draft labels,
+  counts and age. Five items per section per page preserve the prior first-page composition and
+  expose later items. Plain click uses the existing Git availability check and provider fallback;
+  modified/middle clicks retain the broker-bound provider destination.
+- **Status:** up/down/paused, uptime, latency, outage details and certificate warnings, with twelve
+  checks per page and fixed check destinations. **Minecraft:** online/offline, server metadata,
+  world clock, twelve player heads/details per page, dimensions/vitals, fixed-address copy feedback
+  and the existing server window. Hover and touch details remain available.
+
+Capabilities distinguish read data from actions (`agenda.act`, `inbox.navigate`,
+`status.navigate`, `minecraft.act`); action capabilities require the matching read capability.
+Resource handles bind account/connection authority, instance, revision and exact displayed input.
+The renderer checks current grants and resource type at every interaction. Provider refs,
+credentials and navigation URLs stay outside the VM. Clipboard writes copy only the fixed
+Minecraft address following a user gesture. Shared reads are scoped to account/connection
+identity; visibility/revocation cancels pending reads. Agenda refreshes every five minutes,
+Inbox every two, Status every minute and Minecraft every thirty seconds while eligible.
 Shell visibility owns widget work: putting notes away, covering them with a maximized window,
 minimizing, hiding the document or entering the mobile breakpoint aborts active/queued work and
 pending mutations. Showing them again renders the latest revision. **Use my location** keeps
@@ -4360,19 +4388,34 @@ the instance, account status/identity, runtime revision and grant epoch: hydrati
 changes abort/restart the loop, while ordinary renders do not trigger fetch loops. Results and
 errors are scoped to the same lifecycle.
 
-The SDK build identity is now descriptors 1.1. Saved snapshots from the initial unreleased 1.0
-slice need explicit rebuild/preview/activation; they are not silently upgraded or re-granted.
+The SDK build identity is descriptors 1.2. Snapshots from the earlier unreleased 1.0/1.1
+slices need explicit rebuild/preview/activation; they are not silently upgraded or re-granted.
 
-**Migration boundary and staged gaps.** This slice adds versioned `widgets:packages:v1`
-installation records; existing `widgets`, `widgets:placed` and note stores remain authoritative.
-It deliberately does not cut config/placement over to a second canonical store or ingest later
-legacy writes into a new one. Existing hydration-aware legacy-layout migration, counters,
-geometry, note IDs and tombstones remain intact; unavailable runtime/source is not a removal.
-Calendar link/unlink and backlinks remain in the trusted menu/Notebook, but inline calendar chips
-and a narrow package calendar operation are staged. The other four packages, TypeScript/TSX,
+**Canonical state and migration.** `widgets:state:v2` is one versioned envelope containing
+per-config counters/tombstones, placement geometry/tombstones and immutable installation
+revisions/generations. Its presence is the atomic cutover marker. First import waits for successful
+account discovery and complete account-state hydration; failed/offline discovery does not mean
+an empty account. Confirmed guests cut over locally, including servers with sign-in disabled.
+Edits made while hydration is pending use a browser-local journal and replay after hydration.
+The one-time import preserves IDs, note identities, counters, geometry, overlap, stacking and
+removals from legacy config/placements/installations and desktop/mobile layouts. Legacy records
+remain intact for older clients; later legacy writes cannot overwrite canonical state or resurrect
+removed widgets. Browser source authority still requires this device's store UUID.
+
+Hidden/mobile/minimized, unavailable source/runtime and unknown newer widget kinds never imply
+removal. Only an explicit close records a placement tombstone. Width/content-height sizing,
+regular-window two-axis sizing and the under-720-pixel hide rule stay unchanged. Previous revision
+recovery checks the current generation and active source/digest identity, rejecting conflicting
+newer installations; it never restores older config, placement or note contents. Same-revision
+activation retries reconcile idempotently. Config counters continue past known remote counters,
+and installation activation budgets the complete envelope rather than just package bytes.
+
+**Staged gaps.** Calendar link/unlink and backlinks remain in the trusted menu/Notebook. Inline
+Sticky calendar chips and a narrow package calendar operation are still staged. TypeScript/TSX,
 source-defined test execution, broader catalog, executable iframe comparison, conflict UI and
-ClientCalls-based agent source authoring are follow-up work. Agent browser writes have not been
-broadened. This is a reviewable first slice, not completion of the six-widget platform.
+ClientCalls-based agent source authoring remain the next milestone. Agent browser writes have
+not been broadened. This milestone completes six built-in packages and canonical cutover; it is
+not the final platform release.
 
 `pnpm check:widget-packages` checks verifier/digest/VM attacks and native transaction rules.
 `pnpm check:widget-packages-ui` uses scratch data, synthetic accounts and muted Chromium to prove
@@ -4380,8 +4423,13 @@ clone/Xed edit/build/mock/activate/recover, native input/IME/undo, stale writes,
 place selection and mobile preservation. `pnpm check:widget-lifecycle` uses fake clocks for
 scheduler fairness/rate limiting/cancellation and forecast age/refresh, plus note paging/edit
 bounds and stale revision fixtures. `pnpm check:widget-review-ui` exercises the seven review
-regressions with synthetic accounts and muted Chromium. Existing widget sync/layout tests cover
-legacy fixtures. `pnpm check:widget-weather-lifecycle` delays `/api/me` and forecast replies to
+regressions with synthetic accounts and muted Chromium. Existing widget sync/layout tests cover canonical and legacy fixtures.
+`pnpm check:widget-builtins` executes all six sources and resource-descriptor attack fixtures.
+`pnpm check:widget-builtins-ui` exercises synthetic six-package behavior, source editing in Xed,
+build/mock/activate/recover, action grants, private projections, paging, hidden read cancellation,
+unavailable sources, mobile preservation and explicit removals. `pnpm check:widget-canonical`
+checks old/new clients, complete/missing/failed hydration, offline edits, CAS conflicts, deterministic
+merges, config counters, placement tombstones, guests and storage denial. `pnpm check:widget-weather-lifecycle` delays `/api/me` and forecast replies to
 check hydration, same-identity renders, runtime changes, grant revocation/re-grant and account
 authority loss/recovery, including stale cancellation. Lifecycle VM tests also exercise checklist
 prefixes at byte boundaries, oversized single lines and exact original edit offsets. Live Seafile, a full storage-denied environment and non-Chromium browsers remain
@@ -4476,7 +4524,7 @@ made (`create`). List it in [`registry.tsx`](src/widgets/registry.tsx) and it ge
 dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go through
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
 notes. Which widgets are on the desktop, and where, is a set of its own
-([`src/os/widgetPlaces.ts`](src/os/widgetPlaces.ts), synced as `widgets:placed`), not part of the
+([`src/os/widgetPlaces.ts`](src/os/widgetPlaces.ts), the placements projection of `widgets:state:v2`), not part of the
 window layout: signed in, another browser or device shows the same widgets (same ids, so their
 settings apply too), and adding, moving, minimizing or removing one shows up elsewhere on the next
 pull (a refresh, or coming back to the tab). The set merges by widget id, the latest change to
@@ -4504,9 +4552,9 @@ Their instances, settings and desktop positions remain saved for the return to d
 Chromium using synthetic data. `pnpm check:widget-geometry` checks fitting without a browser.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
-layout by an earlier release move into the set when that layout is loaded or arrives from the
-server or another tab (before a merge of the layouts could drop it) (unless the set already
-has newer entries, or had them and they were removed since). Migrated coordinates have an
+layout by an earlier release move into the canonical set during the one-time, complete account
+hydration import (unless placements have newer entries or removal tombstones). After cutover,
+later legacy window-layout writes are never imported again. Migrated coordinates have an
 unknown-screen marker: they are shown as stored and clamped to fit, without scaling or assigning
 a default spot. Equal change counters prefer a desktop-width source (at least 720 px), then the
 larger width, then a deterministic tie-break. The width of the importing browser is only a

@@ -1,11 +1,13 @@
+import { useMemo } from 'react'
 import { defaultBuild, isBuiltin } from './defaults'
-import { synced } from '../../os/synced'
+import type { Synced } from '../../os/synced'
+import { canonicalInstallations, canonicalInstallationBytes } from './canonicalState'
 import { getAccount } from '../../os/account'
 import { accountGuard } from '../../os/accountSpace'
-import { record, verifySnapshot, type Snapshot, type SourceIdentity } from './package'
+import { isWidgetKind, supportsCapabilities, record, verifySnapshot, type Snapshot, type SourceIdentity, type WidgetKind } from './package'
 import { assertSource } from './sources'
 export type Revision = { source: SourceIdentity; snapshot: Snapshot }
-export type Installation = { schema: 1; instance: string; kind: 'weather' | 'sticky'; generation: number; active: Revision; previous?: Revision }
+export type Installation = { schema: 1; instance: string; kind: WidgetKind; generation: number; active: Revision; previous?: Revision }
 type Installations = Record<string, Installation>
 export function mergeInstallations(local: Installations, remote: Installations): Installations {
   const out = { ...remote }
@@ -19,19 +21,21 @@ function normalize(raw: unknown): Installations {
   if (!record(raw)) return {}
   const out: Installations = {}
   for (const [id, value] of Object.entries(raw).slice(0, 32)) {
-    if (/^[\w-]{1,80}$/.test(id) && record(value) && value.schema === 1 && value.instance === id && ['weather', 'sticky'].includes(String(value.kind)) && Number.isSafeInteger(value.generation) && Number(value.generation) > 0 && record(value.active) && record(value.active.source) && record(value.active.snapshot)) out[id] = value as Installation
+    if (/^[\w-]{1,80}$/.test(id) && record(value) && value.schema === 1 && value.instance === id && isWidgetKind(value.kind) && Number.isSafeInteger(value.generation) && Number(value.generation) > 0 && record(value.active) && record(value.active.source) && record(value.active.snapshot)) out[id] = value as Installation
   }
   return out
 }
-export const installations = synced<Installations>('widgets:packages:v1', {}, { normalize, merge: mergeInstallations, mergeTabs: true })
+export const installations: Synced<Installations> = { ...canonicalInstallations, get: () => normalize(canonicalInstallations.get()), set: next => canonicalInstallations.set(all => { const current=normalize(all);return {...all,...(typeof next==='function'?next(current):next)} }), use: useInstallationRecords, onRemote: listener => canonicalInstallations.onRemote(raw=>listener(normalize(raw))) }
+function useInstallationRecords(){const raw=canonicalInstallations.use();return useMemo(()=>normalize(raw),[raw])}
 export const installation = (id: string) => installations.get()[id]
-export async function activate(instance: string, kind: Installation['kind'], revision: Revision, expectedGeneration: number) {
+export const installationIdentity = (value?: Installation) => JSON.stringify([value?.generation ?? 0, value?.active.snapshot.digest, value?.active.source])
+export async function activate(instance: string, kind: Installation['kind'], revision: Revision, expectedGeneration: number, expectedIdentity = installationIdentity(installation(instance))) {
   assertSource(revision.source)
   if (!accountGuard() || !getAccount().user) throw new Error('Sign in to install a package')
   const account = getAccount().user!.id
-  if (!/^[\w-]{1,80}$/.test(instance) || !['weather', 'sticky'].includes(kind) || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) throw new Error('Invalid installation identity')
+  if (!/^[\w-]{1,80}$/.test(instance) || !isWidgetKind(kind) || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) throw new Error('Invalid installation identity')
   const snapshot = await verifySnapshot(revision.snapshot)
-  if (snapshot.manifest.capabilities.some(c => !(kind === 'sticky' ? ['note.read', 'note.write'] : ['weather.read']).includes(c))) throw new Error('Capabilities do not match instance resource')
+  if (!supportsCapabilities(kind, snapshot.manifest.capabilities)) throw new Error('Capabilities do not match instance resource')
   assertSource(revision.source)
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   const fallback = { source: { kind: 'system' as const, path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }
@@ -41,18 +45,18 @@ export async function activate(instance: string, kind: Installation['kind'], rev
   installations.set(all => {
     const current = all[instance]
     if (current?.active.snapshot.digest === snapshot.digest && JSON.stringify(current.active.source) === JSON.stringify(revision.source)) return all
-    if ((current?.generation ?? 0) !== expectedGeneration) { conflict = true; return all }
+    if ((current?.generation ?? 0) !== expectedGeneration || installationIdentity(current) !== expectedIdentity) { conflict = true; return all }
     if (!current && Object.keys(all).length >= 12) { conflict = true; return all }
     const next: Installations = { ...all, [instance]: { schema: 1, instance, kind, generation: expectedGeneration + 1, active: { source: revision.source, snapshot }, previous: current?.active ?? fallback } }
-    if (new TextEncoder().encode(JSON.stringify(next)).length > 480 * 1024) { conflict = true; return all }
+    if (canonicalInstallationBytes(next) > 480 * 1024) { conflict = true; return all }
     return next
   })
   if (conflict) throw new Error('Installation changed; reload before activating')
 }
-export async function recover(instance: string, expectedGeneration: number) {
+export async function recover(instance: string, expectedGeneration: number, expectedIdentity = installationIdentity(installation(instance))) {
   const current = installation(instance)
-  if (!current?.previous || current.generation !== expectedGeneration) throw new Error('Previous revision unavailable or installation changed')
-  await activate(instance, current.kind, current.previous, expectedGeneration)
+  if (!current?.previous || current.generation !== expectedGeneration || installationIdentity(current) !== expectedIdentity) throw new Error('Previous revision unavailable or installation changed')
+  await activate(instance, current.kind, current.previous, expectedGeneration, expectedIdentity)
 }
 /** Identity grants are local to this live account session, never accepted from imported/synced files. */
 const grants = new Set<string>()

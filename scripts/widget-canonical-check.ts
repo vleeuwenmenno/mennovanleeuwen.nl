@@ -76,6 +76,7 @@ class Page {
   cookie: string
   failPull = false
   failAccount = false
+  authEnabled = true
   blocked = false
   canonical!: typeof import('../src/widgets/platform/canonicalState.ts')
   wp!: typeof import('../src/os/widgetPlaces.ts')
@@ -140,7 +141,7 @@ g.clearTimeout = (id: number) => timers.delete(id)
 g.fetch = async (path: string, init: RequestInit = {}) => {
   const page = active
   const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status })
-  if (path === '/api/me') return page.failAccount ? json({ error: 'offline fixture' }, 503) : json({ authEnabled: true, user: page.accountId === 'visitor' ? null : { id: Number(page.accountId), login: 'fixture' }, forges: [] })
+  if (path === '/api/me') return page.failAccount ? json({ error: 'offline fixture' }, 503) : json({ authEnabled: page.authEnabled, user: page.accountId === 'visitor' ? null : { id: Number(page.accountId), login: 'fixture' }, forges: [] })
   const server = servers.get(page.accountId)!
   if (path === '/api/state') return page.failPull ? json({ error: 'offline fixture' }, 503) : json(Object.fromEntries(server))
   if (path.startsWith('/api/state/') && init.method === 'PUT') {
@@ -316,6 +317,14 @@ try {
   await guest.login()
   assert.ok(guest.meta(KEY).value.placements.places.guest)
   assert.equal(guest.meta(KEY).value.configs.guest.value.tilt, -2)
+  const authDisabled = new Page('visitor', 'auth-disabled')
+  authDisabled.authEnabled = false
+  await authDisabled.init()
+  authDisabled.config.setWidgetConfig('local', { tilt: 3 })
+  assert.equal(authDisabled.meta(KEY), null)
+  await authDisabled.login()
+  assert.equal(authDisabled.account.getAccount().status, 'off')
+  assert.equal(authDisabled.meta(KEY).value.configs.local.value.tilt, 3, 'confirmed auth-disabled guest cuts over locally')
   const denied = new Page('visitor', 'denied')
   denied.blocked = true
   await denied.init()

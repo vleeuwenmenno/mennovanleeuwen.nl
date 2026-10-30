@@ -83,7 +83,7 @@ const emptyJournal = () => stableJSON(pending) === stableJSON(emptyPending())
 function hydrate(snapshot: SyncedHydration = {}) {
   if (!accountGuard()) return
   const account = getAccount()
-  if (account.status !== 'user' && account.status !== 'anon') return
+  if (account.status !== 'user' && account.status !== 'anon' && !(account.status==='off'&&account.resolved)) return
   if (account.status === 'user' && !getSyncedHydration()) return
   if (account.status !== 'user' && TAB_UID !== null) return
   // Unsupported/corrupt envelopes are not evidence that instances were removed. Keep the local
@@ -186,7 +186,7 @@ state.onSynced(() => { if (ready) syncedListeners.forEach(l => l()) })
 onSyncedHydration(hydrate)
 subscribeAccount(() => {
   const account = getAccount()
-  if (account.status === 'anon') hydrate()
+  if (account.status === 'anon' || account.status==='off'&&account.resolved) hydrate()
 })
 // Modules may load after /api/me and /api/state, or after a guest was established.
 if (ready && !emptyJournal()) {
