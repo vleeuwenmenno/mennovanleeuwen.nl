@@ -3,7 +3,7 @@ import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type Point
 import { addWidgetItems } from '../widgets/registry'
 import { APP_META } from './apps'
 import { cancelTouchMenu, linkAt, linkMenu, openContextMenu, wantsNativeMenu, type MenuItem } from './ContextMenu'
-import { getDockMode, snapReserve } from './dockPrefs'
+import { maxReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { useSwing } from './swing'
 import { WindowMenuContext } from './windowMenu'
@@ -154,7 +154,7 @@ function workspaceAt(x: number, y: number): number | null {
 }
 const clearWorkspaceDrop = () => document.querySelectorAll('.ws[data-drop]').forEach((el) => el.removeAttribute('data-drop'))
 
-const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: viewW() - 20, h: viewH() - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
+const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: viewW() - 20, h: viewH() - TOP_BAR - 20 - maxReserve() })
 
 export function Window({ win, title, chrome = 'default', className = '', style, menuItems = [], closeLabel = 'Close', resizableWidth = false, children }: Props) {
   const wm = useWM()

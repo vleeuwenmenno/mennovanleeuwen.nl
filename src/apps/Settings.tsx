@@ -32,7 +32,7 @@ import { clearCodeSearch } from '../os/codeSearch'
 import type { OrgAccess, OrgsResponse } from '../data/code'
 import { APP_META } from '../os/apps'
 import { isDefaultDock, isLauncherId, launcherDockId, pinToDock, resetDock, setDockOrder, unpinFromDock, unpinnedApps, useCanCustomizeDock, useDock, type DockId } from '../os/dockItems'
-import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from '../os/dockPrefs'
+import { DOCK_MODES, getDockMode, setDockMode, snapReservePref, type DockMode } from '../os/dockPrefs'
 import { DRAG_KEYS, dragKeyPref } from '../os/modDrag'
 import { AppIcon } from '../os/icons'
 import { setStartupPrefs, START_WINDOWS, useStartupPrefs } from '../os/startup'
@@ -882,6 +882,7 @@ function DockSettings() {
   const can = useCanCustomizeDock()
   const launchers = useLaunchers()
   const mode = useDockMode()
+  const reserve = snapReservePref.use()
   const behaviour = (
     <SetGroup title="Show the dock">
       <div className="set-radios" role="radiogroup" aria-label="Show the dock">
@@ -894,10 +895,24 @@ function DockSettings() {
       </div>
     </SetGroup>
   )
+  const layout = (
+    <SetGroup title="Snapped windows">
+      <ul className="set-list">
+        <li className="set-row">
+          <span className="set-row-text">
+            <strong className="set-row-wrap">Reserve dock space for snapped windows</strong>
+            <span className="muted set-row-wrap">Off: windows snapped left, right or to a corner use the height under the dock. Saved on this device only</span>
+          </span>
+          <Toggle on={reserve} onChange={(v) => snapReservePref.set(v)} label="Reserve dock space for snapped windows" />
+        </li>
+      </ul>
+    </SetGroup>
+  )
   if (!can)
     return (
       <>
         {behaviour}
+        {layout}
         <p className="muted set-help">Drag dock icons to reorder them. Open apps also show in the dock until they are closed. Sign in to add apps and launchers to the dock or take them off.</p>
       </>
     )
@@ -917,6 +932,7 @@ function DockSettings() {
   return (
     <>
       {behaviour}
+      {layout}
       <h4 className="set-subhead">In the dock</h4>
       <ul className="set-list">
         {dock.map((id, i) => (
@@ -2213,7 +2229,7 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'appearance', label: 'Appearance', hue: 'var(--blue)', icon: svg(<><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" /></>), keywords: 'theme dark light mode accent color omarchy ui scale zoom size text size bigger smaller magnify desktop motion wiggle swing animation performance fps frame time counter', blurb: 'Light and dark mode, themes, the accent color, the UI scale, motion and frame timing.', render: () => <Appearance /> },
-      { id: 'dock', label: 'Dock', hue: 'var(--cyan)', icon: svg(<><rect x="3" y="4" width="18" height="16" /><path d="M7 16h10" /></>), keywords: 'dock hide pin apps order', blurb: 'When the dock shows, and what is in it.', render: () => <DockSettings /> },
+      { id: 'dock', label: 'Dock', hue: 'var(--cyan)', icon: svg(<><rect x="3" y="4" width="18" height="16" /><path d="M7 16h10" /></>), keywords: 'dock hide pin apps order snap snapped windows tile left right bottom reserve space full height', blurb: 'When the dock shows, and what is in it.', render: () => <DockSettings /> },
       { id: 'launchers', label: 'Launchers', hue: 'var(--magenta)', icon: svg(<><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></>), keywords: 'launchers links bookmarks desktop shortcuts', blurb: 'Links on the desktop, in All apps and in Spotlight.', render: () => <Launchers /> },
     ],
   },

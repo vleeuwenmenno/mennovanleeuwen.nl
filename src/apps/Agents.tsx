@@ -135,6 +135,8 @@ import { AlwaysChips, showProjectSkills } from './AgentsSkillRules'
 import { openShareDialog } from './AgentsShare'
 import { AttachedFiles, memoryPicture, sentPicture, ImageCard, Thumbnails } from './AgentsImages'
 import { ACTION, ActionRow, MoreButton, tidy } from './AgentsActions'
+import { WebFetchRecovery, READ_FAILED, askPageText, type PastePage } from './AgentsWebRecovery'
+import { failedWebRead, appendToDraft, pageTextParts } from '../data/agentWebRecovery'
 import { ObservationLine, ObservationsDialog } from './AgentsObservations'
 import { readObservation } from '../data/imageObservations'
 import { MarkdownPreview } from './Zed'
@@ -1440,6 +1442,47 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     const change = await askText({ title: 'Edit picture', body: <>What should change in “{name}”?</>, label: 'What should change?', placeholder: 'Make the sky orange and the title bigger', confirm: 'Redraw', validate: (t) => (t.trim() ? null : 'Say what should change') })
     if (change?.trim()) void send(`Change the picture “${name}” (${ref}): ${change.trim()}`)
   }
+  // Page text pasted for a web read that failed goes into the box, for the user to read and send; it is
+  // never sent from here. It is added only if this same thread is still open and no queued message is
+  // being edited when the dialog closes.
+  const mounted = useRef(true)
+  useEffect(() => ((mounted.current = true), () => void (mounted.current = false)), [])
+  const openThread = useRef<string | undefined>(undefined)
+  openThread.current = thread?.id
+  const latestText = useRef(text)
+  latestText.current = text
+  const editingQNow = useRef(false)
+  editingQNow.current = !!editingQ
+  const pastePage = async (origin: string, url: string) => {
+    let pasted: string | null = ''
+    let problem: string | null = null
+    for (;;) {
+      pasted = await askPageText(url, pasted ?? '', problem)
+      if (pasted === null) return
+      if (!mounted.current || openThread.current !== origin || editingQNow.current) return void tell({ title: 'Page text not added', body: 'That thread was closed, or a queued message was being edited, before the text was added. Nothing was added: open the thread and try again.' })
+      const parts = pageTextParts(url, pasted, PASTE_AS_FILE, latestText.current.length, MAX_MESSAGE)
+      let file: Attachment | undefined
+      if (parts.file) {
+        if (latestFiles.current.length >= 10) {
+          problem = 'This text is too long for the message box, so it would be an attachment, and there are 10 already. Remove an attachment, then press Add to message again.'
+          continue
+        }
+        try {
+          const n = latestFiles.current.filter((f) => f.name.startsWith('Page text')).length
+          file = textAttachment(parts.file, n ? `Page text ${n + 1}.txt` : 'Page text.txt')
+        } catch (e) {
+          problem = (e as Error).message
+          continue
+        }
+      }
+      setText((t) => appendToDraft(t, parts.message))
+      if (file) setFiles((f) => (f.length >= 10 ? f : [...f, file]))
+      setError(null)
+      input.current?.focus()
+      return
+    }
+  }
+  const pasteHere: PastePage | undefined = thread ? { run: (url) => void pastePage(thread.id, url), blocked: editingQ ? 'Finish editing the queued message first' : undefined } : undefined
   const send = async (asked?: string) => {
     const typed = (asked ?? text).trim()
     let attached = asked === undefined ? files : []
@@ -2233,7 +2276,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             setFiles((current) => [...current.filter((f) => f.source !== 'Image-to-image source'), { name: `${name} (image source)`, source: 'Image-to-image source', kind: 'text', mime: 'text/plain', size: reference.length, text: reference }])
             setText((t) => t.startsWith('Edit this image: ') ? t : `Edit this image: ${t}`)
             input.current?.focus()
-          }} onMaskSaved={(saved) => {
+          }} paste={pasteHere} onMaskSaved={(saved) => {
             // The hand-off back: the saved mask rides along with the next message, which the user sends when ready.
             if (files.filter((f) => f.source !== 'Edited mask').length >= 10) { setError('Remove an attachment before handing back the mask (10 attachments maximum).'); return }
             const what = saved.from.target ? ` for “${saved.from.target}”` : ''
@@ -2488,7 +2531,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onEditPicture, onMaskSaved, onOpenRun }: { /** Opens a task's run (a task that continues this thread landed here) */ onOpenRun: (task: string, run: string) => void; onEditImage: (name: string, sourceId: string) => void; /** Edit on a gpt_image picture (its name and id), when GPT images is on in this thread */ onEditPicture?: (name: string, ref: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onEditPicture, onMaskSaved, onOpenRun, paste }: { /** Where pasted page text goes (a failed web read's card) */ paste?: PastePage; /** Opens a task's run (a task that continues this thread landed here) */ onOpenRun: (task: string, run: string) => void; onEditImage: (name: string, sourceId: string) => void; /** Edit on a gpt_image picture (its name and id), when GPT images is on in this thread */ onEditPicture?: (name: string, ref: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   const [maskSource, setMaskSource] = useState<InpaintSource | null>(null)
   // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
   const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
@@ -2600,7 +2643,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           )
           // Masks the agent made or listed show as tinted pictures, each with Edit mask.
           const masks = (c.name === 'make_image_mask' || c.name === 'list_image_masks') && results[j] ? agentMasks(results[j].content) : []
-          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{c.name === 'gpt_image' && !results[j] && wait?.gpt && threadId && wait.width && wait.height && <GptImageDrawing threadId={threadId} callId={wait.callId} width={wait.width} height={wait.height} drawing={wait.gpt} infographic={c.arguments?.mode === 'infographic'} />}{(c.name === 'plan_video' || c.name === 'render_video') && results[j] && <VideoStudioLink result={results[j].content} />}{c.name === 'gpt_image' && results[j] && <GptImageResult threadId={threadId} result={results[j]} onEdit={onEditPicture && !answering ? onEditPicture : undefined} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
+          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} paste={paste} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{c.name === 'gpt_image' && !results[j] && wait?.gpt && threadId && wait.width && wait.height && <GptImageDrawing threadId={threadId} callId={wait.callId} width={wait.width} height={wait.height} drawing={wait.gpt} infographic={c.arguments?.mode === 'infographic'} />}{(c.name === 'plan_video' || c.name === 'render_video') && results[j] && <VideoStudioLink result={results[j].content} />}{c.name === 'gpt_image' && results[j] && <GptImageResult threadId={threadId} result={results[j]} onEdit={onEditPicture && !answering ? onEditPicture : undefined} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
         })}
       </Fragment>,
     )
@@ -2725,7 +2768,7 @@ type CalendarHit = { id?: string; title: string; when: string; calendar: string 
 type MailHit = { message_id?: string; subject: string; from: string; date: string }
 
 /** One tool call: what it did in a line, and when opened, what it was given and what came back. */
-function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, summary, check, mailAlways }: { /** Mail reads are always allowed already */ mailAlways?: boolean; tag: string; call: ToolCall; result?: string; /** Why it ran without asking (a checked web read) */ checked?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary; /** What Auto's check said about a web read it would not clear */ check?: string }) {
+function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, summary, check, mailAlways, paste }: { /** Where pasted page text goes, for a web read that failed */ paste?: PastePage; /** Mail reads are always allowed already */ mailAlways?: boolean; tag: string; call: ToolCall; result?: string; /** Why it ran without asking (a checked web read) */ checked?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary; /** What Auto's check said about a web read it would not clear */ check?: string }) {
   let parsed: unknown = null
   try {
     parsed = result ? JSON.parse(result) : null
@@ -2733,6 +2776,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
     parsed = result
   }
   const failed = !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'error' in parsed
+  const readFailed = !!failedWebRead(call, result)
   const hits = call.name === 'web_search' && Array.isArray(parsed) ? (parsed as SearchHit[]) : null
   const events = call.name === 'calendar_list_events' && parsed && typeof parsed === 'object' && Array.isArray((parsed as { events?: unknown }).events) ? (parsed as { events: CalendarHit[]; more?: number }) : null
   // find_image's pictures, kept on this server (server/findImage.ts): only ids of that shape are shown.
@@ -2778,12 +2822,12 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
       </div>
     )
   return (
-    <details className={`agt-tool ${failed ? 'is-failed' : ''}`} data-tool={tag}>
+    <details className={`agt-tool ${failed ? 'is-failed' : ''}`} data-tool={tag} open={readFailed || undefined}>
       <summary>
         <span className="agt-tool-icon" aria-hidden>
           {pending ? '◌' : failed ? '✕' : '✓'}
         </span>
-        <span className="agt-tool-label">{toolLabel(call, result)}</span>
+        <span className="agt-tool-label" title={call.name === 'web_fetch' && typeof call.arguments?.url === 'string' ? call.arguments.url : undefined}>{toolLabel(call, result)}</span>
         {inTerminal && <span className="muted"> · running…</span>}
         {checked && (
           <span className="muted agt-tool-checked" title={checked}>
@@ -2805,9 +2849,11 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
             · {mails.length} {mails.length === 1 ? 'conversation' : 'conversations'}
           </span>
         )}
-        {failed && <span className="t-red"> · {String((parsed as { error: unknown }).error)}</span>}
+        {failed && <span className="t-red"> · {readFailed ? READ_FAILED : String((parsed as { error: unknown }).error)}</span>}
       </summary>
-      {hits ? (
+      {readFailed ? (
+        <WebFetchRecovery call={call} result={result} paste={paste} />
+      ) : hits ? (
         <ul className="agt-hits">
           {hits.map((h) => (
             <li key={h.url}>

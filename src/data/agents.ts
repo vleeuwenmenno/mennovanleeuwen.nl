@@ -10,6 +10,7 @@ import { generateImageLabel, modelDetailsLabel } from './imageToolLabel'
 import { effortFor, type Effort } from './agentModelNames'
 import type { ThreadStats } from './agentStats'
 import type { SubagentInfo, SubagentOverview } from './agentSubagents'
+import { labelUrl } from './agentWebRecovery'
 import { isHeifFile, isRawFile, stillPicture } from './stillPicture'
 
 // The Agents app's side of server/agents.ts: threads, a turn streamed as JSON lines, memory and
@@ -730,7 +731,7 @@ export function toolLabel(call: ToolCall, result?: string): string {
     case 'find_image':
       return `${result ? 'Found pictures of' : 'Finding pictures of'} “${s('query').slice(0, 80)}”`
     case 'web_fetch':
-      return `Read ${s('url').replace(/^https?:\/\/(www\.)?/, '').slice(0, 80)}`
+      return `Read ${labelUrl(s('url'))}`
     case 'remember': {
       const n = Array.isArray(a.items) ? a.items.length : 1
       return n > 1 ? `Saved ${n} memories` : 'Saved to memory'

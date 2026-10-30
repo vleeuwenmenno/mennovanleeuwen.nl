@@ -165,6 +165,13 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+Settings → Dock → *Show the dock* picks when the dock shows (always, auto-hide when a window covers
+it, or always auto-hide). Windows snapped left, right or to a corner keep room for the dock unless
+it always auto-hides; turning off *Reserve dock space for snapped windows* (on this device only,
+[`src/os/dockPrefs.ts`](src/os/dockPrefs.ts)) lets them use the height under the dock too, with the
+top bar and the usual gaps kept. Snapped windows re-fit when it changes. Maximized windows are not
+affected: they only leave room when the dock is always shown.
+
 ## Moving windows with a key
 
 Like Hyprland, a window can be dragged by holding a key and dragging anywhere on it
@@ -2511,6 +2518,24 @@ does not come along (the terminal, image generation). The editor says whether th
 match its thread's, with **Use thread's tools again**; `update_task` with `use_thread_tools` does the
 same (only in the thread the task was made in), and its card says when that widens what the task may do. Its model is the thread's, unless one
 is named. Tasks made in the Tasks tab with no thread open keep the safe defaults below.
+
+**A web page the reader could not read.** When a `web_fetch` fails, its card says *Reader couldn’t
+retrieve this page* and opens with the whole address (the one-line title cuts a long one with “…”,
+and its tooltip has all of it). The reader's error is kept as it is under *Error from the reader*:
+it cannot tell a site that blocks the reader from a page that does not exist, so the card claims
+neither, and the agent saw only that error. **Open page** opens the address in a new tab (http and
+https only; nothing opens by itself). **Paste page text…** opens a dialog: copy the page's text in
+your browser and paste it there, and it is added to the end of your message box under a line naming
+the page, for you to read and send; it is never sent for you. Text of 5,000 characters or more (or
+that would make the box too long) goes along as a `Page text.txt` file whose first line names the
+page; with 10 attachments already, the dialog keeps your text and says why. What you had typed and
+attached stays. It is not offered while a queued message is being edited, and if you leave the thread
+before the dialog closes nothing is added. The card does not appear for a read you declined, one nobody
+answered or a cancelled run: those keep their own message. The page text is read from what you paste,
+not from the clipboard by the site, and nothing is fetched by the browser for you. Only a client
+change: the server and the reader are untouched, so a blocked page stays blocked for the agent until
+you paste it. Checked by `pnpm check:agents-web-recovery` (and, against a dev server,
+`pnpm check:agents-web-recovery-ui`).
 
 *A model of its own.* The editor picks from your models; `create_task` and `update_task` take
 `model` ("run my morning brief on GLM from now on"), and the card shows the change ("A → B"). A

@@ -76,6 +76,8 @@
     "check:agents-openai-images": "node scripts/agents-openai-images.ts",
     "check:agents-permissions": "node scripts/agents-permissions.ts",
     "check:agents-compact": "node scripts/agents-compact.ts",
+    "check:agents-web-recovery": "node scripts/agents-web-recovery.ts",
+    "check:agents-web-recovery-ui": "node scripts/agents-web-recovery-ui.ts",
     "check:agents-chatgpt-refresh": "node scripts/agents-chatgpt-refresh.ts",
     "check:find-image-cache": "node scripts/find-image-cache-check.ts",
     "check:agents-stats": "node scripts/agents-stats.ts",
