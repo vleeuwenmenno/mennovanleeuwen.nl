@@ -4411,6 +4411,9 @@ excludes overlapping writers even when another tab pauses immediately before nat
 `localStorage.setItem`; another pre-write read alone would not provide that guarantee. IndexedDB
 holds no account data here. Its scope supplies mutual exclusion; it does not roll back a
 localStorage write if the transaction later aborts. Receipts precede cleanup, making retry safe.
+Failed writes do not publish their speculative receipts to the in-memory store; journal pruning
+uses only receipts in the stored envelope. Pending operations are included when evaluating each
+new edit, including an edit that returns a field to its earlier value.
 All tabs use this same protocol, with or without Web Locks.
 
 Local UI updates remain optimistic after their journal write succeeds. Explicit installation
@@ -4423,6 +4426,9 @@ on revocation/switch; authorized logout cleanup follows earlier active writers a
 account-space revocation marker so other open tabs cannot recreate cleared state. If storage
 refuses cleanup, authentication is still revoked and the inaccessible copy remains in that
 account's namespace. Ordinary synced stores keep their synchronous persistence behavior.
+Deferred legacy widget transfers bind their intent to the exact source and ownership markers.
+If either changes before the transfer, or an older unbound transfer intent remains, the source
+and intent stay untouched for recovery; they are not attributed to the current account.
 
 Writers store patches rather than stale whole views and never erase another writer's log.
 A late tab or reload cannot reapply an already consumed edit or resurrect a consumed addition.

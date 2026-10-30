@@ -125,6 +125,31 @@ try {
     check('Controlled three-tab race has no browser exceptions',[A,B,C].every(p=>!p.errors.length),[...A.errors,...B.errors,...C.errors])
   } finally {for(const p of [A,B,C]){await p.send('Debugger.resume').catch(()=>{});await p.close()}}
 
+  const toggle=await open(true),holder=await open()
+  try {
+    await hydrate(toggle);await hydrate(holder);await flush(toggle);await flush(holder)
+    await set(toggle,'rapid',{units:'c'});await flush(toggle)
+    const resume=await pause(holder,'toggle-holder')
+    await toggle.eval(`(async()=>{const s=await import('/src/widgets/platform/canonicalState.ts');s.canonicalConfigs.set(v=>({...v,rapid:{units:'f'}}));s.canonicalConfigs.set(v=>({...v,rapid:{units:v.rapid.units==='f'?'c':'wrong'}}));s.canonicalConfigs.set(v=>{const n={...v};delete n.rapid;return n});s.canonicalConfigs.set(v=>({...v,rapid:{units:'c'}}))})()`)
+    check('Functional updates see pending set and removal',(await configs(toggle)).rapid?.units==='c')
+    await resume();await flush(toggle);await reload(toggle)
+    check('Pending toggle and removal/re-add survive gate and reload',(await configs(toggle)).rapid?.units==='c')
+  } finally {await holder.send('Debugger.resume').catch(()=>{});await toggle.close();await holder.close()}
+
+  const quotaChain=await open(true)
+  try {
+    await hydrate(quotaChain);await flush(quotaChain);await quotaChain.eval('window.__denyCanonical=true')
+    await set(quotaChain,'failed-first',{days:3})
+    await quotaChain.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalConfigs.flush().catch(()=>{}))`)
+    await set(quotaChain,'failed-second',{days:7})
+    await quotaChain.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalConfigs.flush().catch(()=>{}))`)
+    const sequences=await quotaChain.eval<number[]>(`Object.keys(localStorage).filter(k=>k.includes('widgets.pending:v2:')).flatMap(k=>Object.values(JSON.parse(localStorage.getItem(k)).operations).map(o=>o.sequence)).sort()`)
+    check('Failed canonical writes retain complete journal prefix',sequences.join(',')==='1,2',sequences)
+    await quotaChain.send('Page.navigate',{url:'about:blank'})
+    const retry=await open()
+    try { await hydrate(retry);await flush(retry);const value=await configs(retry);check('Failed writes recover both edits after navigation',value['failed-first']?.days===3&&value['failed-second']?.days===7,value) } finally {await retry.close()}
+  } finally {await quotaChain.close()}
+
   // A ready writer must leave a durable journal before returning, even while another tab owns
   // the gate and the writer is immediately navigated away.
   const H=await open(true),N=await open()
@@ -208,6 +233,27 @@ try {
     await reload(recover)
     check('Completed account transfer never reimports a later old-client write',(await configs(recover))['move-seed'].days===4)
   }finally{await recover.close()}
+
+  const stale=await open(true,{},`localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2','owner-one');Object.defineProperty(window,'indexedDB',{value:{open(){throw new DOMException('Synthetic IDB denial','SecurityError')}},configurable:true});`)
+  try {await stale.eval(`localStorage.setItem('mvlos.account','2');localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify('owner-two'))`)} finally {await stale.close()}
+  const foreign=await open()
+  try {
+    await foreign.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`)
+    const result=await foreign.eval(`({marker:localStorage.getItem('mvlos.account'),source:localStorage.getItem('mvlos.sync.widgets:state:v2'),target:localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')})`)
+    check('Stale migration intent preserves foreign owner and source',result.marker==='2'&&result.source===JSON.stringify('owner-two')&&result.target===null,result)
+  } finally {await foreign.close()}
+  const changed=await open(true,{},`localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2','first-source');Object.defineProperty(window,'indexedDB',{value:{open(){throw new DOMException('Synthetic IDB denial','SecurityError')}},configurable:true});`)
+  try {await changed.eval(`localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify('replacement-source'))`)} finally {await changed.close()}
+  const changedRetry=await open()
+  try {await changedRetry.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Changed source with same marker remains untouched',await changedRetry.eval(`localStorage.getItem('mvlos.account')==='1'&&JSON.parse(localStorage.getItem('mvlos.sync.widgets:state:v2'))==='replacement-source'&&localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')===null`))} finally {await changedRetry.close()}
+  const unbound=await open(true,{},`localStorage.setItem('mvlos.u.1.moved','1');localStorage.setItem('mvlos.u.1.widget-move:plain:v2','1');localStorage.setItem('mvlos.account','1');localStorage.setItem('mvlos.sync.widgets:state:v2','unbound-source')`)
+  try {await unbound.eval(`import('/src/os/storageTransaction.ts').then(m=>m.storageTransaction(()=>{}))`);check('Old unbound migration intent fails closed',await unbound.eval(`localStorage.getItem('mvlos.u.1.widget-move:plain:v2')==='1'&&localStorage.getItem('mvlos.sync.widgets:state:v2')==='unbound-source'&&localStorage.getItem('mvlos.account')==='1'`))} finally {await unbound.close()}
+  const older=await open(true,{},`localStorage.setItem('mvlos.owner','legacy-owner');localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify('older-owned'))`)
+  try {await older.waitFor(`JSON.parse(localStorage.getItem('mvlos.u.1.sync.widgets:state:v2'))==='older-owned'`);check('Older ownership marker permits its bound transfer',await older.eval(`localStorage.getItem('mvlos.owner')===null&&localStorage.getItem('mvlos.sync.widgets:state:v2')===null`))} finally {await older.close()}
+  const noUid=await newPage(b,1500,1000,'');await noUid.send('Network.deleteCookies',{name:'mvlos_uid',url:origin});await noUid.close()
+  const guestMove=await open(true,{},`localStorage.setItem('mvlos.sync.widgets:state:v2',JSON.stringify('visitor-owned'))`)
+  try {await guestMove.waitFor(`JSON.parse(localStorage.getItem('mvlos.visitor.sync.widgets:state:v2'))==='visitor-owned'`);check('Unowned legacy source transfers to visitor',await guestMove.eval(`localStorage.getItem('mvlos.sync.widgets:state:v2')===null`))} finally {await guestMove.close()}
+  const restoreUid=await newPage(b,1500,1000,'');await restoreUid.send('Network.setCookie',{name:'mvlos_uid',value:'1',url:origin});await restoreUid.close()
 
   const Q=await open(true)
   try {

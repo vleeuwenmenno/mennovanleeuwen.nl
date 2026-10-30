@@ -150,31 +150,34 @@ export function synced<T>(
     if (frozen() || !accountGuard()) return
     opts.beforeRead?.()
     let others = false
+    // Preparation may produce receipts. Keep them speculative until the write succeeds.
+    let candidate = meta
     // Another tab's save this tab hasn't heard of yet: merged in first.
     const raw = opts.mergeTabs && opts.merge ? accountStorage.get(storageKey(key)) : null
     if (raw !== null)
       try {
         const stored = JSON.parse(raw) as Meta<unknown>
         const theirs = normalize(stored.value)
-        const merged = opts.merge!(meta.value, theirs)
-        others = JSON.stringify(merged) !== JSON.stringify(meta.value)
-        const base = Math.max(meta.base, stored.base ?? 0)
+        const merged = opts.merge!(candidate.value, theirs)
+        others = JSON.stringify(merged) !== JSON.stringify(candidate.value)
+        const base = Math.max(candidate.base, stored.base ?? 0)
         // Unsaved only for what is unsaved here, or what the stored copy brought that wasn't saved
         // yet. Not for the stored copy's flag alone: that is often this tab's own earlier write
         // (or another tab's copy of it), and taking it in again after every save kept both tabs
         // saving the same value to the server forever.
-        meta = { value: others ? merged : meta.value, base, dirty: meta.dirty || (!!stored.dirty && others) || (base > meta.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
+        candidate = { value: others ? merged : candidate.value, base, dirty: candidate.dirty || (!!stored.dirty && others) || (base > candidate.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
       } catch (error) {
         if (opts.preserveOnMergeError) throw error
         /* not readable: written over */
       }
     if (opts.prepare) {
-      const value = opts.prepare(meta.value)
-      if (JSON.stringify(value) !== JSON.stringify(meta.value)) { meta = { ...meta, value, dirty: true }; others = true }
+      const value = opts.prepare(candidate.value)
+      if (JSON.stringify(value) !== JSON.stringify(candidate.value)) { candidate = { ...candidate, value, dirty: true }; others = true }
     }
-    const durable = meta
+    const durable = candidate
     const saved = accountStorage.set(storageKey(key), JSON.stringify(durable))
     if (opts.serialize && !saved) throw new Error('Widget storage write refused; pending changes retained')
+    meta = candidate
     if (saved) opts.afterPersist?.(durable.value)
     if (opts.prepare && meta.dirty) schedulePush(key)
     // Another tab's changes came along: show them, as when they arrive by themselves.

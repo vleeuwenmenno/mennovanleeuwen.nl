@@ -100,8 +100,10 @@ function refresh(next: WidgetState, remote = false) {
   remoteListeners.forEach(l => l(remote))
 }
 const latestState = () => mergeWidgetStates(state.get(), normalizeWidgetState((readJSON(`mvlos.sync.${WIDGET_STATE_KEY}`) as LegacyMeta | null)?.value))
+// Only the stored envelope proves receipts survived a failed write or a navigation.
+const durableState = () => normalizeWidgetState((readJSON(`mvlos.sync.${WIDGET_STATE_KEY}`) as LegacyMeta | null)?.value)
 function queue(delta: WidgetDelta) {
-  pending = unconsumed(mergePending(pending, readJournals()), latestState())
+  pending = unconsumed(mergePending(pending, readJournals()), durableState())
   const next = appendPending(pending, writer, serial + 1, delta)
   const own = { operations: Object.fromEntries(Object.entries(next.operations).filter(([, op]) => op.writer === writer)) }
   if (!accountStorage.set(ownJournalKey, JSON.stringify(own))) throw new Error('Widget journal write refused; change not admitted')
@@ -111,14 +113,14 @@ function queue(delta: WidgetDelta) {
 function finishJournal(committed: WidgetState) {
   pending = unconsumed(mergePending(pending, readJournals()), committed)
   // A successful in-memory set is not a durable receipt when storage is full/denied.
-  // Only this writer can append here, and ready writers never append again.
+  // Only this writer can append here.
   const durable = committed
   const own = normalizePending(readJSON(ownJournalKey))
   if (durable && !Object.keys(unconsumed(own, durable).operations).length && accountStorage.get(ownJournalKey) !== null) accountStorage.remove(ownJournalKey)
 }
 function pendingView() {
   const current = latestState()
-  pending = unconsumed(mergePending(pending, readJournals()), current)
+  pending = unconsumed(mergePending(pending, readJournals()), durableState())
   return applyPending(current ?? legacyState(), pending, !!current)
 }
 const emptyJournal = () => stableJSON(pending) === stableJSON(emptyPending())
@@ -135,7 +137,7 @@ function hydrate(snapshot: SyncedHydration = {}) {
   // projection and queued edits rather than overwriting that account key with a migration.
   if (snapshot[WIDGET_STATE_KEY] && !normalizeWidgetState(snapshot[WIDGET_STATE_KEY].value)) return
   const current = latestState()
-  pending = unconsumed(mergePending(pending, readJournals()), current)
+  pending = unconsumed(mergePending(pending, readJournals()), durableState())
   const next = current ?? legacyState(snapshot)
   // The serialized save merges other tabs' envelopes under the same IDB request scope before
   // writing data + receipts and cleaning this writer's journal.
@@ -165,9 +167,7 @@ function facade<T>(get: () => T, update: (next: T) => void): Synced<T> {
     get,
     set(next) {
       if (!accountGuard()) return
-      const current = latestState()
-      if (!ready) refresh(pendingView())
-      else if (current && stableJSON(current) !== stableJSON(view)) refresh(current)
+      refresh(pendingView())
       const before = get()
       const after = typeof next === 'function' ? (next as (v: T) => T)(before) : next
       if (stableJSON(before) === stableJSON(after)) return
@@ -232,7 +232,7 @@ export const canonicalInstallations = facade<InstallationRecords>(() => installa
 })
 
 state.onRemote(next => {
-  if (next && ready) refresh(next, true)
+  if (next && ready) refresh(pendingView(), true)
 })
 state.onSynced(() => { if (ready) syncedListeners.forEach(l => l()) })
 function hydrateSafely(snapshot: SyncedHydration = {}) {

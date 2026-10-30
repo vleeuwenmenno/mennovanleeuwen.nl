@@ -172,7 +172,9 @@ function moveIn() {
       const theirs = TAB_UID ? marker === TAB_UID || (!marker && !!localStorage.getItem(OLDER_MARKER)) : !marker && !localStorage.getItem(OLDER_MARKER)
       // Separate monotonic intent flags cannot overwrite another starter's positive claim.
       // Failed IDB must not reopen other stores' import or discard the original envelope.
-      if (theirs) localStorage.setItem(plainPlan, '1')
+      // Bind the intent to both the ownership markers and exact source, not merely the account
+      // that happened to observe them. A later legacy writer may replace either before IDB opens.
+      if (theirs && localStorage.getItem(WIDGET_STORAGE_KEY) !== null) localStorage.setItem(plainPlan, JSON.stringify({ marker, older: localStorage.getItem(OLDER_MARKER), source: localStorage.getItem(WIDGET_STORAGE_KEY) }))
       if (TAB_UID) localStorage.setItem(guestPlan, '1')
       if (theirs) {
         for (const k of keys) if (LEGACY.some(r => r.test(k)) && k !== WIDGET_STORAGE_KEY) {
@@ -199,12 +201,17 @@ function moveIn() {
       void storageTransaction(() => {
         if (!accountGuard()) return
         const to = accountKey(WIDGET_STORAGE_KEY)
-        if (localStorage.getItem(plainPlan)) {
+        const plan = localStorage.getItem(plainPlan)
+        if (plan) {
+          let claim: { marker: string | null; older: string | null; source: string } | undefined
+          try { claim = JSON.parse(plan) } catch { /* older unbound intent is not proof of ownership */ }
+          const marker = localStorage.getItem(OLD_MARKER), older = localStorage.getItem(OLDER_MARKER)
           const v = localStorage.getItem(WIDGET_STORAGE_KEY)
+          if (!claim || typeof claim.source !== 'string' || claim.marker !== marker || claim.older !== older || claim.source !== v || !(TAB_UID ? marker === TAB_UID || (!marker && !!older) : !marker && !older)) throw new Error('Widget migration source changed; original data retained')
           if (v !== null && localStorage.getItem(to) === null) localStorage.setItem(to, v)
+          if (localStorage.getItem(WIDGET_STORAGE_KEY) !== v || localStorage.getItem(OLD_MARKER) !== marker || localStorage.getItem(OLDER_MARKER) !== older) throw new Error('Widget migration source changed; original data retained')
           if (v !== null) localStorage.removeItem(WIDGET_STORAGE_KEY)
           // Do not remove markers another account may have established in the meantime.
-          const marker = localStorage.getItem(OLD_MARKER)
           if (TAB_UID ? marker === TAB_UID || (!marker && !!localStorage.getItem(OLDER_MARKER)) : !marker && !localStorage.getItem(OLDER_MARKER)) {
             localStorage.removeItem(OLD_MARKER)
             localStorage.removeItem(OLDER_MARKER)

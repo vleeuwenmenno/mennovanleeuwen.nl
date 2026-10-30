@@ -160,6 +160,6 @@ try {
   check('No unhandled browser exceptions',!p.errors.length,p.errors)
 } catch(error) {
   console.log('Browser errors',p.errors)
-  console.log('Review diagnostic',await p.eval(`({reads:window.__taskReads.map(r=>({signal:!!r.signal,aborted:r.signal?.aborted})),widgets:[...document.querySelectorAll('.wp-package')].map(e=>e.textContent)})`).catch(()=>null));throw error
+  console.log('Review diagnostic',await p.eval(`(async()=>({reads:window.__taskReads.map(r=>({signal:!!r.signal,aborted:r.signal?.aborted})),widgets:[...document.querySelectorAll('.wp-package')].map(e=>e.textContent),places:(await import('/src/os/widgetPlaces.ts')).widgetPlaces.get(),stored:localStorage.getItem('mvlos.u.1.sync.widgets:state:v2')}))()`).catch(()=>null));throw error
 } finally {await b.close();vite.kill('SIGTERM');rmSync(data,{recursive:true,force:true})}
 if(failed)process.exitCode=1
