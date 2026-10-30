@@ -3,6 +3,7 @@
 // DATA_DIR=<scratch> vite --port 5290 --strictPort
 // pnpm check:agents-web-recovery-ui http://127.0.0.1:5290 [1280x800,390x800]
 import assert from 'node:assert/strict'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { launch, newPage, sleep } from './perf/cdp.ts'
 const url = new URL(process.argv[2] ?? 'http://127.0.0.1:5290')
 if (url.hostname !== '127.0.0.1' || Number(url.port) < 5170 || Number(url.port) > 5299) throw new Error('Use a scratch Vite server on 127.0.0.1:5170–5299')
@@ -17,7 +18,7 @@ window.__writes=[];window.__errs=[];addEventListener('unhandledrejection',(e)=>w
 const rawFetch=window.fetch.bind(window);
 const LONG='https://www.example.com/articles/'+'very-long-path-segment/'.repeat(8)+'page.html?ref=1';
 const mk=(id,title)=>({id,title,mode:'quick',model:'fixture',archived:false,createdAt:1,updatedAt:2,running:false,titling:false,contextTokens:1000,tools:[],projectId:null,pinned:false,todos:[],quick:true,workdir:null,permission:'default',queue:[],interrupted:null,titleSource:'user',aliases:[],checkingTitle:false,mailReadsAlways:false});
-const t1=mk('t1','Reading'),t2=mk('t2','Other');
+const t1=mk('t1','Reading'),t2=mk('t2','Other');t2.queue=[{id:'q1',text:'queued message',attachments:[],createdAt:1,editing:false}];
 const call=(u)=>({name:'web_fetch',arguments:{url:u}});
 const tool=(id,e)=>({id,role:'tool',toolName:'web_fetch',content:JSON.stringify({error:e}),createdAt:2});
 const messages=[
@@ -33,8 +34,9 @@ window.fetch=async(input, init)=>{
  const u=new URL(typeof input==='string'?input:input.url,location.href);const path=u.pathname;
  if(!path.startsWith('/api/'))return rawFetch(input,init);
  const method=(init&&init.method)||(typeof input!=='string'&&input.method)||'GET';
- if(method!=='GET'&&path!=='/api/prefs'&&!path.endsWith('/follow'))window.__writes.push(method+' '+path);
+ if(method!=='GET'&&path!=='/api/agents/threads/t2/queue/q1'&&path!=='/api/prefs'&&!path.endsWith('/follow'))window.__writes.push(method+' '+path);
  const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
+ if(method==='PATCH'&&path==='/api/agents/threads/t2/queue/q1')return json({thread:t2,item:{id:'q1',text:'queued message',attachments:[]}});
  if(path==='/api/me')return json({authEnabled:true,user:{id:1,login:'fixture',admin:false,githubScopes:[]},forges:[],integrations:{ollama:'settings'}});
  if(path==='/api/agents/models')return json([{name:'fixture',vision:true,contextLength:131072}]);
  if(path==='/api/agents/projects')return json([]);
@@ -47,6 +49,13 @@ window.fetch=async(input, init)=>{
  return json([]);
 };
 `
+// SHOT_DIR=<folder outside the repo> saves screenshots of the card and the dialog.
+const shot = async (page: { send: (m: string, p: object) => Promise<{ data: string }> }, name: string) => {
+  const dir = process.env.SHOT_DIR
+  if (!dir) return
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(`${dir}/${name}.png`, Buffer.from((await page.send('Page.captureScreenshot', {})).data, 'base64'))
+}
 const sizes: [number, number][] = (process.argv[3] ?? '1280x800,390x800').split(',').map((s) => s.split('x').map(Number) as [number, number])
 for (const [width, height] of sizes) {
   const browser = await launch(width, height)
@@ -88,6 +97,8 @@ for (const [width, height] of sizes) {
     assert.ok(first.raw.includes('Page not found (404)') && first.sx <= 1 && first.over <= 1, `${tag}: raw error kept, fits ${JSON.stringify(first)}`)
     const unsafe = await page.eval(`(() => { const c = document.querySelectorAll('.agt-recover')[1]; return { links: c.querySelectorAll('a').length, disabled: [...c.querySelectorAll('button')].some((b) => b.textContent === 'Open page' && b.disabled) } })()`)
     assert.ok(unsafe.links === 0 && unsafe.disabled, `${tag}: javascript: never opens ${JSON.stringify(unsafe)}`)
+    await page.eval("document.querySelector('.agt-recover').scrollIntoView({ block: 'center' })")
+    await shot(page, `card-${width}`)
     // Paste a short page over a typed draft: after it, with the address, not sent.
     const pasteButton = "document.querySelector('.agt-recover-actions button')"
     const type = async (text: string) => (await page.eval("document.querySelector('.dlg textarea').focus()"), await page.send('Input.insertText', { text }))
@@ -97,6 +108,7 @@ for (const [width, height] of sizes) {
     await page.waitFor("document.activeElement === document.querySelector('.dlg textarea')", 3000).catch(() => {})
     assert.equal(await page.eval("document.activeElement === document.querySelector('.dlg textarea')"), true, `${tag}: dialog textarea focused`)
     await type('The page says hello.')
+    await shot(page, `dialog-${width}`)
     await page.eval("[...document.querySelectorAll('.dlg .btn')].find((b) => b.textContent === 'Add to message').click()")
     await page.waitFor("!document.querySelector('.dlg')")
     const box = await page.eval("document.querySelector('.agt-composer textarea').value")
@@ -127,6 +139,18 @@ for (const [width, height] of sizes) {
     await page.eval("[...document.querySelectorAll('.dlg .btn')].forEach((b) => b.click())")
     await page.waitFor("document.querySelector('.agt-title')?.textContent.includes('Other')")
     assert.ok(!(await page.eval("document.querySelector('.agt-composer textarea').value")).includes('stale text'), `${tag}: nothing lands in the other thread`)
+    // Enter in the dialog is a new line, not Add: nothing is staged until the button.
+    await page.eval(`${pasteButton}.click()`)
+    await page.waitFor("!!document.querySelector('.dlg textarea')")
+    const before = await page.eval("document.querySelector('.agt-composer textarea').value")
+    await type('line one')
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+    await page.send('Input.insertText', { text: 'line two' })
+    assert.equal(await page.eval("document.querySelector('.dlg textarea').value"), 'line one\nline two', `${tag}: Enter is a new line`)
+    assert.equal(await page.eval("document.querySelector('.agt-composer textarea').value"), before, `${tag}: Enter stages nothing`)
+    await page.eval("[...document.querySelectorAll('.dlg .btn')].find((b) => b.textContent === 'Cancel').click()")
+    await page.waitFor("!document.querySelector('.dlg')")
     // Full box (ten attachments): a long page cannot become an eleventh; the text stays in the dialog with the reason; Ctrl+Enter adds a short one.
     await page.waitFor("document.querySelectorAll('.agt-recover').length >= 1")
     await page.eval(`${pasteButton}.click()`)
@@ -141,6 +165,11 @@ for (const [width, height] of sizes) {
     await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 2 })
     await page.waitFor("!document.querySelector('.dlg')")
     assert.ok((await page.eval("document.querySelector('.agt-composer textarea').value")).includes('short page'), `${tag}: Ctrl+Enter adds it`)
+    // A queued message being edited: the paste button is disabled and opens nothing.
+    await page.eval("[...document.querySelectorAll('.agt-queue button')].find((b) => b.textContent.trim() === 'Edit').click()")
+    await page.waitFor("document.querySelector('.agt-composer textarea').value === 'queued message'", 4000).catch(async () => { throw new Error('queue edit: ' + JSON.stringify(await page.eval("({ q: document.querySelector('.agt-queue')?.textContent, v: document.querySelector('.agt-composer textarea').value, e: document.querySelector('.agt-error')?.textContent, w: window.__writes })"))) })
+    const blocked = await page.eval(`(() => { const b = ${pasteButton}; b.click(); return { disabled: b.disabled, title: b.title, dialog: !!document.querySelector('.dlg') } })()`)
+    assert.ok(blocked.disabled && blocked.title.includes('queued message') && !blocked.dialog, `${tag}: disabled while editing a queued message ${JSON.stringify(blocked)}`)
     assert.deepEqual(await page.eval('window.__writes'), [], `${tag}: nothing was sent or answered`)
     assert.deepEqual(page.errors, [], `${tag}: page errors ${JSON.stringify(await page.eval('window.__errs'))}`)
     await page.close()
