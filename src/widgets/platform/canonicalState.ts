@@ -5,7 +5,7 @@ import { accountGuard, accountKey, accountStorage, TAB_UID, widgetMigrationUnres
 import { getSyncedHydration, onSyncedHydration, reportSyncFailure, synced, type Synced, type SyncedHydration } from '../../os/synced'
 import { bindPlacementAliases, changeSet, importPlaces, mergeSets, type WidgetPlace, type WidgetSet } from './placementSet'
 import {
-  applyPending, appendPending, configDelta, configsOf, emptyDelta, emptyPending, importLegacy, mergeInstallationRecords, mergePending,
+  applyPending, appendPending, configDelta, configsOf, emptyDelta, emptyPending, emptyWidgetState, importLegacy, mergeInstallationRecords, mergePending,
   mergeWidgetStates, normalizeConfigs, normalizePending, normalizeWidgetState, unconsumed,
   installationToken, placementAliases, stableJSON, type Configs, type InstallationRecords, type WidgetDelta, type WidgetState,
 } from './canonicalModel'
@@ -15,25 +15,31 @@ const PENDING_KEY = 'mvlos.widgets.pending:v2'
 const LEGACY_KEYS = ['widgets', 'widgets:placed', 'widgets:packages:v1', 'windows:desktop', 'windows:mobile'] as const
 type LegacyMeta = { value: unknown; base: number; dirty: boolean }
 function readJSON(key: string): unknown {
-  try { return JSON.parse(accountStorage.get(key) ?? 'null') } catch { return null }
+  const raw = accountStorage.getStrict(key)
+  if (raw === null) return null
+  try { return JSON.parse(raw) } catch { throw new Error('Widget storage is unreadable; original data retained') }
 }
-const localLegacy = Object.fromEntries(LEGACY_KEYS.map(key => [key, readJSON(`mvlos.sync.${key}`) as LegacyMeta | null]))
 // Each writer owns a separate key. A consumer cannot erase a concurrently appended journal.
 const writer = crypto.randomUUID()
 const ownJournalKey = `${PENDING_KEY}:${writer}`
 let serial = 0
+let journalReadFailed = false
 function readJournals() {
-  let found = normalizePending(readJSON(PENDING_KEY))
-  for (const key of accountStorage.keys(`${PENDING_KEY}:`)) found = mergePending(found, normalizePending(readJSON(key)))
-  return found
+  try {
+    let found = normalizePending(readJSON(PENDING_KEY))
+    for (const key of accountStorage.keysStrict(`${PENDING_KEY}:`)) found = mergePending(found, normalizePending(readJSON(key)))
+    journalReadFailed = false
+    return found
+  } catch (error) { journalReadFailed = true; throw error }
 }
-let pending = readJournals()
+let pending = emptyPending()
+try { pending = readJournals() } catch (error) { reportSyncFailure(error) }
 let journalTimer: ReturnType<typeof setTimeout> | undefined
 const state = synced<WidgetState | null>(WIDGET_STATE_KEY, null, {
   normalize: normalizeWidgetState, merge: mergeWidgetStates, mergeTabs: true, preserveOnMergeError: true, serialize: storageTransaction,
   beforeRead: () => {
     if (widgetMigrationUnresolved()) throw new Error('Widget migration incomplete; original data retained')
-    const raw = accountStorage.get(`mvlos.sync.${WIDGET_STATE_KEY}`)
+    const raw = accountStorage.getStrict(`mvlos.sync.${WIDGET_STATE_KEY}`)
     if (raw === null) return
     try { if (normalizeWidgetState(JSON.parse(raw)?.value)) return } catch { /* invalid envelope */ }
     throw new Error('Widget state is unreadable; original data and journals retained')
@@ -58,6 +64,7 @@ function layoutPlaces(raw: unknown, phone: boolean): WidgetSet {
   return { places, removed: '' }
 }
 function legacyState(snapshot: SyncedHydration = {}): WidgetState {
+  const localLegacy = Object.fromEntries(LEGACY_KEYS.map(key => [key, readJSON(`mvlos.sync.${key}`) as LegacyMeta | null]))
   const local = (key: string) => localLegacy[key]?.value
   const remote = (key: string) => snapshot[key]?.value
   const localConfigs = normalizeConfigs(local('widgets'))
@@ -77,12 +84,12 @@ function legacyState(snapshot: SyncedHydration = {}): WidgetState {
   return result
 }
 
-let ready = !!state.get() && !widgetMigrationUnresolved()
+let ready = !!state.get() && !widgetMigrationUnresolved() && !journalReadFailed
 function initialView() {
   const current = state.get()
   if (current) return current
   try { return applyPending(legacyState(), pending, false) }
-  catch (error) { reportSyncFailure(error); return legacyState() }
+  catch (error) { reportSyncFailure(error); return emptyWidgetState() }
 }
 let view = initialView()
 const listeners = new Set<() => void>()
@@ -117,7 +124,7 @@ function finishJournal(committed: WidgetState) {
   // Only this writer can append here.
   const durable = committed
   const own = normalizePending(readJSON(ownJournalKey))
-  if (durable && !Object.keys(unconsumed(own, durable).operations).length && accountStorage.get(ownJournalKey) !== null) accountStorage.remove(ownJournalKey)
+  if (durable && !Object.keys(unconsumed(own, durable).operations).length && accountStorage.getStrict(ownJournalKey) !== null) accountStorage.remove(ownJournalKey)
 }
 function pendingView() {
   const current = latestState()
@@ -130,7 +137,7 @@ const emptyJournal = () => stableJSON(pending) === stableJSON(emptyPending())
  * while /api/me is loading, or for an offline account whose /api/state has not succeeded. */
 function hydrate(snapshot: SyncedHydration = {}) {
   if (!accountGuard()) return
-  if (widgetMigrationUnresolved()) { reportSyncFailure(new Error('Widget migration incomplete; original data retained')); return }
+  if (widgetMigrationUnresolved()) throw new Error('Widget migration incomplete; original data retained')
   const account = getAccount()
   if (account.status !== 'user' && account.status !== 'anon' && !(account.status==='off'&&account.resolved)) return
   if (account.status === 'user' && !getSyncedHydration()) return
@@ -237,11 +244,25 @@ export const canonicalInstallations = facade<InstallationRecords>(() => installa
 })
 
 state.onRemote(next => {
-  if (next && ready) refresh(pendingView(), true)
+  if (next && ready) try { refresh(pendingView(), true) } catch (error) { reportSyncFailure(error) }
 })
 state.onSynced(() => { if (ready) syncedListeners.forEach(l => l()) })
+let hydrationRetry: ReturnType<typeof setTimeout> | undefined
+let hydrationRetryDelay = 1000
 function hydrateSafely(snapshot: SyncedHydration = {}) {
-  try { hydrate(snapshot) } catch (error) { reportSyncFailure(error) }
+  try {
+    hydrate(snapshot)
+    if (hydrationRetry !== undefined) clearTimeout(hydrationRetry)
+    hydrationRetry = undefined
+    hydrationRetryDelay = 1000
+  } catch (error) {
+    reportSyncFailure(error)
+    if (hydrationRetry === undefined && accountGuard()) {
+      const delay = hydrationRetryDelay
+      hydrationRetryDelay = Math.min(60_000, delay * 2)
+      hydrationRetry = setTimeout(() => { hydrationRetry = undefined; hydrateSafely(getSyncedHydration() ?? snapshot) }, delay)
+    }
+  }
 }
 onSyncedHydration(hydrateSafely)
 subscribeAccount(() => {

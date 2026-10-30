@@ -361,7 +361,7 @@ try {
   const blocked=await open(true,{},`Object.defineProperty(window,'localStorage',{get(){throw new DOMException('Synthetic storage denial','SecurityError')}});`)
   try {
     const admission=await blocked.eval(`import('/src/widgets/config.ts').then(m=>{try{m.setWidgetConfig('memory',{days:3});return ''}catch(e){return e.message}})`);await blocked.eval('window.__releaseMe()');await blocked.waitFor(`import('/src/os/account.ts').then(m=>!!m.getAccount().user)`)
-    check('Fully blocked localStorage rejects an edit before acknowledgement',admission.includes('journal write refused')&&!(await configs(blocked)).memory,admission)
+    check('Fully blocked localStorage rejects an edit before acknowledgement',/storage read unavailable|journal write refused/.test(admission)&&!(await configs(blocked)).memory,admission)
     const error=await blocked.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalConfigs.flush().then(()=>'',e=>e.message))`)
     check('Fully blocked localStorage reports refusal without a false durable success',!!error&&await blocked.eval('window.__writes.length===0'))
     check('Fully blocked storage has no unhandled browser exceptions',!blocked.errors.length,blocked.errors)

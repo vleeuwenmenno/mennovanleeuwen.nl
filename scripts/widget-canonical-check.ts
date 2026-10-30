@@ -387,10 +387,10 @@ try {
   const denied = new Page('visitor', 'denied')
   denied.blocked = true
   await denied.init()
-  assert.throws(() => denied.config.setWidgetConfig('temp', { tilt: 1 }), /journal write refused/)
+  assert.throws(() => denied.config.setWidgetConfig('temp', { tilt: 1 }), /storage read unavailable|journal write refused/)
   await denied.login()
   assert.equal(denied.canonical.canonicalConfigs.get().temp, undefined)
-  assert.throws(() => denied.wp.widgetPlaces.set(cur => denied.wp.changeSet(cur, { temp: entry('temp') })), /journal write refused/)
+  assert.throws(() => denied.wp.widgetPlaces.set(cur => denied.wp.changeSet(cur, { temp: entry('temp') })), /storage read unavailable|journal write refused/)
   assert.equal(denied.wp.widgetPlaces.get().places.temp, undefined)
 
   const corrupt = new Page('visitor', 'corrupt-canonical')

@@ -4441,7 +4441,11 @@ claim store stop the import, and an explicit `mvlos.account` marker takes preced
 account `moved` flags without an identity-bound intent are ambiguous and prevent automatic
 ownership assignment. All legacy keys are copied from a marker-checked source snapshot and left
 in place for older tabs; a changed marker or source, or a conflicting ordinary target, stops the
-copy and retains both versions. An unresolved widget transfer
+copy and retains both versions. Separate account-scoped copy receipts (up to 256 entries and 1 MiB
+per source snapshot, retained across logout) let retries preserve subsequent local edits and server metadata without
+overwriting newer account state. An older partial copy without a receipt can also recover when
+its synced value matches, even if its envelope metadata changed; other unproven conflicts remain
+untouched. An unresolved widget transfer
 or startup migration blocks canonical cutover rather than replacing its source with an empty
 envelope, including failures before an intent could be written. Visitor transfers record their
 source and the account target observed at admission; a copied value or preexisting target is
@@ -4450,6 +4454,9 @@ target exists; an existing target stays unresolved for explicit recovery. After 
 failure, reloading retries the retained source and intent. A successful
 older-marker import reloads the page once so every store reads the claimed account space. A visitor
 cannot import a source marked as belonging to an account.
+Canonical and journal reads distinguish inaccessible storage from absent keys. Legacy inputs
+are read again at hydration, so a transient read failure cannot become an empty cutover. Failed
+hydration reads retry with bounded backoff while preserving the existing data and journals.
 
 Writers store patches rather than stale whole views and never erase another writer's log.
 A late tab or reload cannot reapply an already consumed edit or resurrect a consumed addition.
