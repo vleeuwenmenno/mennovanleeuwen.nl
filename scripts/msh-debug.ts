@@ -78,6 +78,58 @@ try {
   eq([parcelCompletion.start, parcelCompletion.end, parcelCompletion.caret], [symbolMain.indexOf('$parcel') + 1, symbolMain.indexOf('$parcel') + 7, symbolMain.indexOf('$parcel') + 4], 'completion replaces the whole existing identifier, including text after the caret')
   const commandComplete = symbols.completeSymbols(symbolProject, '/tmp/main.msh', symbolMain.indexOf('deliver "') + 3, ['declare', 'printf'])
   check(commandComplete.some((c: { name: string; detail: string }) => c.name === 'deliver' && c.detail.includes('deliver(parcel, cost)')), 'command completion shows source function signature')
+  const completionProject = (text: string) => ({ entry: '/tmp/complete', cwd: '/tmp', files: new Map([['/tmp/complete', symbols.indexMsh(text, '/tmp/complete')]]), links: [], notes: [] })
+  const literalCompletions: [string, string, number[]][] = [
+    ['"del"', '"deliver"', [5, 3, 4]], ["'del'", "'deliver'", [5, 3, 4]],
+    ['"delivery"', '"deliver"', [4]], ["'delivery'", "'deliver'", [4]],
+    ['de\\l', "'deliver'", [4, 2, 3]], ['\\del', "'deliver'", [4, 2]],
+    ['de"l"', "'deliver'", [5, 3]], ['del', 'deliver', [3, 2]],
+  ]
+  for (const [head, replacement, positions] of literalCompletions) for (const caret of positions) {
+    const source = `deliver(p) { echo "$p"; }\n${head} "Space Potato" # untouched`
+    const start = source.indexOf('\n') + 1
+    const choices = symbols.completeSymbols(completionProject(source), '/tmp/complete', start + caret, ['printf'])
+    const completion = choices.find((c: any) => c.name === 'deliver')
+    eq([completion?.start, completion?.end], [start, start + head.length], 'command completion replaces exactly the parser word range')
+    const edited = completion ? source.slice(0, completion.start) + completion.insertText + source.slice(completion.end) : source
+    eq(edited, `deliver(p) { echo "$p"; }\n${replacement} "Space Potato" # untouched`, `literal completion preserves whole command and arguments: ${head} at ${caret}`)
+    check(!choices.some((c: any) => c.name === 'printf'), `decoded literal prefix filters unrelated suggestions: ${head} at ${caret}`)
+    eq(await run(edited), { stdout: 'Space Potato\n', stderr: '', status: 0 }, `completed literal invokes deliver: ${head} at ${caret}`)
+  }
+  for (const head of ['de\\l', 'de"l"']) {
+    const source = `alias deliver='echo alias'\ndeliver(p) { echo "$p"; }\n${head} hello`
+    const c = symbols.completeSymbols(completionProject(source), '/tmp/complete', source.lastIndexOf(head) + head.length, []).find((c: any) => c.name === 'deliver')
+    const edited = source.slice(0, c.start) + c.insertText + source.slice(c.end)
+    eq((await run(edited)).stdout, 'hello\n', `literal command completion must not enable alias expansion: ${head}`)
+  }
+  for (const [word, caret, completed] of [
+    ['"$par"', 5, '"$parcel"'], ['"$par"', 3, '"$parcel"'],
+    ['"${par}"', 6, '"${parcel}"'], ['"${par:-fallback}"', 5, '"${parcel:-fallback}"'],
+    ['"$"', 2, '"$parcel"'],
+  ] as [string, number, string][]) {
+    const source = `parcel=hello\necho ${word}`, start = source.lastIndexOf(word)
+    const choices = symbols.completeSymbols(completionProject(source), '/tmp/complete', start + caret, ['printf'])
+    const c = choices.find((c: any) => c.name === 'parcel')
+    const edited = c ? source.slice(0, c.start) + c.insertText + source.slice(c.end) : source
+    eq(edited, `parcel=hello\necho ${completed}`, `variable completion replaces only an expansion identifier: ${word} at ${caret}`)
+    eq((await run(edited)).stdout, 'hello\n', 'completed variable still evaluates through normal msh expansion')
+  }
+  for (const [head, caret] of [
+    ['"del${suffix}"', 4], ['del${suffix}', 3], ['del$(echo iver)', 3],
+    ['"$parcel"', 9], ['"${parcel}"', 11], ['`echo del`', 9],
+  ] as [string, number][]) {
+    const source = `deliver(p) { echo "$p"; }\n${head} hello`, start = source.indexOf('\n') + 1
+    eq(symbols.completeSymbols(completionProject(source), '/tmp/complete', start + caret, []), [], `dynamic command expression is not replaced by a literal completion: ${head}`)
+  }
+  const variableCommand = 'parcel=deliver\ndeliver(p) { echo "$p"; }\n"$par" hello'
+  const variableCommandAt = variableCommand.lastIndexOf('$par') + 4
+  const variableChoice = symbols.completeSymbols(completionProject(variableCommand), '/tmp/complete', variableCommandAt, []).find((c: any) => c.name === 'parcel')
+  const completedVariableCommand = variableCommand.slice(0, variableChoice.start) + variableChoice.insertText + variableCommand.slice(variableChoice.end)
+  eq((await run(completedVariableCommand)).stdout, 'hello\n', 'variable completion inside a command head preserves its expansion')
+  for (const word of ["'$par'", '"\\$par"', '"del"']) {
+    const source = `parcel=hello\ndeliver(p) { :; }\necho ${word}`
+    eq(symbols.completeSymbols(completionProject(source), '/tmp/complete', source.length - 1, ['printf']), [], `quoted argument/literal data is not a completion site: ${word}`)
+  }
   const redefinitions = 'f() { :; }\nf() { :; }\nf'
   const redefined = { entry: '/tmp/redefined', cwd: '/tmp', files: new Map([['/tmp/redefined', symbols.indexMsh(redefinitions, '/tmp/redefined')]]), links: [], notes: [] }
   const ambiguous = symbols.resolveSymbol(redefined, '/tmp/redefined', redefinitions.length - 1)

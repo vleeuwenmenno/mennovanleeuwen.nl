@@ -778,6 +778,10 @@ uncertainty explanations. This is source information, distinct from the debugger
 runtime values. **Complete** (Ctrl+Space in the textarea) offers matching visible variables
 after `$`/`${`, and functions with their parameter signatures or real msh builtins at command
 positions. Choose a suggestion by button (keyboard focus or touch); completion never runs it.
+Command completion replaces the parsed literal word, including from inside or just after its
+quotes. It preserves surrounding quotes and arguments, and normalizes mixed/escaped command
+spellings to a quoted literal so they still suppress aliases. Variable completion replaces only
+the referenced name; dynamic command expressions are never replaced with a literal command suggestion.
 Parameters/locals shadow global suggestions, and another function's locals are not offered.
 
 Indexing uses the shared msh parser, including named parameters, assignments, local/export

@@ -796,11 +796,11 @@ export function Zed({ win }: { win: WinState }) {
     insert: c => {
       const el = text.current
       if (!el || !buf || el.selectionStart !== c.caret) return
-      edit(buf.text.slice(0, c.start) + c.name + buf.text.slice(c.end))
+      edit(buf.text.slice(0, c.start) + c.insertText + buf.text.slice(c.end))
       const revision = selectionRevision.current
       requestAnimationFrame(() => {
         if (text.current !== el || selectionRevision.current !== revision) return
-        el.focus(); el.setSelectionRange(c.start + c.name.length, c.start + c.name.length); track()
+        el.focus(); el.setSelectionRange(c.start + c.insertText.length, c.start + c.insertText.length); track()
       })
     },
     say: setStatus, lineHeight: LINE, pad: PAD,

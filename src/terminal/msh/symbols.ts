@@ -6,30 +6,32 @@ import { childrenOf, nestedEnd, type Node } from './parse'
 export type SymbolKind = 'function' | 'parameter' | 'local' | 'global' | 'dynamic'
 export type SymbolDef = { id: string; name: string; kind: SymbolKind; path: string; start: number; end: number; line: number; column: number; owner: string | null; conditional: boolean; available: number; signature?: string }
 export type SymbolRef = { name: string; start: number; end: number; owner: string | null; kind: 'variable' | 'command' | 'positional'; declaration?: string }
+type CompletionSpan = { start: number; end: number; kind: 'command' | 'variable' }
 export type SourceRef = { word: string | null; start: number; line: number; conditional: boolean; cwdUnknown: boolean }
-export type SymbolFile = { path: string; text: string; definitions: SymbolDef[]; references: SymbolRef[]; sources: SourceRef[]; scopes: { owner: string; start: number; end: number }[]; uncertain: boolean; cwdChanges: boolean; problems: string[] }
+export type SymbolFile = { path: string; text: string; definitions: SymbolDef[]; references: SymbolRef[]; completions: CompletionSpan[]; sources: SourceRef[]; scopes: { owner: string; start: number; end: number }[]; uncertain: boolean; cwdChanges: boolean; problems: string[] }
 export type SymbolProject = { entry: string; cwd: string; files: Map<string, SymbolFile>; links: { from: string; to: string; source: SourceRef }[]; notes: string[] }
 export type Resolution = { reference: SymbolRef; definitions: SymbolDef[]; reliable: boolean; note: string }
 export const SYMBOL_LIMITS = { files: 16, characters: 512_000, symbols: 4096, depth: 8 } as const
 
-/** Only fully literal shell words. Single-quoted metacharacters remain literal data. */
-export function literalWord(raw: string): string | null {
+/** Only literal shell words. `prefix` permits an unfinished caret slice of an already validated
+ * literal word; single-quoted metacharacters remain literal data in both modes. */
+export function literalWord(raw: string, prefix = false): string | null {
   let result = '', quote = ''
   for (let i = 0; i < raw.length; i++) {
     const c = raw[i]
     if (quote === "'") { if (c === "'") quote = ''; else result += c; continue }
     if (c === '"') { quote = quote ? '' : '"'; continue }
     if (!quote && c === "'") { quote = c; continue }
-    if (c === '\\') { if (i + 1 >= raw.length) return null; const n = raw[++i]; if (n !== '\n') result += quote === '"' && !/[$`"\\]/.test(n) ? '\\' + n : n; continue }
+    if (c === '\\') { if (i + 1 >= raw.length) return prefix ? result : null; const n = raw[++i]; if (n !== '\n') result += quote === '"' && !/[$`"\\]/.test(n) ? '\\' + n : n; continue }
     if (c === '$' || c === '`' || (!quote && /[~*?\[\]{}]/.test(c))) return null
     result += c
   }
-  return quote ? null : result
+  return quote && !prefix ? null : result
 }
 
 export function indexMsh(text: string, path: string): SymbolFile {
   const analysis = analyzeMsh(text, path)
-  const file: SymbolFile = { path, text, definitions: [], references: [], sources: [], scopes: [], uncertain: false, cwdChanges: false, problems: analysis.diagnostics.map(d => `${d.line}:${d.column}: ${d.message}`) }
+  const file: SymbolFile = { path, text, definitions: [], references: [], completions: [], sources: [], scopes: [], uncertain: false, cwdChanges: false, problems: analysis.diagnostics.map(d => `${d.line}:${d.column}: ${d.message}`) }
   if (!analysis.tree) { file.cwdChanges = true; return file }
   let cwdUnknown = false, count = 0
   const functionNames = new Set<string>()
@@ -55,7 +57,14 @@ export function indexMsh(text: string, path: string): SymbolFile {
     file.definitions.push({ id: `${path}:${start}:${kind}`, name, kind, path, start, end: start + name.length, ...location(start), owner, conditional, signature, available })
   }
   const ref = (name: string, start: number, end: number, owner: string | null, kind: SymbolRef['kind']) => {
-    if (++count <= SYMBOL_LIMITS.symbols) file.references.push({ name, start, end, owner, kind })
+    if (++count <= SYMBOL_LIMITS.symbols) {
+      file.references.push({ name, start, end, owner, kind })
+      if (kind !== 'positional') file.completions.push({ start: kind === 'variable' ? end - name.length : start, end, kind })
+    }
+    else file.uncertain = true
+  }
+  const completion = (start: number, end: number, kind: CompletionSpan['kind']) => {
+    if (++count <= SYMBOL_LIMITS.symbols) file.completions.push({ start, end, kind })
     else file.uncertain = true
   }
   // Expansion references are extracted only inside parser-provided words; single quotes and
@@ -76,7 +85,12 @@ export function indexMsh(text: string, path: string): SymbolFile {
       if (c !== '$') continue
       const rest = text.slice(i + 1, end)
       const m = /^(?:\{#?([A-Za-z_][A-Za-z0-9_]*|\d+|[@*#?])|([A-Za-z_][A-Za-z0-9_]*|\d|[@*#?]))/.exec(rest)
-      if (!m) continue
+      if (!m) {
+        // A bare, unescaped $ can begin a variable name. Quotes/comments/substitutions
+        // have already been handled above, using the parser's word boundaries.
+        if (!rest || /^["'\s]/.test(rest)) completion(i + 1, i + 1, 'variable')
+        continue
+      }
       const name = m[1] ?? m[2]
       ref(name, i, i + 1 + m[0].length, owner, /^\d+$|^[@*#?]$/.test(name) ? 'positional' : 'variable')
       i += m[0].length
@@ -104,6 +118,7 @@ export function indexMsh(text: string, path: string): SymbolFile {
       if (shadowed && ['local', 'export', 'source', '.', 'cd'].includes(command ?? '')) file.uncertain = true
       const commandAt = n.wordsAt?.[0]
       if (commandAt && command !== null && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(command)) ref(command, commandAt.start, commandAt.end, owner, 'command')
+      else if (commandAt) completion(commandAt.start, commandAt.end, 'command')
       if (dynamic || ['eval', 'alias', 'unalias', 'unset', 'command'].includes(command ?? '')) file.uncertain = true
       if (dynamic || ['cd', 'eval', 'alias', 'unalias', 'command'].includes(command ?? '')) cwdUnknown = true
       if (!shadowed && (command === 'source' || command === '.')) file.sources.push({ word: n.words[1] === undefined ? null : literalWord(n.words[1]), start: n.span?.start ?? 0, line: n.span?.line ?? 1, conditional: conditional || owner !== null, cwdUnknown })
@@ -184,25 +199,37 @@ export function resolveSymbol(project: SymbolProject, path: string, at: number):
     : reliable ? 'Static definition in the indexed source.' : candidates.length ? 'Candidate definitions; execution order, conditional code or redefinition may change the binding.' : 'No static definition captured (builtin, external command, dynamic source/eval or caller binding).' }
 }
 
-export type Completion = { name: string; detail: string; start: number; end: number; caret: number }
+export type Completion = { name: string; insertText: string; detail: string; start: number; end: number; caret: number }
 export function completeSymbols(project: SymbolProject, path: string, offset: number, builtins: readonly string[]): Completion[] {
   const file = project.files.get(path)
   if (!file) return []
-  const before = file.text.slice(0, offset), match = /[A-Za-z_][A-Za-z0-9_]*$/.exec(before)
-  const prefix = match?.[0] ?? '', start = offset - prefix.length
-  let end = offset
-  while (end < file.text.length && /[A-Za-z0-9_]/.test(file.text[end])) end++
-  const variable = /\$\{?$/.test(before.slice(0, start))
+  const contains = (span: CompletionSpan) => span.start <= offset && offset <= span.end
+  // An expansion's identifier takes precedence over the command word containing it.
+  const span = file.completions.find(s => s.kind === 'variable' && contains(s)) ?? file.completions.find(contains)
+  const variable = span?.kind === 'variable'
+  const start = span?.start ?? offset, end = span?.end ?? offset
+  let prefix = '', quoteWord = ''
+  if (span?.kind === 'command') {
+    const raw = file.text.slice(start, end)
+    if (literalWord(raw) === null) return [] // Never replace an expansion with a command name.
+    prefix = literalWord(raw.slice(0, offset - start), true) ?? ''
+    // Replace the whole parser word, retaining its outer quote style where possible.
+    // Mixed/escaped spellings stay quoted, preserving their suppression of aliases.
+    if ((raw[0] === '"' || raw[0] === "'") && raw.at(-1) === raw[0] && raw.length >= 2) quoteWord = raw[0]
+    else if (/['"\\]/.test(raw)) quoteWord = "'"
+  } else if (variable) prefix = file.text.slice(start, offset)
+  else if (!/(?:^|[;|&\n])\s*$/.test(file.text.slice(0, offset))) return []
   const at = symbolAt(file, Math.max(0, offset - 1))
   const owner = at?.owner ?? file.scopes.filter(s => s.start <= offset && offset <= s.end).sort((a, b) => b.start - a.start)[0]?.owner ?? null
-  // Ordinary arguments and quoted text are not command-name completion positions.
-  if (!variable && at?.kind !== 'command' && !/(?:^|[;|&\n])\s*[A-Za-z_0-9]*$/.test(before)) return []
   const defs = [...project.files.values()].flatMap(f => f.definitions).filter(d => variable ? d.kind !== 'function' && (d.owner === null || d.owner === owner && d.start <= offset) : d.kind === 'function')
   const choices = new Map<string, string>()
   if (!variable) for (const name of builtins) choices.set(name, 'shell builtin')
   // Parameters and locals supersede global suggestions. Never offer a different function's locals.
   for (const d of defs.sort((a, b) => Number(a.owner !== null) - Number(b.owner !== null))) choices.set(d.name, `${d.signature ?? d.kind} · ${d.path}:${d.line}${d.conditional ? ' (candidate)' : ''}`)
-  return [...choices].filter(([name]) => name.startsWith(prefix)).sort(([a], [b]) => a.localeCompare(b)).slice(0, 40).map(([name, detail]) => ({ name, detail, start, end, caret: offset }))
+  return [...choices].filter(([name]) => name.startsWith(prefix)).sort(([a], [b]) => a.localeCompare(b)).slice(0, 40).map(([name, detail]) => {
+    const insertText = quoteWord === "'" ? `'${name.replace(/'/g, "'\\''")}'` : quoteWord === '"' ? `"${name.replace(/[$`"\\]/g, '\\$&')}"` : name
+    return { name, insertText, detail, start, end, caret: offset }
+  })
 }
 
 /** Cancellable, bounded source graph. The caller supplies authorized reads; no I/O is hidden here. */

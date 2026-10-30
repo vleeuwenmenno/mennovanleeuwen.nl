@@ -642,6 +642,51 @@ try {
   await A(`W.querySelector('.xed-symbol-actions button:nth-child(3)').click()`)
   await page.waitFor(`document.querySelector('.xed-completions')?.textContent.includes('deliver(parcel, cost)')`, 5000)
   pass('function completion shows named parameter signature')
+  // Real Ctrl+Space edits and executes each resulting script through the editor's Run action.
+  const completeAt = async (source: string, caret: number, name: string) => {
+    await edit(source); await caretAt(caret)
+    for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: ' ', code: 'Space', windowsVirtualKeyCode: 32, modifiers: MODS.ctrl })
+    await page.waitFor(`[...document.querySelectorAll('.xed-completions button b')].some(b => b.textContent === ${JSON.stringify(name)})`, 5000)
+    await A(`const choice = [...W.querySelectorAll('.xed-completions button')].find(b => b.querySelector('b')?.textContent === ${JSON.stringify(name)}); choice.click()`)
+    return A<string>(`return W.querySelector('textarea.zed-input').value`)
+  }
+  const runCompleted = async (expected: string, label: string) => {
+    const prior = await A<string>(`return W.querySelector('[aria-label="Debug session"]')?.value ?? ''`)
+    await key('F5')
+    await page.waitFor(`document.querySelector('.window[data-test="a"] [aria-label="Debug session"]')?.value !== ${JSON.stringify(prior)} && document.querySelector('.window[data-test="a"] .xed-dbg-state .xed-dbg-long')?.textContent.startsWith('Completed · exit 0')`, 10000)
+    await tab('Output')
+    const output = await A<string>(`return W.querySelector('.xed-dbg-output')?.textContent ?? ''`)
+    expect(output === expected, label, output)
+  }
+  const completionCases: [string, string, number[]][] = [
+    ['"del"', '"deliver"', [5, 3]], ["'del'", "'deliver'", [5, 3]],
+    ['"delivery"', '"deliver"', [4]], ["'delivery'", "'deliver'", [4]],
+    ['de\\l', "'deliver'", [4, 3]], ['de"l"', "'deliver'", [5]], ['del', 'deliver', [3, 2]],
+  ]
+  for (const [head, replacement, positions] of completionCases) for (const caret of positions) {
+    const source = `deliver(p) { echo "$p"; }\n${head} "Space Potato" # untouched`
+    const edited = await completeAt(source, source.indexOf('\n') + 1 + caret, 'deliver')
+    await page.waitFor(`document.querySelector('.window[data-test="a"] textarea.zed-input')?.selectionStart === ${source.indexOf('\n') + 1 + replacement.length}`, 5000)
+    expect(edited === `deliver(p) { echo "$p"; }\n${replacement} "Space Potato" # untouched`, `Ctrl+Space preserves literal command and surrounding arguments: ${head} at ${caret}`, edited)
+    await runCompleted('Space Potato\n', `completed ${head} at ${caret} executes deliver with status 0`)
+  }
+  const aliasedCompletion = 'alias deliver="echo alias"\ndeliver(p) { echo "$p"; }\nde\\l hello'
+  const aliasedEdited = await completeAt(aliasedCompletion, aliasedCompletion.lastIndexOf('de\\l') + 4, 'deliver')
+  expect(aliasedEdited.endsWith("'deliver' hello"), 'escaped completion stays quoted to preserve alias suppression', aliasedEdited)
+  await runCompleted('hello\n', 'escaped completion invokes the function even when the same name has an alias')
+  for (const word of ['"$par"', '"${par}"']) {
+    const source = `parcel=hello\necho ${word}`
+    const edited = await completeAt(source, source.indexOf('par', source.indexOf('\n')) + 2, 'parcel')
+    expect(edited === source.replace(word, word.replace('par', 'parcel')), 'Ctrl+Space keeps variable expansion syntax intact', edited)
+    await runCompleted('hello\n', 'completed variable reference executes unchanged shell expansion')
+  }
+  for (const head of ['del${suffix}', 'del$(echo iver)']) {
+    const source = `deliver(p) { :; }\n${head} hello`
+    await edit(source); await caretAt(source.indexOf('\n') + 4)
+    for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key: ' ', code: 'Space', windowsVirtualKeyCode: 32, modifiers: MODS.ctrl })
+    await page.waitFor(`document.querySelector('.xed-completions')?.textContent === 'No matching symbols'`, 5000)
+    expect((await A<string>(`return W.querySelector('textarea.zed-input').value`)) === source, `dynamic command expression remains untouched: ${head}`)
+  }
   // Symbols never runs a source/eval: the dynamic path is labelled, not followed.
   await edit('source "$dynamic"\neval "$unknown"\necho "$fuel"')
   await caretAt(37)
