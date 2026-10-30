@@ -4437,9 +4437,10 @@ button.cal-day.is-picked:not(.is-today) {
 }
 .ca-icon {
   display: inline-grid;
+  flex: none;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border: 1px solid transparent;
   color: var(--fg);
   font-size: 16px;
@@ -4449,6 +4450,13 @@ button.cal-day.is-picked:not(.is-today) {
 .ca-icon.is-on {
   border-color: var(--line-strong);
   background: var(--panel-2);
+}
+/* Touch targets as in Mail (.ml-icon): 28px with a mouse, 40px with a finger. */
+@media (pointer: coarse) {
+  .ca-icon {
+    width: 40px;
+    height: 40px;
+  }
 }
 .ca-spin {
   width: 10px;

@@ -1680,7 +1680,7 @@ quoted TZID, `X-WR-TIMEZONE` for times with no zone, and extended ISO dates (`20
 When nothing can be imported the notice says why (`1 event found, but its start time couldn't be read (...)`).
 
 **The sidebar** (a month to get around, the calendars, birthdays and task lists to show) follows the window's own width, as
-Mail does, not the screen's. From 720px up it sits beside the calendar and the ☰ button grows and shrinks it (the
+Mail does, not the screen's. From 720px up it sits beside the calendar and the ☰ button (like the toolbar's other icon buttons, 28px with a mouse and 40px with a finger, as in Mail) grows and shrinks it (the
 choice is kept while the window is narrow, and its content keeps its width so nothing reflows as it moves). Under 720px the
 window shows one thing at a time: the calendar, or the sidebar as a pane of its own that slides over it from the left
 (☰, or `‹ Calendar` at the top of the pane, goes back; so do `Esc`, picking a day or month, Today, the arrows and the view

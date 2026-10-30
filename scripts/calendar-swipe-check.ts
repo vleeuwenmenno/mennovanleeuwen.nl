@@ -310,6 +310,8 @@ async function sidebarChecks(browser: Awaited<ReturnType<typeof launch>>, fixtur
     await page.send('Page.navigate', { url: `${fixture}?${q}` })
     await page.waitFor(`!!document.querySelector('.ca-ev')`, 20_000)
     await wait(200)
+    const sizes = await page.eval<string[]>(`[...document.querySelectorAll('.ca-toolbar .ca-icon')].map((b) => b.getBoundingClientRect().width + 'x' + b.getBoundingClientRect().height)`)
+    check('wide: toolbar icon buttons are 28x28 like Mail\'s (the sidebar button too)', sizes.length >= 4 && sizes.every((x) => x === '28x28'), sizes.join())
     check('wide: sidebar open beside the calendar', (await rect(page, '.ca-side'))!.width >= 205 && (await expanded(page)) === 'true' && !(await page.eval<boolean>(`document.querySelector('.ca-main').classList.contains('is-narrow')`)))
     await page.eval(`document.querySelector('.ca-tg-scroll').scrollTop = 321; window.__pager = document.querySelector('.ca-pager'); window.__pager.dataset.same = '1'`)
     const full = (await rect(page, '.ca-view'))!.width
@@ -444,6 +446,17 @@ async function sidebarChecks(browser: Awaited<ReturnType<typeof launch>>, fixtur
     await wait(450)
     check('resized mid-slide: wide layout, sidebar beside the calendar, nothing inert', (await rect(page, '.ca-side'))!.width >= 205 && !(await page.eval<boolean>(`document.querySelector('.ca-view').inert`)) && (await rect(page, '.ca-view'))!.left >= 205)
     check('no page errors in the sidebar checks', page.errors.length === 0, page.errors.join(' | '))
+    await page.close()
+  }
+  // A small phone with a finger: 40px targets, and the toolbar still wraps inside 320px.
+  {
+    const { page } = await phone(browser, fixture, q, '', 320, 640)
+    await page.waitFor(`!!document.querySelector('.ca-ev')`, 20_000)
+    check('phone: touch is the pointer', await page.eval<boolean>(`matchMedia('(pointer: coarse)').matches`))
+    const sizes = await page.eval<string[]>(`[...document.querySelectorAll('.ca-toolbar .ca-icon')].map((b) => b.getBoundingClientRect().width + 'x' + b.getBoundingClientRect().height)`)
+    check('phone: toolbar icon buttons, the sidebar button among them, are 40x40 like Mail\'s', sizes.length >= 4 && sizes.every((x) => x === '40x40'), sizes.join())
+    const over = await page.eval<string>(`JSON.stringify({ doc: document.documentElement.scrollWidth - innerWidth, toolbar: document.querySelector('.ca-toolbar').scrollWidth - document.querySelector('.ca-toolbar').clientWidth, ca: document.querySelector('.ca').scrollWidth - document.querySelector('.ca').clientWidth })`)
+    check('phone 320px: the toolbar wraps, nothing scrolls sideways', !/:[1-9]/.test(over), over)
     await page.close()
   }
   // The page drawn at 150%: the window's width is what is measured, in page pixels.
