@@ -1350,6 +1350,20 @@ already, by their UID, are skipped, and the notice says how many (the UID is kep
 a UTF-8 or UTF-16 text (BOM or not, [`src/data/decodeText.ts`](src/data/decodeText.ts)), lowercase names, `VALUE=DATE-TIME`, a
 quoted TZID, `X-WR-TIMEZONE` for times with no zone, and extended ISO dates (`2026-10-15T14:00:00+02:00`).
 When nothing can be imported the notice says why (`1 event found, but its start time couldn't be read (...)`).
+
+**Swiping between pages.** On a touch screen, swipe sideways to turn the page, in every view: it goes where
+the ‹ › arrows go (`step(shownView, …)`: a day, 3 days, a week, a month or a year; swiping left in 3 days shows
+the next 3 days). The page follows the finger with the real previous and next pages beside it (their events,
+birthdays and due tasks, fetched ahead for the range in view, so nothing slides in blank), and on letting go it
+slides on to the next page (past 28% of the width, or a quick flick) or back (`src/apps/calendar/SwipePager.tsx`,
+the rules in `swipe.ts`). Up and down still scrolls the hours (the browser's, `touch-action: pan-y`); a tap still
+opens an event or makes one, and a swipe never also taps. Mouse and pen are untouched, so dragging events and
+empty spots with a mouse works as before. A second finger, the browser taking the gesture over, the window
+resizing, or the arrows, Today or another view being used mid-swipe drop the swipe without turning the page.
+With *reduce motion* set the page still follows the finger, but turns without the slide. The hours (or the year)
+stay scrolled where they were. At rest only the page in view is in the DOM. `pnpm check:calendar-swipe` tests the
+rules; given a scratch Vite server it drives a real swipe in headless Chromium with touch
+(`node scripts/calendar-swipe-check.ts http://127.0.0.1:5290`).
 Calendars can be **hidden** in Settings → Apps → Calendar (*Show in MvL OS*, one switch per calendar, grouped by account, with the
 Contacts birthdays and the task lists too; also *Hide everywhere* in the right-click menu of a calendar in the Calendar's sidebar). That is
 stronger than unticking one in the sidebar, which only filters it from the views: a hidden calendar is left out everywhere, so the
