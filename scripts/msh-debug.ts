@@ -108,6 +108,154 @@ try {
     for (let i = 0; i < 200; i++) { if (test()) return; await new Promise(r => setTimeout(r, 5)) }
     throw new Error('debug checkpoint timeout')
   }
+  // Review regressions: a subshell must be inspected from its executing environment.
+  const subshellProbeSource = 'x=outer\n(\nx=inner\nset -- child\necho "$x:$1"\n)\necho "$x"'
+  const subshellProbe = new DebugSession('subshell review', 'run')
+  subshellProbe.breakpoint('/tmp/review-subshell.msh', 5)
+  const subshellProbeRun = runCapturedStreams(subshellProbeSource, { ...base(), debug: subshellProbe }, '/tmp/review-subshell.msh')
+  await wait(() => subshellProbe.current.state === 'paused')
+  eq([subshellProbe.current.variables.x, subshellProbe.current.args], ['inner', ['child']], 'review P2: executing subshell bindings and arguments')
+  const reviewWatch = await vite.ssrLoadModule('/src/terminal/msh/watch.ts')
+  eq(reviewWatch.evaluateWatch('$x:$1', subshellProbe.current), { ok: true, value: 'inner:child', truncated: false }, 'review P2: subshell watch matches execution')
+  subshellProbe.continue()
+  eq((await subshellProbeRun).stdout, 'inner:child\nouter\n', 'review P2: subshell output and restored outer value')
+  subshellProbe.finish(0)
+
+  // Nested forks retain the executing invocation's identity, but not its parent's values.
+  const forkLines = [
+    'x=global', 'set -- root',
+    'leaf(extra) {', 'echo "leaf:$parcel:$x:$1"', '}',
+    'outer(value) {', 'local x=caller',
+    'inner(parcel) (', 'parcel=sub; x=inner; set -- child',
+    '(', 'parcel=nested; x=deep; set -- nested', 'leaf extra',
+    'echo "nested:$parcel:$x:$1"', 'return 7', ')',
+    'echo "sub:$parcel:$x:$1"', 'return 8', ')',
+    'inner "Space Potato"', 'echo "caller:$value:$x:$1"', '}',
+    'outer outer', 'echo "root:$x:$1"',
+  ]
+  const forkDebug = new DebugSession('nested forks', 'run')
+  const forkPath = '/tmp/review-forks.msh'
+  for (const line of [4, 13, 16, 20, 23]) forkDebug.breakpoint(forkPath, line)
+  const forkRun = runCapturedStreams(forkLines.join('\n'), { ...base(), debug: forkDebug }, forkPath)
+  await wait(() => forkDebug.current.state === 'paused')
+  let forkSnap = forkDebug.current
+  eq(forkSnap.frames.map((f: { name: string }) => f.name), ['leaf', 'inner', 'outer', forkPath], 'fork does not add synthetic call frames')
+  eq(forkSnap.frames.map((f: any) => [f.values.variables.x, f.values.args]), [['deep', ['extra']], ['deep', ['nested']], ['caller', ['outer']], ['global', ['root']]], 'fork caller snapshots preserve each real shell and argument scope')
+  eq([forkSnap.frames[1].values.params, forkSnap.frames[1].values.variables.parcel], [['parcel'], 'nested'], 'named function subshell body retains parameter provenance')
+  eq([forkSnap.scopes.parcel.kind, forkSnap.scopes.parcel.inherited, forkSnap.scopes.x.kind, forkSnap.scopes.x.inherited], ['parameter', true, 'local', true], 'function called in fork sees inherited dynamic parameter/local scopes')
+  const forkFrame = forkSnap.frames[1].id, forkBinding = forkSnap.frames[1].values.scopes.parcel.identity
+  forkDebug.continue(); await wait(() => forkDebug.current.state === 'paused')
+  forkSnap = forkDebug.current
+  eq([forkSnap.frames[0].id, forkSnap.variables.parcel, forkSnap.variables.x, forkSnap.args], [forkFrame, 'nested', 'deep', ['nested']], 'return from leaf preserves fork invocation identity and bindings')
+  forkDebug.continue(); await wait(() => forkDebug.current.state === 'paused')
+  forkSnap = forkDebug.current
+  eq([forkSnap.frames[0].id, forkSnap.variables.parcel, forkSnap.variables.x, forkSnap.args], [forkFrame, 'sub', 'inner', ['child']], 'return from nested subshell restores outer fork bindings without a new frame')
+  check(forkSnap.scopes.parcel.identity !== forkBinding && forkSnap.changes.parcel === undefined, 'copied fork binding is never compared with its parent as a previous value')
+  forkDebug.continue(); await wait(() => forkDebug.current.state === 'paused')
+  eq([forkDebug.current.variables.value, forkDebug.current.variables.x, forkDebug.current.args], ['outer', 'caller', ['outer']], 'named subshell return restores true caller values')
+  forkDebug.continue(); await wait(() => forkDebug.current.state === 'paused')
+  eq([forkDebug.current.variables.x, forkDebug.current.args], ['global', ['root']], 'all fork/function exits restore root environment and positional arguments')
+  forkDebug.continue()
+  eq((await forkRun).stdout, 'leaf:nested:deep:extra\nnested:nested:deep:nested\nsub:sub:inner:child\ncaller:outer:caller:outer\nroot:global:root\n', 'nested return paths execute with the inspected bindings')
+  forkDebug.finish(0)
+  // Cancellation must clear providers even when suspended inside two forks and a named frame.
+  const forkBase = base()
+  await runLine('x=outer; forked(p) (x=inner; (p=deep; echo never))', forkBase)
+  const cancelFork = launchDebug('forked value; touch /tmp/review-fork-after-cancel', forkBase)
+  for (let i = 0; i < 15; i++) {
+    await wait(() => cancelFork.session.current.state === 'paused' || cancelFork.session.done)
+    if (cancelFork.session.current.variables.p === 'deep') break
+    cancelFork.session.stepInto()
+  }
+  eq(cancelFork.session.current.variables.p, 'deep', 'cancel test reaches nested named subshell')
+  cancelFork.session.cancel(); await cancelFork.done
+  eq([cancelFork.session.current.frames, cancelFork.session.current.variables, cancelFork.session.current.changes], [[], {}, {}], 'fork cancellation clears captured callers, values and history')
+  check(!lookup('/tmp/review-fork-after-cancel'), 'fork cancellation never executes subsequent side effects')
+  const restoredFork: string[] = []
+  await runLine('echo "$x:${p-unset}"', { ...forkBase, print: (t: string) => restoredFork.push(t) })
+  eq(restoredFork.join(''), 'outer:unset', 'cancellation unwinds local bindings in persistent shell')
+
+  const cwdMain = 'source /tmp/move.msh\nsource ./lib.msh\nf'
+  const cwdFiles = new Map([['/tmp/cwd-main.msh', cwdMain], ['/tmp/move.msh', 'cd sub'], ['/tmp/lib.msh', 'f() { echo wrong; }'], ['/tmp/sub/lib.msh', 'f() { echo right; }']])
+  const cwdProject = await symbols.indexProject('/tmp/cwd-main.msh', '/tmp', async (p: string) => cwdFiles.get(p) ?? null, new AbortController().signal)
+  const cwdResolution = symbols.resolveSymbol(cwdProject, '/tmp/cwd-main.msh', cwdMain.length - 1)
+  check(!cwdResolution.reliable && !cwdProject.links.some((l: { to: string }) => l.to === '/tmp/lib.msh'), 'review P2: sourced cd cannot produce a definitive wrong library', JSON.stringify(cwdResolution))
+  const quotedEval = `f() { echo old; }; "eval" 'f() { echo new; }'; f`
+  const quotedEvalProject = { entry: '/tmp/quoted-eval', cwd: '/tmp', files: new Map([['/tmp/quoted-eval', symbols.indexMsh(quotedEval, '/tmp/quoted-eval')]]), links: [], notes: [] }
+  check(!symbols.resolveSymbol(quotedEvalProject, '/tmp/quoted-eval', quotedEval.length - 1).reliable, 'review P2: quoted eval invalidates old function definition')
+  eq((await run(quotedEval)).stdout, 'new\n', 'review P2: quoted eval really redefines function at runtime')
+  const staticProject = (text: string) => ({ entry: '/tmp/static', cwd: '/tmp', files: new Map([['/tmp/static', symbols.indexMsh(text, '/tmp/static')]]), links: [], notes: [] })
+  const literalHeads = (word: string) => [`'${word}'`, `"${word}"`, `\\${word}`]
+  for (const evalHead of literalHeads('eval')) {
+    const text = `f() { echo old; }; ${evalHead} 'f() { echo new; }'; f`, project = staticProject(text)
+    check(!symbols.resolveSymbol(project, '/tmp/static', text.length - 1).reliable, `literal command identity invalidates eval definitions: ${evalHead}`)
+    eq((await run(text)).stdout, 'new\n', `decoded eval identity agrees with runtime: ${evalHead}`)
+  }
+  for (const head of literalHeads('f')) {
+    const text = `f() { :; }; ${head}`, project = staticProject(text)
+    const result = symbols.resolveSymbol(project, '/tmp/static', text.lastIndexOf(head))
+    check(result?.reliable && result.reference.name === 'f' && text.slice(result.reference.start, result.reference.end) === head, `quoted function reference retains raw source range: ${head}`)
+  }
+  for (const builtin of ['alias', 'unalias', 'unset', 'command']) for (const head of literalHeads(builtin)) {
+    const file = symbols.indexMsh(`${head} name`, '/tmp/static')
+    check(file.uncertain, `quoted state-changing command remains uncertain: ${head}`)
+  }
+  for (const builtin of ['local', 'export']) for (const head of literalHeads(builtin)) {
+    const text = builtin === 'local' ? `f() { ${head} name=value; echo "$name"; }` : `${head} name=value; echo "$name"`
+    const project = staticProject(text), definition = symbols.resolveSymbol(project, '/tmp/static', text.indexOf('$name'))
+    eq([definition.reliable, definition.definitions[0]?.kind], [true, builtin === 'local' ? 'local' : 'global'], `quoted declaration command has actual builtin meaning: ${head}`)
+    const shadowed = symbols.indexMsh(`${builtin}() { :; }; ${text}`, '/tmp/static')
+    check(shadowed.uncertain && !shadowed.definitions.some((d: any) => d.name === 'name'), `quoted declaration respects function shadowing: ${head}`)
+  }
+  for (const sourceHead of [...literalHeads('source'), ...literalHeads('.')]) {
+    const file = symbols.indexMsh(`${sourceHead} './lib.msh'`, '/tmp/static')
+    eq(file.sources.map((s: any) => s.word), ['./lib.msh'], `quoted source identity preserves literal target: ${sourceHead}`)
+    const shadowed = symbols.indexMsh(`source() { :; }; ${sourceHead.replace('.', 'source')} ./lib.msh`, '/tmp/static')
+    check(shadowed.uncertain && shadowed.sources.length === 0, `quoted source respects function shadowing: ${sourceHead}`)
+  }
+  for (const cdHead of literalHeads('cd')) {
+    const file = symbols.indexMsh(`${cdHead} sub; source ./lib.msh`, '/tmp/static')
+    check(file.cwdChanges && file.sources[0].cwdUnknown, `quoted cd invalidates relative source cwd: ${cdHead}`)
+  }
+  for (const head of ['$cmd', '"$cmd"', '`echo eval`', 'e*al']) {
+    const text = `f() { :; }; ${head} 'f() { :; }'; f`, project = staticProject(text)
+    check(project.files.get('/tmp/static').uncertain && !symbols.resolveSymbol(project, '/tmp/static', text.length - 1).reliable, `dynamic command identity is unknown: ${head}`)
+  }
+
+  for (const builtin of ['source', 'local']) {
+    const main = builtin === 'source' ? 'source /tmp/override.msh\n"source" /tmp/lib.msh\nf' : 'source /tmp/override.msh\nf() { "local" x=value; echo "$x"; }'
+    const project = await symbols.indexProject('/tmp/main', '/tmp', async (p: string) => p === '/tmp/main' ? main : p === '/tmp/override.msh' ? `${builtin}() { :; }` : 'f() { :; }', new AbortController().signal)
+    check(!symbols.resolveSymbol(project, '/tmp/main', builtin === 'source' ? main.length - 1 : main.indexOf('$x')).reliable, `imported function shadowing prevents invented quoted builtin facts: ${builtin}`)
+  }
+  // Sourced cwd effects flow back to the caller and through nested/repeated contexts.
+  const cwdCases: [string, string, Record<string, string | null>][] = [
+    ['nested', 'source /tmp/move.msh\nsource ./lib.msh\nf', { '/tmp/move.msh': 'source /tmp/nested.msh', '/tmp/nested.msh': 'cd sub' }],
+    ['conditional source', 'if true; then source /tmp/move.msh; fi\nsource ./lib.msh\nf', { '/tmp/move.msh': 'cd sub' }],
+    ['conditional cd', 'source /tmp/move.msh\nsource ./lib.msh\nf', { '/tmp/move.msh': 'if true; then cd sub; fi' }],
+    ['function cd', 'source /tmp/move.msh\nmove\nsource ./lib.msh\nf', { '/tmp/move.msh': 'move() { cd sub; }' }],
+    ['unloaded', 'source /tmp/move.msh\nsource ./lib.msh\nf', { '/tmp/move.msh': null }],
+    ['dynamic source', 'source "$move"\nsource ./lib.msh\nf', {}],
+    ['outside project', 'source /elsewhere/move.msh\nsource ./lib.msh\nf', {}],
+    ['quoted cd/source', '"source" /tmp/move.msh\n"." ./lib.msh\nf', { '/tmp/move.msh': "'cd' sub" }],
+    ['repeat in changed cwd', 'source /tmp/move.msh\nsource /tmp/move.msh\nf', { '/tmp/move.msh': 'source ./lib.msh\ncd sub' }],
+    ['nested absolute source after cd', 'source /tmp/move.msh\nsource /tmp/load.msh\nf', { '/tmp/move.msh': 'cd sub', '/tmp/load.msh': 'source ./lib.msh' }],
+  ]
+  for (const [label, main, files] of cwdCases) {
+    const reads: string[] = []
+    const project = await symbols.indexProject('/tmp/main', '/tmp', async (p: string) => {
+      reads.push(p)
+      return p === '/tmp/main' ? main : p === '/tmp/lib.msh' ? 'f() { echo wrong; }' : files[p] ?? null
+    }, new AbortController().signal)
+    check(!project.links.some((l: any) => l.to === '/tmp/lib.msh') && !symbols.resolveSymbol(project, '/tmp/main', main.length - 1).reliable, `source cwd uncertainty avoids guessed relative definitions: ${label}`)
+    check(reads.length <= 16 && new Set(reads).size === reads.length, `source graph reads stay bounded and cached: ${label}`)
+  }
+  const pureSources = 'source ./pure.msh\nsource ./pure.msh\nsource ./lib.msh\nf'
+  const pureProject = await symbols.indexProject('/tmp/main', '/tmp', async (p: string) => p === '/tmp/main' ? pureSources : p === '/tmp/pure.msh' ? 'echo unchanged' : 'f() { :; }', new AbortController().signal)
+  check(symbols.resolveSymbol(pureProject, '/tmp/main', pureSources.length - 1).reliable, 'known pure repeated sources retain reliable following relative navigation')
+  const cappedSources = Array.from({ length: 30 }, (_, i) => `source /tmp/unloaded-${i}`).join('\n')
+  let failedReads = 0
+  await symbols.indexProject('/tmp/main', '/tmp', async (p: string) => { failedReads++; return p === '/tmp/main' ? cappedSources : null }, new AbortController().signal)
+  eq(failedReads, 16, 'source read limit also counts unavailable files')
   // Named parameters: parser, runtime, source diagnostics and frame cleanup share the real path.
   const potato = `deliver(parcel, cost) {
     printf 'Delivering %s for %s fuel\\n' "$parcel" "$cost"
@@ -481,6 +629,29 @@ deliver "Space Potato" 3`
   const ptext = ': "$10 ${10} $1x ${2} $"'
   const hoverAt = (needle: string, d = 0) => watch.variableAt(ptext, ptext.indexOf(needle) + d)
   eq([hoverAt('$10'), hoverAt('$10', 1), hoverAt('$10', 2), hoverAt('${10}'), hoverAt('${10}', 2), hoverAt('${10}', 3), hoverAt('$1x', 1), hoverAt('$1x', 2), hoverAt('${2}', 2), hoverAt(' $"', 1)], ['$1', '$1', null, '${10}', '${10}', '${10}', '$1', null, '$2', null], 'hover/caret: unbraced $10 is $1 (its 0 is text), braced ${10} is the tenth')
+  const captureEnv = (kept: number) => {
+    const env: Record<string, string> = { empty: '' }
+    for (let i = 0; i < 15; i++) env['p' + i] = 'a'.repeat(4096)
+    const used = Object.entries(env).reduce((n, [name, value]) => n + name.length + value.length, 0)
+    env.pad = 'a'.repeat(65535 - used - 'pad'.length - kept)
+    env.x = 'secret'; env.omitted = 'not captured'
+    return env
+  }
+  for (const kept of [0, 2]) {
+    const short = launchDebug('echo "$x"\nunset p0\necho "$x"\nx=changed\necho "$x"', { ...base(), env: captureEnv(kept) }, 'short capture')
+    await wait(() => short.session.current.state === 'paused')
+    const captured = short.session.current
+    eq([captured.variables.x, captured.cut.variables.x], ['secret'.slice(0, kept), 6], `shared bound can truncate a short value to ${kept} characters`)
+    eq(reviewWatch.evaluateWatch('x', captured), { ok: true, value: 'secret'.slice(0, kept), truncated: true }, 'watch preserves short capture truncation')
+    eq(reviewWatch.evaluateWatch('${#x}', captured), { ok: true, value: '6', truncated: false }, 'watch length uses uncaptured original length')
+    check(reviewWatch.evaluateWatch('omitted', captured).error.includes('not captured') && !captured.unset.includes('x'), 'omitted variable and short cut never masquerade as unset')
+    for (let i = 0; i < 2; i++) { short.session.stepOver(); await wait(() => short.session.current.state === 'paused') }
+    eq([short.session.current.variables.x, short.session.current.cut.variables.x, short.session.current.changes.x], ['secret', undefined, undefined], 'complete capture after a short cut is not a change from empty or a partial prefix')
+    for (let i = 0; i < 2; i++) { short.session.stepOver(); await wait(() => short.session.current.state === 'paused') }
+    eq([short.session.current.variables.x, short.session.current.changes.x], ['changed', 'secret'], 'later complete captures still produce correct previous values')
+    short.session.cancel(); await short.done
+    eq([short.session.current.frames, short.session.current.changes], [[], {}], 'short-capture cancellation clears prior values')
+  }
   for (let i = 0; i < 30; i++) { const s = new DebugSession('bounded'); s.finish(0) }
   eq(debugSessions().length, 16, 'registry remains bounded')
 } finally { await vite.close() }

@@ -249,6 +249,15 @@ export class DebugSession {
   }
 
   // --- frames, from the interpreter -----------------------------------------------------------------
+  /** A subshell executes in this frame, but owns a different environment. No extra step/frame. */
+  useBindings(bindings: () => DebugBindings): () => void {
+    if (this.done) return () => {}
+    const frame = this.frames[this.frames.length - 1] ?? this.root
+    const saved = frame.bindings
+    frame.bindings = bindings
+    return () => { frame.bindings = this.done ? undefined : saved }
+  }
+
   /** A script, function or substitution starts. Returns the matching `leave`. */
   enter(kind: FrameKind, name: string, filename: string, source?: string, bindings?: () => DebugBindings): () => void {
     if (source !== undefined && filename.startsWith('/') && (this.sources.has(filename) || this.sources.size < MAX_SOURCES)) this.sources.set(filename, sourceHash(source))
@@ -281,7 +290,10 @@ export class DebugSession {
     const depth = this.frames.length
     const frame = this.frames[depth - 1] ?? this.root
     frame.at = location
-    frame.bindings ??= extra?.bindings
+    // The executing shell can change without entering a frame, notably inside ( ... ).
+    frame.bindings = extra?.bindings ?? (() => ({ args: extra?.args ?? [], params: [], locals: extra?.locals ?? [], entries: function* () {
+      for (const name in variables) if (Object.hasOwn(variables, name)) yield { name, value: variables[name], scope: 'global' as const, inherited: false, identity: name }
+    } }))
     // A line event, as in Python's debugger: execution reaches another line, or jumps back (a loop).
     const last = frame.last
     const lineEvent = !last || last.filename !== location.filename || last.line !== location.line || location.start <= last.start
@@ -357,10 +369,6 @@ export class DebugSession {
       }
       return { ...values, variables: copy, cut: { variables: cutVars, args: cutArgs }, args, argCount: source.args.length, locals, params, unset, scopes, changes }
     }
-    // Older API callers can still checkpoint a single frame directly.
-    frame.bindings ??= () => ({ args: extra?.args ?? [], params: [], locals: extra?.locals ?? [], entries: function* () {
-      for (const name in variables) if (Object.hasOwn(variables, name)) yield { name, value: variables[name], scope: 'global' as const, inherited: false, identity: name }
-    } })
     const frames = this.stack(location, capture)
     if (budget?.stopped) return
     const values = frames[0]?.values ?? emptyValues()

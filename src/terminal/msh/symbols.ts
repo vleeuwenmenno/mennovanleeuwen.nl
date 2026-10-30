@@ -7,7 +7,7 @@ export type SymbolKind = 'function' | 'parameter' | 'local' | 'global' | 'dynami
 export type SymbolDef = { id: string; name: string; kind: SymbolKind; path: string; start: number; end: number; line: number; column: number; owner: string | null; conditional: boolean; available: number; signature?: string }
 export type SymbolRef = { name: string; start: number; end: number; owner: string | null; kind: 'variable' | 'command' | 'positional'; declaration?: string }
 export type SourceRef = { word: string | null; start: number; line: number; conditional: boolean; cwdUnknown: boolean }
-export type SymbolFile = { path: string; text: string; definitions: SymbolDef[]; references: SymbolRef[]; sources: SourceRef[]; scopes: { owner: string; start: number; end: number }[]; uncertain: boolean; problems: string[] }
+export type SymbolFile = { path: string; text: string; definitions: SymbolDef[]; references: SymbolRef[]; sources: SourceRef[]; scopes: { owner: string; start: number; end: number }[]; uncertain: boolean; cwdChanges: boolean; problems: string[] }
 export type SymbolProject = { entry: string; cwd: string; files: Map<string, SymbolFile>; links: { from: string; to: string; source: SourceRef }[]; notes: string[] }
 export type Resolution = { reference: SymbolRef; definitions: SymbolDef[]; reliable: boolean; note: string }
 export const SYMBOL_LIMITS = { files: 16, characters: 512_000, symbols: 4096, depth: 8 } as const
@@ -29,12 +29,15 @@ export function literalWord(raw: string): string | null {
 
 export function indexMsh(text: string, path: string): SymbolFile {
   const analysis = analyzeMsh(text, path)
-  const file: SymbolFile = { path, text, definitions: [], references: [], sources: [], scopes: [], uncertain: false, problems: analysis.diagnostics.map(d => `${d.line}:${d.column}: ${d.message}`) }
-  if (!analysis.tree) return file
+  const file: SymbolFile = { path, text, definitions: [], references: [], sources: [], scopes: [], uncertain: false, cwdChanges: false, problems: analysis.diagnostics.map(d => `${d.line}:${d.column}: ${d.message}`) }
+  if (!analysis.tree) { file.cwdChanges = true; return file }
   let cwdUnknown = false, count = 0
   const functionNames = new Set<string>()
   const collectFunctions = (node: Node) => { if (node.t === 'func') functionNames.add(node.name); for (const child of childrenOf(node)) collectFunctions(child) }
   collectFunctions(analysis.tree)
+  // These overrides also affect files that source this one. Their parsed builtin facts
+  // are only candidates once command dispatch can select an imported function instead.
+  file.uncertain = ['local', 'export', 'source', '.'].some(name => functionNames.has(name))
   const lines = [0]
   for (let i = 0; i < text.length; i++) if (text[i] === '\n') lines.push(i + 1)
   const location = (start: number) => {
@@ -94,26 +97,28 @@ export function indexMsh(text: string, path: string): SymbolFile {
       return
     }
     if (n.t === 'simple') {
-      const command = n.words[0]
-      const shadowed = functionNames.has(command)
-      if (shadowed && ['local', 'export', 'source', '.', 'cd'].includes(command)) file.uncertain = true
+      // Quoting changes spelling, not command identity. Keep parser ranges for navigation.
+      const command = n.words.length ? literalWord(n.words[0]) : ''
+      const dynamic = command === null
+      const shadowed = command !== null && functionNames.has(command)
+      if (shadowed && ['local', 'export', 'source', '.', 'cd'].includes(command ?? '')) file.uncertain = true
       const commandAt = n.wordsAt?.[0]
-      if (commandAt && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(command)) ref(command, commandAt.start, commandAt.end, owner, 'command')
-      if (command === 'eval' || command === 'alias' || command === 'unset' || command?.includes('$')) file.uncertain = true
-      if (command === 'cd') cwdUnknown = true
+      if (commandAt && command !== null && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(command)) ref(command, commandAt.start, commandAt.end, owner, 'command')
+      if (dynamic || ['eval', 'alias', 'unalias', 'unset', 'command'].includes(command ?? '')) file.uncertain = true
+      if (dynamic || ['cd', 'eval', 'alias', 'unalias', 'command'].includes(command ?? '')) cwdUnknown = true
       if (!shadowed && (command === 'source' || command === '.')) file.sources.push({ word: n.words[1] === undefined ? null : literalWord(n.words[1]), start: n.span?.start ?? 0, line: n.span?.line ?? 1, conditional: conditional || owner !== null, cwdUnknown })
       for (let i = 0; i < n.assigns.length; i++) {
         const [name] = n.assigns[i], at = n.assignsAt?.[i]
         if (!at) continue
         // Command-prefix assignments are temporary, not reliable global definitions.
         const known = file.definitions.find(d => d.owner === owner && d.name === name && (d.kind === 'local' || d.kind === 'parameter'))
-        add(name, owner ? known?.kind ?? 'dynamic' : 'global', at.start, owner, conditional || !!command, undefined, n.span?.end ?? at.end)
+        add(name, owner ? known?.kind ?? 'dynamic' : 'global', at.start, owner, conditional || n.words.length > 0, undefined, n.span?.end ?? at.end)
         expansions(at.start + name.length + 1, at.end, owner)
       }
       for (let i = 0; i < n.words.length; i++) {
         const at = n.wordsAt?.[i]; if (!at) continue
         const m = /^(\w+)(?:=|$)/.exec(n.words[i])
-        if (!shadowed && i && m && /^[A-Za-z_]/.test(m[1]) && ['local', 'export'].includes(command)) {
+        if (!shadowed && i && m && /^[A-Za-z_]/.test(m[1]) && ['local', 'export'].includes(command ?? '')) {
           add(m[1], command === 'local' ? 'local' : owner ? 'dynamic' : 'global', at.start, owner, conditional, undefined, n.span?.end ?? at.end)
         }
         expansions(at.start, at.end, owner)
@@ -134,6 +139,7 @@ export function indexMsh(text: string, path: string): SymbolFile {
     for (const child of childrenOf(n)) visit(child, owner, branch)
   }
   visit(analysis.tree, null, false)
+  file.cwdChanges = cwdUnknown || functionNames.has('source') || functionNames.has('.') || count > SYMBOL_LIMITS.symbols || file.problems.length > 0
   if (count > SYMBOL_LIMITS.symbols) file.problems.push(`Symbol analysis limited to ${SYMBOL_LIMITS.symbols} entries`)
   return file
 }
@@ -159,7 +165,8 @@ export function resolveSymbol(project: SymbolProject, path: string, at: number):
     if (parameter) return { reference, definitions: [parameter], reliable: true, note: 'Named parameter, local to this invocation; positional arguments remain separate.' }
     if (local.length) {
       const first = local[0]
-      return { reference, definitions: [first], reliable: !first.conditional && !file.uncertain, note: first.conditional ? 'Conditional local declaration; the caller may supply this binding.' : 'Function-local declaration (dynamic scope).' }
+      const uncertain = file.uncertain || project.notes.length > 0 || [...project.files.values()].some(f => f.uncertain)
+      return { reference, definitions: [first], reliable: !first.conditional && !uncertain, note: first.conditional ? 'Conditional local declaration; the caller may supply this binding.' : uncertain ? 'Candidate local declaration; dynamic code or command shadowing may change its meaning.' : 'Function-local declaration (dynamic scope).' }
     }
   }
   const reachable = new Set([path])
@@ -210,29 +217,65 @@ export async function indexProject(entry: string, cwd: string, read: (path: stri
     }
     return '/' + parts.join('/')
   }
-  const visit = async (path: string, depth: number) => {
-    if (signal.aborted || project.files.has(path)) return
-    if (project.files.size >= SYMBOL_LIMITS.files || depth > SYMBOL_LIMITS.depth) { project.notes.push('Source index limit reached'); return }
-    let source: string | null
-    try { source = await read(path, signal) }
-    catch { if (!signal.aborted) project.notes.push(`${path}: unavailable or permission denied`); return }
-    if (signal.aborted) return
-    if (source === null) { project.notes.push(`${path}: open this source file to include it (not loaded locally)`); return }
-    if (source.length + total > SYMBOL_LIMITS.characters) { project.notes.push('Source index limited to 512 KB'); return }
-    total += source.length
-    const file = indexMsh(source, path)
-    project.files.set(path, file)
-    for (const error of file.problems) project.notes.push(`${path}:${error}`)
-    for (const source of file.sources) {
-      if (signal.aborted) return
-      if (source.word === null || (!source.word.startsWith('/') && source.cwdUnknown)) { project.notes.push(`${path}:${source.line}: dynamic source path or working directory`); continue }
-      const target = resolve(source.word)
-      if (cwd !== '/' && target !== cwd && !target.startsWith(cwd.replace(/\/$/, '') + '/')) { project.notes.push(`${path}:${source.line}: source outside the project; open it directly`); continue }
-      project.links.push({ from: path, to: target, source })
-      await visit(target, depth + 1)
+  const note = (message: string) => { if (project.notes.length < 32 && !project.notes.includes(message)) project.notes.push(message) }
+  const attempted = new Set<string>(), active = new Set<string>()
+  const effects = new Map<string, boolean>()
+  const ambiguous = new Set<SourceRef>()
+  const links = new Map<SourceRef, SymbolProject['links'][number]>()
+  // Visit each file at most twice: once with the launch cwd, once with an unknown cwd.
+  // A later uncertain invocation invalidates relative links from an earlier known one.
+  const visit = async (path: string, depth: number, inheritedUnknown = false): Promise<boolean> => {
+    if (signal.aborted) return true
+    if (depth > SYMBOL_LIMITS.depth) { note('Source index limit reached'); return true }
+    const context = `${path}:${inheritedUnknown}`
+    if (effects.has(context)) return effects.get(context)!
+    if (active.has(path)) { note(`${path}: recursive source; working directory unknown`); return true }
+    let file = project.files.get(path)
+    if (!file) {
+      if (attempted.has(path)) return true
+      if (attempted.size >= SYMBOL_LIMITS.files) { note('Source index limit reached'); return true }
+      attempted.add(path)
+      let source: string | null
+      try { source = await read(path, signal) }
+      catch { if (!signal.aborted) note(`${path}: unavailable or permission denied`); return true }
+      if (signal.aborted) return true
+      if (source === null) { note(`${path}: open this source file to include it (not loaded locally)`); return true }
+      if (source.length + total > SYMBOL_LIMITS.characters) { note('Source index limited to 512 KB'); return true }
+      total += source.length
+      file = indexMsh(source, path)
+      project.files.set(path, file)
+      for (const error of file.problems) note(`${path}:${error}`)
     }
+    active.add(path)
+    let cwdUnknown = inheritedUnknown, changes = file.cwdChanges
+    for (const source of file.sources) {
+      if (signal.aborted) return true
+      cwdUnknown ||= source.cwdUnknown
+      if (source.word === null || (!source.word.startsWith('/') && cwdUnknown)) {
+        ambiguous.add(source)
+        links.delete(source)
+        note(`${path}:${source.line}: dynamic source path or working directory`)
+        cwdUnknown = changes = true
+        continue
+      }
+      const target = resolve(source.word)
+      if (cwd !== '/' && target !== cwd && !target.startsWith(cwd.replace(/\/$/, '') + '/')) {
+        note(`${path}:${source.line}: source outside the project; open it directly`)
+        cwdUnknown = changes = true
+        continue
+      }
+      if (!ambiguous.has(source)) links.set(source, { from: path, to: target, source })
+      // Sourcing shares the caller's cwd. A cd anywhere in the loaded graph (including
+      // conditional/function bodies), or an unavailable/dynamic edge, is a possible change.
+      const childChanges = await visit(target, depth + 1, cwdUnknown)
+      cwdUnknown ||= childChanges
+      changes ||= childChanges
+    }
+    active.delete(path)
+    effects.set(context, changes)
+    return changes
   }
   await visit(entry, 0)
-  project.notes = [...new Set(project.notes)].slice(0, 32)
+  project.links = [...links.values()]
   return project
 }

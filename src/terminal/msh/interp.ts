@@ -390,6 +390,9 @@ class Shell {
   private depth = 0
   private shellId = ++scopeSerial
   private argumentScopes: string[][] = []
+  // Debug-only provenance for copied bindings; never grants `local` a runtime scope in a fork.
+  private inheritedDebugLocals: readonly LocalFrame[] = []
+  private inheritedDebugOwn?: LocalFrame
   private location?: SourceSpan
   /** Alias names that do not expand while an expanded alias runs (the loop guard) */
   private aliasBlock: Set<string> | null = null
@@ -466,7 +469,7 @@ class Shell {
     const localDepth = this.st.locals.length, argDepth = this.argumentScopes.length
     return () => {
       const sh = this
-      const own = this.st.locals[localDepth - 1]
+      const own = this.st.locals[localDepth - 1] ?? this.inheritedDebugOwn
       return {
         args: this.argumentScopes[argDepth] ?? this.st.positional,
         params: own?.params ?? [], locals: own?.saved.keys() ?? [],
@@ -474,8 +477,9 @@ class Shell {
           // Saved names also include bindings currently unset or hidden by a deeper frame.
           const names = function* () {
             for (const name in sh.st.vars) if (Object.hasOwn(sh.st.vars, name)) yield name
-            for (let i = 0; i < sh.st.locals.length; i++) for (const name of sh.st.locals[i].saved.keys()) {
-              if (!Object.hasOwn(sh.st.vars, name) && !sh.st.locals.slice(0, i).some(f => f.saved.has(name))) yield name
+            const scopes = [...sh.inheritedDebugLocals, ...sh.st.locals]
+            for (let i = 0; i < scopes.length; i++) for (const name of scopes[i].saved.keys()) {
+              if (!Object.hasOwn(sh.st.vars, name) && !scopes.slice(0, i).some(f => f.saved.has(name))) yield name
             }
           }
           for (const name of names()) {
@@ -487,9 +491,10 @@ class Shell {
             }
             let owner: LocalFrame | undefined
             for (let i = localDepth - 1; i >= 0; i--) if (sh.st.locals[i].saved.has(name)) { owner = sh.st.locals[i]; break }
+            if (!owner) for (let i = sh.inheritedDebugLocals.length - 1; i >= 0; i--) if (sh.inheritedDebugLocals[i].saved.has(name)) { owner = sh.inheritedDebugLocals[i]; break }
             if (value === undefined && !owner) continue
             const scope = owner ? owner.params.includes(name) ? 'parameter' : 'local' : 'global'
-            yield { name, value, scope, inherited: !!owner && owner !== own, identity: `${owner?.id ?? sh.shellId}:${scope}:${name}` } as const
+            yield { name, value, scope, inherited: !!owner && owner !== own, identity: `${sh.shellId}:${owner?.id ?? 'global'}:${scope}:${name}` } as const
           }
         },
       }
@@ -609,6 +614,7 @@ class Shell {
   /** $(…) and `…`: runs in a subshell and gives what it printed, trailing newlines removed. */
   private async substitute(src: string, io: Io): Promise<string> {
     const sub = this.subshell()
+    sub.inheritedDebugOwn = undefined // A new substitution frame inherits its caller's locals.
     const out = bufferSink(this.base.budget)
     let status: number
     const leave = this.base.debug?.enter('substitution', '$(…)', '-c', undefined, sub.debugBindings())
@@ -839,12 +845,19 @@ class Shell {
       base.cwd = p
       st.vars.PWD = p
     }
-    return new Shell(base, st, false)
+    const sub = new Shell(base, st, false)
+    if (this.base.debug) {
+      sub.inheritedDebugLocals = [...this.inheritedDebugLocals, ...this.st.locals]
+      sub.inheritedDebugOwn = this.st.locals.at(-1) ?? this.inheritedDebugOwn
+    }
+    return sub
   }
 
   /** A new shell for a script or `msh -c`: the environment copied, no functions. */
   child(arg0: string, positional: string[]): Shell {
     const sh = this.subshell()
+    sh.inheritedDebugLocals = []
+    sh.inheritedDebugOwn = undefined
     sh.st.funcs.clear()
     sh.st.aliases = new Map()
     sh.st.arg0 = arg0
@@ -977,10 +990,13 @@ class Shell {
       case 'subshell':
         return this.redirected(n.redirs, io, async (io2) => {
           const sub = this.subshell()
+          const restore = this.base.debug?.useBindings(sub.debugBindings())
           try {
             return await sub.exec(n.body, io2, cond)
           } catch (e) {
             return sub.caught(e, io2)
+          } finally {
+            restore?.()
           }
         })
       case 'if':

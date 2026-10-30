@@ -279,7 +279,7 @@ function InspectLine({ inspect, differs }: { inspect: Inspect; differs?: boolean
   const r = inspect.result
   return <>
     <span className="xed-var-name">{inspect.name}</span>
-    {r.ok ? <> = <span className="xed-var-value">{shown(r.value) || <span className="muted">(empty)</span>}</span>{(r.value.length > WATCH_DISPLAY || r.truncated) && <span className="muted"> ({r.truncated ? `cut; ${r.value.length} characters kept` : `${r.value.length} characters`})</span>}</> : <span className="xed-var-error"> {r.error}</span>}
+    {r.ok ? <> = <span className="xed-var-value">{shown(r.value) || <span className="muted">{r.truncated ? '(truncated)' : '(empty)'}</span>}</span>{(r.value.length > WATCH_DISPLAY || r.truncated) && <span className="muted"> ({r.truncated ? `cut; ${r.value.length} characters kept` : `${r.value.length} characters`})</span>}</> : <span className="xed-var-error"> {r.error}</span>}
     {differs && <span className="xed-var-note">The editor text differs from what is running</span>}
   </>
 }
@@ -486,15 +486,15 @@ function notPaused(ctl: XedDebugCtl) {
   return 'The session has ended; values from its last pause are cleared.'
 }
 
-/** `length`: the real length of a value the snapshot cut at 4096 characters. */
+/** `length`: the original length when either the per-value or shared snapshot bound cut it. */
 function VarRow({ name, value, tag, length, previous, onWatch }: { name: string; value?: string; tag?: string; length?: number; previous?: string; onWatch: () => void }) {
   const real = length ?? value?.length ?? 0
   return <tr className={previous !== undefined ? 'is-changed' : undefined}>
     <th scope="row"><span className="xed-var-name">{name}</span>{tag && <span className="xed-var-tag">{tag}</span>}</th>
     <td className="xed-var-value" title={real > WATCH_DISPLAY ? `${real} characters` : undefined}>
       {previous !== undefined && <span className="xed-var-previous">{shown(previous)} → </span>}
-      {value === undefined ? <span className="muted">(unset)</span> : shown(value) || <span className="muted">(empty)</span>}
-      {real > WATCH_DISPLAY && <span className="muted"> ({real} characters{length !== undefined ? `, ${value?.length ?? 0} kept` : ''})</span>}
+      {value === undefined ? <span className="muted">(unset)</span> : shown(value) || (length === undefined && <span className="muted">(empty)</span>)}
+      {(length !== undefined || real > WATCH_DISPLAY) && <span className="muted"> ({length !== undefined ? 'truncated; ' : ''}{real} characters{length !== undefined ? `, ${value?.length ?? 0} kept` : ''})</span>}
     </td>
     <td><button className="xed-link" onClick={onWatch} aria-label={`Watch ${name}`}>Watch</button></td>
   </tr>
@@ -517,7 +517,7 @@ function WatchList({ ctl }: { ctl: XedDebugCtl }) {
           const r = ctl.paused ? ctl.values ? evaluateWatch(w, ctl.values) : { ok: false as const, error: 'This frame was not captured' } : null
           return <li key={w}>
             <span className="xed-var-name">{w}</span>
-            {r ? (r.ok ? <span className="xed-var-value"> = {shown(r.value) || <span className="muted">(empty)</span>}{(r.truncated || r.value.length > WATCH_DISPLAY) && <span className="muted"> (truncated)</span>}</span> : <span className="xed-var-error"> {r.error}</span>) : <span className="muted"> — not paused</span>}
+            {r ? (r.ok ? <span className="xed-var-value"> = {shown(r.value) || (!r.truncated && <span className="muted">(empty)</span>)}{(r.truncated || r.value.length > WATCH_DISPLAY) && <span className="muted"> (truncated)</span>}</span> : <span className="xed-var-error"> {r.error}</span>) : <span className="muted"> — not paused</span>}
             <button className="xed-x" onClick={() => ctl.setWatches(ws => ws.filter(x => x !== w))} aria-label={`Remove watch ${w}`} title="Remove">×</button>
           </li>
         })}

@@ -500,6 +500,77 @@ try {
   await A(`W.querySelector('[aria-label="Close"]').click()`)
   await page.waitFor(`!document.querySelector('.zed')`)
 
+  // --- a named function's subshell keeps its frame but owns the executing bindings -----------------
+  const forkCode = 'x=outer\nf(parcel) (\n  x=inner\n  set -- child\n  echo "$parcel:$x:$1"\n)\nf "Space Potato"\necho "$x"'
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-fork.msh', ${JSON.stringify(forkCode)}, false)
+    window.xedDebug.toggleBreakpoint('/tmp/xed-fork.msh', 5)
+    window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/xed-fork.msh', root: '/tmp' } } }))
+  })()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-fork.msh')`)
+  await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = 'a'`)
+  await focusWin('a'); await A(`W.querySelector('.zed').focus()`)
+  await key('F5'); await waitState('Paused (breakpoint) · xed-fork.msh:5')
+  await tab('Variables'); fv = await frameVars()
+  expect(fv.includes('parcelparameterSpace Potato') && fv.includes('xglobalinner') && fv.includes('child'), 'named subshell Variables shows actual executing parameter, global and positional values', fv)
+  await tab('Watch'); await addWatch('$parcel:$x:$1')
+  expect((await watchText())[0].includes('Space Potato:inner:child'), 'subshell Watch agrees with executing shell')
+  await tab('Call stack'); await A(`W.querySelectorAll('.xed-stack button')[1].click()`)
+  await tab('Variables'); fv = await frameVars()
+  expect(fv.includes('xglobalouter') && !fv.includes('xglobalinner'), 'selecting subshell function caller keeps true parent environment', fv)
+  await tab('Call stack'); await A(`W.querySelectorAll('.xed-stack button')[0].click()`)
+  await button('Step out'); await waitState('Paused (step) · xed-fork.msh:8')
+  await tab('Variables'); fv = await frameVars()
+  expect(fv.includes('xglobalouter') && !fv.includes('inner →') && !fv.includes('parcelparameter'), 'step out restores caller without comparing copied subshell values', fv)
+  await button('Stop'); await waitState('Stopped')
+  await A(`W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+
+  // --- capture truncation is not an empty variable, even for a short original value -----------------
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-short-cut.msh', 'echo "$x"\\nunset p0\\necho "$x"\\nx=changed\\necho "$x"', false)
+    window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/xed-short-cut.msh', root: '/tmp' } } }))
+    const { launchDebug } = await import('/src/terminal/msh/interp.ts')
+    const env = { empty: '' }
+    for (let i = 0; i < 15; i++) env['p' + i] = 'a'.repeat(4096)
+    const used = Object.entries(env).reduce((n, [name, value]) => n + name.length + value.length, 0)
+    env.pad = 'a'.repeat(65535 - used - 'pad'.length)
+    env.x = 'secret'; env.omitted = 'not captured'
+    window.xedShortCut = launchDebug('msh /tmp/xed-short-cut.msh', {
+      cwd: '/tmp', setCwd() {}, env, history: [], windows: [], openApp() {}, openNewApp() {}, closeWindow() {}, clear() {}, exit() {}, setAccent() {}, print() {}, live() {}, size: { cols: 80, rows: 24 }, onKey() {}, signal: new AbortController().signal,
+    }, 'short capture', { start: { entry: '/tmp/xed-short-cut.msh' } })
+  })()`)
+  await page.waitFor(`document.querySelector('.zed-tab.is-active')?.textContent.includes('xed-short-cut.msh') && window.xedShortCut.session.current.state === 'paused'`)
+  await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = 'a'`)
+  await focusWin('a')
+  await A(`const b = W.querySelector('[aria-label="Toggle debug panel"]'); if (b.getAttribute('aria-pressed') !== 'true') b.click()`)
+  await attach('window.xedShortCut.session.id')
+  await tab('Variables')
+  const shortCapture = await page.eval(`({ value: window.xedShortCut.session.current.variables.x, length: window.xedShortCut.session.current.cut.variables.x })`)
+  expect(shortCapture.value === '' && shortCapture.length === 6, 'review P2: shared capture bound keeps zero of a six-character variable', shortCapture)
+  const shortRow = await A<string>(`return [...W.querySelectorAll('.xed-vars tr')].find(r => r.querySelector('.xed-var-name')?.textContent === 'x').textContent`)
+  expect(shortRow.includes('truncated') && shortRow.includes('6 characters') && shortRow.includes('0 kept') && !shortRow.includes('(empty)'), 'review P2: zero-kept short value is visibly truncated, never empty', shortRow)
+  const emptyRow = await A<string>(`return [...W.querySelectorAll('.xed-vars tr')].find(r => r.querySelector('.xed-var-name')?.textContent === 'empty').textContent`)
+  expect(emptyRow.includes('(empty)') && !emptyRow.includes('truncated'), 'review P2: a genuine empty string remains distinct', emptyRow)
+  await tab('Watch'); await addWatch('x'); await addWatch('omitted')
+  const cutWatches = await watchText()
+  expect(cutWatches[0].includes('truncated') && !cutWatches[0].includes('(empty)') && cutWatches[1].includes('not captured') && !cutWatches[1].includes('not set'), 'review P2: Watch distinguishes truncation and uncaptured binding', cutWatches)
+  await caretAt(7)
+  const cutCaret = await A<string>(`return W.querySelector('.xed-dbg-caret').textContent`)
+  expect(cutCaret.includes('truncated') && cutCaret.includes('0 characters kept') && !cutCaret.includes('(empty)'), 'runtime caret inspection distinguishes zero capture from empty', cutCaret)
+  await button('Step over'); await waitState('Paused (step) · xed-short-cut.msh:2')
+  await button('Step over'); await waitState('Paused (step) · xed-short-cut.msh:3')
+  await tab('Variables')
+  let completeRow = await A<string>(`return [...W.querySelectorAll('.xed-vars tr')].find(r => r.querySelector('.xed-var-name')?.textContent === 'x').textContent`)
+  expect(completeRow.includes('secret') && !completeRow.includes('→'), 'complete value after truncated capture has no false previous empty value', completeRow)
+  await button('Step over'); await waitState('Paused (step) · xed-short-cut.msh:4')
+  await button('Step over'); await waitState('Paused (step) · xed-short-cut.msh:5')
+  completeRow = await A<string>(`return [...W.querySelectorAll('.xed-vars tr')].find(r => r.querySelector('.xed-var-name')?.textContent === 'x').textContent`)
+  expect(completeRow.includes('secret → changed'), 'complete snapshots still highlight a later real value change', completeRow)
+  await button('Stop'); await page.eval('window.xedShortCut.done')
+  await A(`W.querySelector('[aria-label="Close"]').click()`)
+  await page.waitFor(`!document.querySelector('.zed')`)
+
   // --- parser-backed static origins, modified click, keyboard, completion and unsaved sources --------
   const intelMain = 'source /tmp/xed-symbol-lib.msh\nfuel=9\ndeliver(parcel,cost) {\n  local fuel=6\n  echo "$parcel $cost $fuel $1"\n}\ndeliver "Space Potato" 3\nfromlib hello\necho "$fuel"'
   const intelLib = 'fromlib(message) { echo "$message"; }'
@@ -577,6 +648,22 @@ try {
   await A(`const b = W.querySelector('.xed-symbol-actions button:nth-child(4)'); if (b.getAttribute('aria-expanded') !== 'true') b.click()`)
   await page.waitFor(`document.querySelector('.xed-symbol-details')?.textContent.includes('dynamic source')`, 5000)
   pass('dynamic source uncertainty is visible without evaluating it')
+  await page.eval(`(async () => {
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-cwd-move.msh', '"cd" sub', false)
+    await window.xedFs.writeFile('/tmp', '/tmp/xed-cwd-lib.msh', 'f() { echo wrong; }', false)
+  })()`)
+  const movedSources = 'source /tmp/xed-cwd-move.msh\nsource ./xed-cwd-lib.msh\nf'
+  await edit(movedSources); await caretAt(movedSources.length - 1)
+  await page.waitFor(`document.querySelector('.xed-symbol-details')?.textContent.includes('working directory')`, 5000)
+  await A(`W.querySelector('.xed-symbol-actions button').click()`)
+  expect((await activeFile()) === 'xed-symbol-main.msh' && !(await summary()).includes('xed-cwd-lib.msh'), 'Go to Definition never guesses old cwd after sourced quoted cd', await summary())
+  const quotedRedefinition = `f() { echo old; }; "eval" 'f() { echo new; }'; f`
+  await edit(quotedRedefinition); await caretAt(quotedRedefinition.length - 1)
+  await page.waitFor(`document.querySelector('.xed-symbol-summary')?.textContent.includes('(candidate)')`, 5000)
+  const uncertainPoint = await pointerTo(quotedRedefinition, quotedRedefinition.length - 1)
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: uncertainPoint.x, y: uncertainPoint.y, button: 'left', clickCount: 1, modifiers: MODS.ctrl })
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: uncertainPoint.x, y: uncertainPoint.y, button: 'left', clickCount: 1, modifiers: MODS.ctrl })
+  expect((await A<number>(`return W.querySelector('textarea.zed-input').selectionStart`)) === quotedRedefinition.length - 1 && (await A<boolean>(`return !!W.querySelector('.xed-definitions button')`)), 'modified click after quoted eval presents candidates without a false definitive jump')
   await edit(intelMain)
   await A(`W.querySelector('[aria-label="Close"]').click()`)
   await page.waitFor(`!document.querySelector('.zed')`)

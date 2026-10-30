@@ -788,19 +788,28 @@ sources must already be open in this window: automatic symbol discovery does not
 Seafile files. A literal relative source is resolved from the project/launch working directory,
 not from the source file's directory. Sources outside the project, dynamic paths, or relative
 sources after a possible `cd` are reported as unknown rather than guessed.
+This includes possible directory changes in nested, conditional or repeated sourced files;
+an unavailable source also makes subsequent relative source paths unknown. The index does
+not execute `cd` to discover the new directory. Literal quoted or escaped command names
+have their normal shell meaning, including `"source"`, `'cd'`, `\eval` and quoted local/export
+commands; dynamic command names remain uncertain.
+Functions that shadow declaration/source builtins, including imported functions, also weaken
+those static facts to candidates.
 
 msh has dynamic scope, not lexical closures. A free variable in a function may come from a
 caller local: the index shows known assignment candidates and says so. Conditional declarations,
 multiple function definitions, dynamic sources and `eval` prevent a definitive jump; choose an
-explicit candidate instead. Parameters and unconditional local declarations in the current
-function have reliable origins. This is intentionally not a full LSP or data-flow proof:
+explicit candidate instead. Parameters and unconditional local declarations with unambiguous
+command identity in the current function have reliable origins. This is intentionally not a
+full LSP or data-flow proof:
 command/arithmetic substitution internals, heredoc expansions, `read`/`getopts`-generated
 bindings and external commands are not resolved. A syntax-invalid file keeps its parser
 Problems but has no symbol index until it parses again. No React/TypeScript intelligence is
 implied.
 
-Each window indexes at most 16 source files, 8 source edges deep and 512 KB total, with at most
-4096 symbol facts per file and 40 completion suggestions. Indexing is debounced, cancelled on
+Each window attempts at most 16 source file reads (including unavailable files), 8 source edges
+deep and 512 KB total, with at most 4096 symbol facts per file and 40 completion suggestions.
+Indexing is debounced, cancelled on
 file/buffer/root changes or window close, and discards stale asynchronous results. Before a
 jump into a closed source, its text is checked again; a changed file is reindexed instead of
 navigating to an outdated location. Account
@@ -889,6 +898,12 @@ Watches and runtime hover use that selected frame. A hover in a different file a
 select its frame rather than displaying the executing function's value under another name.
 Dynamic caller locals are labelled as inherited scope. Parameters are visible before the
 first body command. `(unset)` and `(empty)` are distinct, and omitted/cut values are labelled.
+Inside `( ... )`, the current frame shows the executing subshell's copied bindings and
+positionals, including parameters in a function with a subshell body. Caller frames retain
+their own bindings; leaving the subshell restores the enclosing view without adding a frame
+or comparing copied bindings as changes to their originals. A shared capture limit can cut
+even a short value to zero characters: Variables, Watch and hover label that truncation,
+never as an empty string.
 The Variables view highlights changes as previous → current only for the same session,
 invocation and binding. Comparisons use complete captured values only; previous display text
 is limited to 120 characters. Switching sessions resets comparisons. Ending a session or
