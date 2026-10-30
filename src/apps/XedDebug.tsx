@@ -238,7 +238,7 @@ export function useXedDebug({ path, text, dirty, ready, root, caret, save, revea
 export type XedDebugCtl = ReturnType<typeof useXedDebug>
 
 /** The character offset under a point of the editor's textarea (monospace, tabs of 2), or null. */
-function offsetAt(el: HTMLTextAreaElement, clientX: number, clientY: number, lineHeight: number, pad: number): number | null {
+export function offsetAt(el: HTMLTextAreaElement, clientX: number, clientY: number, lineHeight: number, pad: number): number | null {
   const box = el.getBoundingClientRect()
   const scale = box.width / (el.offsetWidth || 1)
   const x = (clientX - box.left) / scale

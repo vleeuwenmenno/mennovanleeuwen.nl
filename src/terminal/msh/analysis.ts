@@ -31,9 +31,9 @@ function parameterTokens(tokens: Token[], tree: Node): AnalysisToken[] {
 }
 /** The editor and execution share the real msh lexer and parser, including heredocs. */
 /** `commands`: the lines with a command the debugger can stop at (null when the file does not parse). */
-export function analyzeMsh(src: string, filename: string): { tokens: AnalysisToken[]; diagnostics: Diagnostic[]; commands: ReadonlySet<number> | null } {
-  if (src.length > 512_000) return { tokens: [], diagnostics: [{ filename, line: 1, column: 1, expression: '', message: 'Analysis limited to 512 KB' }], commands: null }
+export function analyzeMsh(src: string, filename: string): { tokens: AnalysisToken[]; diagnostics: Diagnostic[]; commands: ReadonlySet<number> | null; tree: Node | null } {
+  if (src.length > 512_000) return { tokens: [], diagnostics: [{ filename, line: 1, column: 1, expression: '', message: 'Analysis limited to 512 KB' }], commands: null, tree: null }
   let tokens: Token[] = []
-  try { tokens = lex(src); const tree = parse(src, filename); return { tokens: parameterTokens(tokens, tree), diagnostics: [], commands: commandLines(tree) } }
-  catch (error) { return { tokens, diagnostics: [diagnostic(src, filename, error)], commands: null } }
+  try { tokens = lex(src); const tree = parse(src, filename); return { tokens: parameterTokens(tokens, tree), diagnostics: [], commands: commandLines(tree), tree } }
+  catch (error) { return { tokens, diagnostics: [diagnostic(src, filename, error)], commands: null, tree: null } }
 }

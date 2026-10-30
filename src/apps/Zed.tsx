@@ -19,6 +19,7 @@ import { MshHighlight, isMsh, useXedDebug, XedDebugPanel, XedDebugToolbar } from
 import { breakpointsIn, editorBreakpoints, moveBreakpoints, removeBreakpoints, shiftBreakpoints, subscribeDebug, debugRevision } from '../terminal/msh/debug'
 import { analyzeMsh } from '../terminal/msh/analysis'
 import { toUi } from '../os/uiScale'
+import { useXedSymbols, XedSymbolsPanel } from './XedSymbols'
 
 // The Markdown preview moved to its own module; other apps still import it from here.
 export { MarkdownPreview }
@@ -226,6 +227,7 @@ export function Zed({ win }: { win: WinState }) {
   const clip = useClipboard()
   const text = useRef<HTMLTextAreaElement>(null)
   const editor = useRef<HTMLDivElement>(null)
+  const selectionRevision = useRef(0)
   const rootEl = useRef<HTMLDivElement>(null)
   useEdgeSwipe(rootEl, { enabled: narrow, open: drawer, onOpen: () => setDrawer(true), onClose: () => setDrawer(false) })
   const findInput = useRef<HTMLInputElement>(null)
@@ -240,6 +242,7 @@ export function Zed({ win }: { win: WinState }) {
 
   /** Opens a file in a tab (or focuses its tab); answers the path it is open under. */
   const openFile = (raw: string, at?: Omit<Jump, 'path'>) => {
+    selectionRevision.current++
     const path = normalize(raw)
     setTabs((ts) => (ts.includes(path) ? ts : [...ts, path]))
     const { sf, browser } = locate(path)
@@ -708,6 +711,7 @@ export function Zed({ win }: { win: WinState }) {
   }
 
   const edit = (value: string) => {
+    selectionRevision.current++
     if (!active) return
     if (buf && breakpointsIn(active).size) followEdit(active, buf.text, value)
     dbg.edited(active, value)
@@ -717,6 +721,7 @@ export function Zed({ win }: { win: WinState }) {
   /** Each file's last selection, so the debugger can show another file and come back without losing it. */
   const carets = useRef(new Map<string, { start: number; end: number }>())
   const track = () => {
+    selectionRevision.current++
     const el = text.current
     if (!el) return
     if (active && active !== SEARCH) carets.current.set(active, { start: el.selectionStart, end: el.selectionEnd })
@@ -785,6 +790,21 @@ export function Zed({ win }: { win: WinState }) {
     lineHeight: LINE,
     pad: PAD,
   })
+  const intelligence = useXedSymbols({
+    path: active && active !== SEARCH ? active : null, buffers, root, caret: caretOffset,
+    go: (path, line, col, len) => openFile(path, { line, col, len }),
+    insert: c => {
+      const el = text.current
+      if (!el || !buf || el.selectionStart !== c.caret) return
+      edit(buf.text.slice(0, c.start) + c.name + buf.text.slice(c.end))
+      const revision = selectionRevision.current
+      requestAnimationFrame(() => {
+        if (text.current !== el || selectionRevision.current !== revision) return
+        el.focus(); el.setSelectionRange(c.start + c.name.length, c.start + c.name.length); track()
+      })
+    },
+    say: setStatus, lineHeight: LINE, pad: PAD,
+  })
   const points = active && dbg.msh ? breakpointsIn(active) : null
   const errorLines = new Set(mshAnalysis?.diagnostics.map((d) => d.line) ?? [])
 
@@ -846,6 +866,11 @@ export function Zed({ win }: { win: WinState }) {
   }
 
   const onEditorKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (intelligence.enabled && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key.toLowerCase() === 'g' || e.key === 'ArrowLeft')) {
+      e.preventDefault(); e.stopPropagation(); if (e.key === 'ArrowLeft') intelligence.back(); else intelligence.definition(); return
+    }
+    if (intelligence.enabled && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'Space') { e.preventDefault(); e.stopPropagation(); intelligence.complete(); return }
+    if (e.key === 'Escape' && intelligence.expanded) { intelligence.setExpanded(false); return }
     if (e.key === 'Escape' && find) return closeFind(false)
     if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey) return
     e.preventDefault()
@@ -1120,11 +1145,11 @@ export function Zed({ win }: { win: WinState }) {
                           track()
                         }}
                         onKeyDown={onEditorKey}
-                        onKeyUp={track}
-                        onClick={track}
+                        onKeyUp={() => { track(); intelligence.leave() }}
+                        onClick={e => { intelligence.click(e); track() }}
                         onSelect={track}
-                        onMouseMove={dbg.paused ? dbg.hoverAt : undefined}
-                        onMouseLeave={dbg.hoverOut}
+                        onMouseMove={e => { if (dbg.paused) dbg.hoverAt(e); intelligence.hover(e) }}
+                        onMouseLeave={() => { dbg.hoverOut(); intelligence.leave() }}
                       />
                       {dbg.hoverTip}
                     </div>
@@ -1140,6 +1165,7 @@ export function Zed({ win }: { win: WinState }) {
           ) : (
             <Welcome root={root} onOpen={openFile} onProject={() => setPicker('project')} />
           )}
+          <XedSymbolsPanel ctl={intelligence} />
           {dbg.open && (dbg.msh || dbg.session) && <XedDebugPanel ctl={dbg} path={active && active !== SEARCH ? active : null} caretLine={cursor.line} diagnostics={mshAnalysis?.diagnostics ?? []} commands={mshAnalysis?.commands ?? null} jump={(path, line, col) => openFile(path, { line, col, len: 0 })} />}
           {terms.length > 0 && (
             <div className="zed-dock" style={{ height: dockH, display: dock ? undefined : 'none' }}>

@@ -57,6 +57,50 @@ try {
   const nodes = parse(source, 'spans.msh').items
   eq([nodes[0].node.span.start, nodes[1].node.span.start, nodes[1].node.span.column], [0, 12, 3], 'repeated commands retain distinct source spans')
   check(lex('echo "a b" | cat').some((t: { k: string; start: number; end: number }) => t.k === 'op' && t.start === 11 && t.end === 12), 'highlight tokens use real lexer offsets')
+  const symbols = await vite.ssrLoadModule('/src/terminal/msh/symbols.ts')
+  const symbolMain = 'source ./lib.msh\nparcel=global\nouter(parcel) {\n local fuel=9\n echo "$parcel $fuel $global $1"\n inner() { echo "$parcel"; }\n}\ndeliver "Space Potato" 3'
+  const symbolFiles = new Map([['/tmp/main.msh', symbolMain], ['/tmp/lib.msh', 'global=origin\ndeliver(parcel,cost) { echo "$parcel $cost"; }']])
+  const reads: string[] = []
+  const symbolProject = await symbols.indexProject('/tmp/main.msh', '/tmp', async (path: string) => { reads.push(path); return symbolFiles.get(path) ?? null }, new AbortController().signal)
+  eq(reads, ['/tmp/main.msh', '/tmp/lib.msh'], 'static source indexing follows literal paths from launch cwd')
+  const resolved = (at: number) => symbols.resolveSymbol(symbolProject, '/tmp/main.msh', at)
+  eq([resolved(symbolMain.indexOf('$parcel')).reliable, resolved(symbolMain.indexOf('$parcel')).definitions[0].kind], [true, 'parameter'], 'parameter shadows global in shared parser-backed analysis')
+  eq([resolved(symbolMain.indexOf('$fuel')).reliable, resolved(symbolMain.indexOf('$fuel')).definitions[0].kind], [true, 'local'], 'unconditional local declaration resolves in own function')
+  const dynamicGlobal = resolved(symbolMain.indexOf('$global'))
+  check(!dynamicGlobal.reliable && dynamicGlobal.note.includes('caller local') && dynamicGlobal.definitions[0].path === '/tmp/lib.msh', 'free function variable offers source assignment as candidate, not invented lexical binding')
+  check(!resolved(symbolMain.lastIndexOf('$parcel')).reliable, 'nested function does not lexically capture outer parameter')
+  const sourceFunction = resolved(symbolMain.indexOf('deliver "'))
+  check(sourceFunction.reliable && sourceFunction.definitions[0].signature === 'deliver(parcel, cost)' && sourceFunction.definitions[0].path === '/tmp/lib.msh', 'function call resolves literal sourced definition with signature and origin')
+  check(resolved(symbolMain.indexOf('$1')).note.includes('Positional argument'), 'static positional hint distinguishes caller arguments')
+  const varsComplete = symbols.completeSymbols(symbolProject, '/tmp/main.msh', symbolMain.indexOf('$parcel') + 4, ['printf'])
+  check(varsComplete.some((c: { name: string; detail: string }) => c.name === 'parcel' && c.detail.includes('parameter')) && !varsComplete.some((c: { name: string }) => c.name === 'printf'), 'variable completion respects local shadowing and excludes commands')
+  const parcelCompletion = varsComplete.find((c: { name: string }) => c.name === 'parcel')
+  eq([parcelCompletion.start, parcelCompletion.end, parcelCompletion.caret], [symbolMain.indexOf('$parcel') + 1, symbolMain.indexOf('$parcel') + 7, symbolMain.indexOf('$parcel') + 4], 'completion replaces the whole existing identifier, including text after the caret')
+  const commandComplete = symbols.completeSymbols(symbolProject, '/tmp/main.msh', symbolMain.indexOf('deliver "') + 3, ['declare', 'printf'])
+  check(commandComplete.some((c: { name: string; detail: string }) => c.name === 'deliver' && c.detail.includes('deliver(parcel, cost)')), 'command completion shows source function signature')
+  const redefinitions = 'f() { :; }\nf() { :; }\nf'
+  const redefined = { entry: '/tmp/redefined', cwd: '/tmp', files: new Map([['/tmp/redefined', symbols.indexMsh(redefinitions, '/tmp/redefined')]]), links: [], notes: [] }
+  const ambiguous = symbols.resolveSymbol(redefined, '/tmp/redefined', redefinitions.length - 1)
+  check(!ambiguous.reliable && ambiguous.definitions.length === 2, 'function redefinitions remain explicit candidates')
+  const literalRefs = symbols.indexMsh(`echo '$fake' "\\$escaped" "$real" # $comment`, '/tmp/literal')
+  eq(literalRefs.references.filter((r: { kind: string }) => r.kind === 'variable').map((r: { name: string }) => r.name), ['real'], 'reference extraction honors parser words, quoting, escapes and comments')
+  const dynamicSources = 'source "$lib"\ncd /tmp/elsewhere\nsource ./relative\neval "$command"'
+  const dynamicReads: string[] = []
+  const dynamicIndex = await symbols.indexProject('/tmp/dynamic', '/tmp', async (path: string) => { dynamicReads.push(path); return dynamicSources }, new AbortController().signal)
+  eq(dynamicReads, ['/tmp/dynamic'], 'dynamic source and cwd do not trigger guessed file reads')
+  check(dynamicIndex.notes.some((n: string) => n.includes('dynamic source')) && dynamicIndex.files.get('/tmp/dynamic').uncertain, 'dynamic source/eval uncertainty is explicit')
+  const initializer = 'x=global\nf() { local x="$x"; echo "$x"; }'
+  const initializerProject = { entry: '/tmp/init', cwd: '/tmp', files: new Map([['/tmp/init', symbols.indexMsh(initializer, '/tmp/init')]]), links: [], notes: [] }
+  check(!symbols.resolveSymbol(initializerProject, '/tmp/init', initializer.indexOf('$x')).reliable && symbols.resolveSymbol(initializerProject, '/tmp/init', initializer.lastIndexOf('$x')).definitions[0].kind === 'local', 'local initializer reads caller before declaration takes effect')
+  const shadowedBuiltin = symbols.indexMsh('local() { :; }; f() { local x=1; echo "$x"; }', '/tmp/shadowed')
+  check(shadowedBuiltin.uncertain && !shadowedBuiltin.definitions.some((d: { name: string }) => d.name === 'x'), 'function shadowing local builtin does not fabricate local declarations')
+  eq(symbols.literalWord('"lib\\path"'), 'lib\\path', 'literal source decoding preserves ordinary backslash in double quotes')
+  const cancelledIndex = new AbortController()
+  let indexReads = 0
+  await symbols.indexProject('/tmp/cancelled', '/tmp', async () => { indexReads++; cancelledIndex.abort(); return 'source next' }, cancelledIndex.signal)
+  eq(indexReads, 1, 'cancelled source indexing starts no further reads')
+  const cyclic = await symbols.indexProject('/tmp/cycle', '/tmp', async () => 'source ./cycle', new AbortController().signal)
+  eq(cyclic.files.size, 1, 'source cycles terminate without executing')
   const aborted = new AbortController(); aborted.abort()
   eq((await runCapturedStreams('echo never', base(aborted.signal))).status, 130, 'pre-cancelled execution')
   eq(await runCaptured('echo legacy; false', base()), { output: 'legacy', status: 1 }, 'legacy combined-output API remains compatible')

@@ -766,6 +766,47 @@ and parser for highlighting and syntax diagnostics. Diagnostics show filename, l
 and the offending expression. Analysis is limited to 512 KB; larger files remain editable.
 Nothing is executed to lint a file.
 
+**msh symbols and navigation.** Ctrl+Click (or Cmd+Click) a function or variable reference
+to go to a reliable parsed definition. With the caret on a symbol, **Go to Definition**
+(Alt+G) does the same; its button also works by touch. **Back** (Alt+Left while editing)
+returns to the previous location, with at most 32 entries per window. Ordinary copy/paste,
+browser shortcuts and debugger gutter actions keep their meanings.
+
+The **Static** strip follows the caret or pointer and names parameter/local/global/function
+origins and their file and line. Expand **Symbols** for signatures, source locations and
+uncertainty explanations. This is source information, distinct from the debugger's paused
+runtime values. **Complete** (Ctrl+Space in the textarea) offers matching visible variables
+after `$`/`${`, and functions with their parameter signatures or real msh builtins at command
+positions. Choose a suggestion by button (keyboard focus or touch); completion never runs it.
+Parameters/locals shadow global suggestions, and another function's locals are not offered.
+
+Indexing uses the shared msh parser, including named parameters, assignments, local/export
+commands and literal `source`/`.` statements. It does not execute shell, `eval`, substitutions
+or arbitrary network requests. Open buffers, including unsaved sourced files, take precedence.
+Closed local/browser files are read through the existing permission-checked file API. Remote
+sources must already be open in this window: automatic symbol discovery does not download
+Seafile files. A literal relative source is resolved from the project/launch working directory,
+not from the source file's directory. Sources outside the project, dynamic paths, or relative
+sources after a possible `cd` are reported as unknown rather than guessed.
+
+msh has dynamic scope, not lexical closures. A free variable in a function may come from a
+caller local: the index shows known assignment candidates and says so. Conditional declarations,
+multiple function definitions, dynamic sources and `eval` prevent a definitive jump; choose an
+explicit candidate instead. Parameters and unconditional local declarations in the current
+function have reliable origins. This is intentionally not a full LSP or data-flow proof:
+command/arithmetic substitution internals, heredoc expansions, `read`/`getopts`-generated
+bindings and external commands are not resolved. A syntax-invalid file keeps its parser
+Problems but has no symbol index until it parses again. No React/TypeScript intelligence is
+implied.
+
+Each window indexes at most 16 source files, 8 source edges deep and 512 KB total, with at most
+4096 symbol facts per file and 40 completion suggestions. Indexing is debounced, cancelled on
+file/buffer/root changes or window close, and discards stale asynchronous results. Before a
+jump into a closed source, its text is checked again; a changed file is reindexed instead of
+navigating to an outdated location. Account
+changes clear navigation/index state and disable intelligence in that old window; reopen Xed
+under the current account. No symbol index or navigation history is persisted.
+
 **Running and debugging.** The editor bar of every open file has the debugger toolbar: Run
 (or Continue while paused), Pause, Stop, Step Over, Step Into and Step Out, followed by the
 session state (not running, running, paused with its reason and location, completed or failed
@@ -924,7 +965,9 @@ with focus inside and outside the text, two Xed windows, the paused marker and s
 watches and hover (also across a session switch), stale-source warnings, save before run
 (closing the window, Stop, edits and a double F5 while the save is pending), the caller's
 selection after stepping out of another file, F5 with nano focused in the terminal panel,
-attach, stop and window close, a phone-sized touch screen, and that F5 outside Xed is not
+attach, stop and window close, named parameters and recursive caller-frame inspection, static
+modified-click/keyboard/touch navigation, unsaved source precedence and symbol completion,
+a phone-sized touch screen, and that F5 outside Xed is not
 taken. The save-before-run checks use a file in /tmp, whose save is quick; they act within the
 same task so the save's await is still pending, which is the same gap a slower Seafile or
 browser save has. Headless Chromium has no reload

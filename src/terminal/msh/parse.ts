@@ -16,7 +16,7 @@ export type SourceSpan = { start: number; end: number; line: number; column: num
 export type Parameter = { name: string; start: number; end: number }
 
 export type Node = { span?: SourceSpan } & (
-  | { t: 'simple'; assigns: [string, string][]; words: string[]; redirs: Redirect[] }
+  | { t: 'simple'; assigns: [string, string][]; words: string[]; redirs: Redirect[]; wordsAt?: { start: number; end: number }[]; assignsAt?: { start: number; end: number }[] }
   | { t: 'pipeline'; cmds: Node[]; bang: boolean }
   | { t: 'andor'; first: Node; rest: ['&&' | '||', Node][] }
   | { t: 'list'; items: { node: Node; bg: boolean }[] }
@@ -469,14 +469,15 @@ class Parser {
   }
 
   private simple(): Node {
-    const node: Node & { t: 'simple' } = { t: 'simple', assigns: [], words: [], redirs: [] }
+    const node: Node & { t: 'simple' } = { t: 'simple', assigns: [], words: [], redirs: [], wordsAt: [], assignsAt: [] }
     for (;;) {
       if (this.atRedirect()) node.redirs.push(this.redirect())
       else if (this.peek().k === 'word') {
-        const v = (this.next() as { v: string }).v
+        const token = this.next() as Token & { k: 'word' }
+        const v = token.v
         const eq = v.indexOf('=')
-        if (!node.words.length && eq > 0 && NAME.test(v.slice(0, eq))) node.assigns.push([v.slice(0, eq), v.slice(eq + 1)])
-        else node.words.push(v)
+        if (!node.words.length && eq > 0 && NAME.test(v.slice(0, eq))) { node.assigns.push([v.slice(0, eq), v.slice(eq + 1)]); node.assignsAt!.push(token) }
+        else { node.words.push(v); node.wordsAt!.push(token) }
       } else break
     }
     if (!node.words.length && !node.assigns.length && !node.redirs.length) this.fail()

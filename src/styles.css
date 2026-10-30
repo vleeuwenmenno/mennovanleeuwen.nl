@@ -13497,3 +13497,16 @@ html {
 .xed-var-previous { color: var(--muted); }
 .xed-dbg-frame { font-size: 11px; color: var(--muted); }
 .xed-vars caption { text-align: left; overflow-wrap: anywhere; color: var(--muted); }
+
+/* Static shell intelligence uses the same theme and wraps on touch-sized editors. */
+.xed-symbols { flex: none; border-top: 1px solid var(--line); font-size: 11px; }
+.xed-symbol-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 8px; align-items: center; }
+.xed-symbol-actions button, .xed-symbol-details button { color: var(--accent); background: var(--bg); border: 1px solid var(--line); border-radius: 3px; font: inherit; padding: 4px 6px; cursor: pointer; }
+.xed-symbol-actions button:disabled { opacity: .45; cursor: default; }
+.xed-symbol-summary { min-width: 0; overflow-wrap: anywhere; color: var(--muted); }
+.xed-symbol-details { padding: 0 8px 6px; max-height: 150px; overflow: auto; overflow-wrap: anywhere; }
+.xed-symbol-details p { margin: 4px 0; }
+.xed-symbol-details ul { list-style: none; margin: 0; padding: 0; }
+.xed-symbol-details li { margin: 3px 0; }
+.xed-symbol-details button { text-align: left; max-width: 100%; overflow-wrap: anywhere; }
+@media (pointer: coarse) { .xed-symbols button { min-height: 36px; } }
