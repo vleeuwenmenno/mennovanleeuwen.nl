@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import type { MenuItem } from '../os/ContextMenu'
+import { bareFrame } from './clock'
 import { createWithTilt, tiltMenu, useWidgetConfig } from './config'
 import { CUSTOM_KIND } from './platform/package'
 import { PackageHost } from './platform/Host'
@@ -16,7 +17,9 @@ const DEFAULTS: Config = { tilt: 0 }
 
 function useCustomFrame(id: string): CSSProperties {
   const { tilt } = useWidgetConfig<Config>(id, DEFAULTS)
-  const sticky = installations.use()[id]?.active.snapshot.manifest.settings.appearance === 'sticky'
+  const appearance = installations.use()[id]?.active.snapshot.manifest.settings.appearance
+  if (appearance === 'bare') return { ...bareFrame(), ['--widget-tilt' as string]: '0deg' }
+  const sticky = appearance === 'sticky'
   return { ['--widget-bg' as string]: sticky ? 'color-mix(in srgb, var(--accent) 16%, var(--panel))' : 'var(--panel)', ['--widget-fg' as string]: 'var(--fg)', ['--widget-tilt' as string]: `${tilt}deg` }
 }
 

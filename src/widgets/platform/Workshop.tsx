@@ -16,7 +16,7 @@ import { MOCK_INPUT } from './mocks'
 import { dropWidgetConfig, randomTilt, setWidgetConfig, unsetWidgetConfig } from '../config'
 import { closeWidget, openWidget } from '../windows'
 import './platform.css'
-const access = (kind: string) => kind === 'sticky' ? 'note and edit it through explicit interactions' : kind === 'weather' ? 'host-selected forecast' : kind === CUSTOM_KIND ? 'small saved state (up to 4 KiB, replaced only by explicit button actions) and the clock' : kind + ' data and explicit actions'
+const access = (kind: string) => kind === 'sticky' ? 'note and edit it through explicit interactions' : kind === 'weather' ? 'host-selected forecast' : kind === CUSTOM_KIND ? 'small saved state (up to 4 KiB, replaced only by explicit button actions) and the clock' : kind === 'clock' ? 'formatted clock and date' : kind + ' data and explicit actions'
 export function Workshop({ win }: { win: WinState }) {
   const wm = useWM()
   const account = useAccount()

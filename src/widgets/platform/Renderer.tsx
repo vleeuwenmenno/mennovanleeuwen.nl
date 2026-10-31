@@ -91,7 +91,7 @@ export function Renderer({ view, note, write, event, actionsEnabled = true, reso
   const render = (node: Descriptor, path: string): ReactNode => {
     const className = `wp-${node.type} wp-${node.tone ?? 'normal'}`
     const children = node.children?.map((child,index) => render(child,`${path}.${index}`))
-    if (node.type === 'text') return <span key={path} className={className} title={node.hint}>{node.text}</span>
+    if (node.type === 'text') return <span key={path} className={node.size ? `${className} wp-size-${node.size}` : className} style={node.size ? { ['--wp-chars' as string]: Math.max(1, [...(node.text ?? '')].length) } : undefined} title={node.hint}>{node.text}</span>
     if (node.type === 'button') return <button key={path} type="button" className={className} disabled={!node.event || !actionsEnabled} onClick={() => node.event && event(node.event)}>{node.text}</button>
     if (node.type === 'editor') return null
     if (node.type === 'image') { const value = resolve(node,'image'); return value?.href ? <img key={path} className="wp-image" src={value.href} alt={node.text ?? ''} title={value.label} width={24} height={24} draggable={false} /> : <span key={path}>{node.text}</span> }

@@ -1,7 +1,7 @@
 import type { QuickJSWASMModule } from 'quickjs-emscripten-core'
 import { LIMITS, relativePath, type Snapshot, type WidgetInput } from './package.ts'
 /** The only module supplied by the host. No functions or prototypes cross the VM boundary. */
-const SDK = `export const text=(text,tone='normal')=>({type:'text',text:String(text),tone});
+const SDK = `export const text=(text,tone='normal',options={})=>({type:'text',text:String(text),tone,...(options&&options.size?{size:options.size}:{})});
 export const column=(...children)=>({type:'column',children});
 export const row=(...children)=>({type:'row',children});
 export const button=(text,event)=>({type:'button',text,event});

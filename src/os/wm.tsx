@@ -1,4 +1,6 @@
 import { fitWidget } from './widgetLayout'
+import { widgetRunsOnPhone } from '../widgets/platform/phone'
+import { installations } from '../widgets/platform/installations'
 import { snapReserve } from './dockPrefs'
 import { viewH, viewW } from './uiScale'
 import { persistentProps } from './windowProps'
@@ -178,8 +180,9 @@ const isPhone = () => window.innerWidth < 720
 export const workspaceOf = (w: Pick<WinState, 'app' | 'ws'>): number | null => (NOTE_APPS.has(w.app) ? null : (w.ws ?? 1))
 
 /** Whether a window is on the screen's workspace (minimized or not): always on a phone, where
- * every window is reachable as if there were just one workspace. */
-const onScreen = (state: Pick<State, 'ws' | 'phone'>, w: WinState) => !(state.phone && w.app === 'widget') && (state.phone || workspaceOf(w) === null || workspaceOf(w) === state.ws)
+ * every window is reachable as if there were just one workspace. A widget only shows on a phone when
+ * its package says it works there (`phone: true`, see widgetRunsOnPhone); the others stay hidden. */
+const onScreen = (state: Pick<State, 'ws' | 'phone'>, w: WinState) => !(state.phone && w.app === 'widget' && !widgetRunsOnPhone(w.props.kind, w.props.id)) && (state.phone || workspaceOf(w) === null || workspaceOf(w) === state.ws)
 
 /** The frontmost window that shows on the current workspace, for focus to fall back to. */
 const topShown = (state: Pick<State, 'ws' | 'phone'>, windows: WinState[]) =>
@@ -682,6 +685,8 @@ export function WindowManagerProvider({
   /** Whether this build has a widget of this kind (one from a newer release is left alone). */
   knownWidget?: (kind: string) => boolean
 }) {
+  // A widget's `phone` flag lives in its installed revision: when that changes, what a phone shows changes.
+  const phoneRecords = installations.use()
   // The saved windows that belong to another page (the CV apps' windows from /cv, on the plain
   // desktop): not shown here, but saved back with this page's windows so /cv keeps them.
   const held = useRef<SavedWindow[]>([])
@@ -1013,7 +1018,7 @@ export function WindowManagerProvider({
         layoutStore().set(null)
       },
     }
-  }, [state.windows, state.focused, state.ws, state.phone, state.away, open, openNew, relayout, elsewhereNotice, nameOf, tabs.status])
+  }, [state.windows, state.focused, state.ws, state.phone, state.away, open, openNew, relayout, elsewhereNotice, nameOf, tabs.status, phoneRecords])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -157,7 +157,7 @@ const summary = (snapshot: Snapshot, files: Files, abs: string) => {
     `OK ${prettyPath(abs)}: "${m.name}" (${m.id})`,
     `digest ${snapshot.digest}`,
     `files ${Object.keys(files).length} of ${LIMITS.files}, ${total} of ${LIMITS.sourceBytes} bytes`,
-    `entry ${m.entry} · ${m.settings.appearance} · ${m.sizing.width}x${m.sizing.height}`,
+    `entry ${m.entry} · ${m.settings.appearance} · ${m.sizing.width}x${m.sizing.height} · ${m.phone ? 'phone: yes' : 'phone: no (hidden on a phone)'}`,
     `capabilities ${m.capabilities.length ? m.capabilities.join(', ') : 'none'}`,
     `fits ${(Object.keys(KIND_CAPABILITIES) as InstanceKind[]).filter((k) => supportsCapabilities(k, m.capabilities)).join(', ')}`,
   ]
@@ -412,6 +412,8 @@ function docs(topic: string): string {
     '  input is merged over the mock input; text/absent are checked against the rendered text; with event, the effect it returns must equal expect.mutation (null means none). Every field but schema is optional; a case without expect passes when it renders.',
     '',
     sectionOf('Execution'),
+    '',
+    sectionOf('Manifest'),
     '',
     sectionOf('Descriptor vocabulary'),
     '',

@@ -8,7 +8,8 @@ import { faviconOf, launch, launcherImage, useLaunchers } from '../data/launcher
 import { importFileOf } from '../data/fileOps'
 import { openImport, pimAppFor } from '../data/pimFiles'
 import { createNote, noteTitle, NOTE_COLORS, useAllNotes } from '../data/notes'
-import { addWidget, widgetDefs } from '../widgets/registry'
+import { addWidget, PHONE_WIDGET_NOTE, widgetDefsHere } from '../widgets/registry'
+import { isMobile } from './useIsMobile'
 import { ENGINES, searchWeb, useSearchSettings, useSuggestions } from '../data/searchEngine'
 import { followGoLink, golinksSite, golinksUrl, useGoSuggestions, useGolinksTemplate } from '../data/golinks'
 import { forgetVisit, useVisits, type Visit } from '../data/siteHistory'
@@ -710,12 +711,12 @@ export function Spotlight() {
     action('new-terminal', 'New terminal window', 'terminal shell new window launch console bash', () => wm.openNew('terminal'), '›_')
     action('new-note', 'New sticky note', 'note sticky new write memo todo', () => openSticky(wm, createNote().id), '✎')
     // One row that opens the list of widgets inside Spotlight.
-    const defs = widgetDefs()
+    const defs = widgetDefsHere()
     out.push({
       id: 'sub-widgets',
       group: 'Widgets',
       title: 'Add widget…',
-      subtitle: defs.map((d) => d.name).join(', '),
+      subtitle: `${isMobile() ? `${PHONE_WIDGET_NOTE}: ` : ''}${defs.map((d) => d.name).join(', ')}`,
       keywords: `widget widgets add new desktop ${defs.map((d) => `${d.name} ${d.blurb}`).join(' ')}`,
       icon: <Glyph>▦</Glyph>,
       run: () => openSub('widgets'),
@@ -1013,9 +1014,9 @@ export function Spotlight() {
 
     // Inside "Add widget…": just the widgets, filtered by what is typed.
     if (sub === 'widgets')
-      return widgetDefs()
+      return [...(isMobile() ? [{ id: 'widget-phone-note', group: 'Widgets', title: PHONE_WIDGET_NOTE, subtitle: 'The others stay off this screen; add them from a bigger one', icon: <Glyph>▯</Glyph>, run: () => {}, enterLabel: ' ' } as Result] : []), ...widgetDefsHere()
         .filter((d) => !query || `${d.name} ${d.blurb}`.toLowerCase().includes(query))
-        .map<Result>((d) => ({ id: `widget-${d.instance ?? d.kind}`, group: 'Widgets', title: d.name, subtitle: d.blurb, icon: <Glyph>{d.glyph}</Glyph>, run: () => addWidget(wm, d.kind, d.instance), enterLabel: 'Add' }))
+        .map<Result>((d) => ({ id: `widget-${d.instance ?? d.kind}`, group: 'Widgets', title: d.name, subtitle: d.blurb, icon: <Glyph>{d.glyph}</Glyph>, run: () => addWidget(wm, d.kind, d.instance), enterLabel: 'Add' }))]
 
     if (goAlias !== null) return goRows(goAlias)
 

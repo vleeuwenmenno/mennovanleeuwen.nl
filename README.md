@@ -4560,17 +4560,47 @@ right-click menu, and no text selection (except a sticky being edited). Desktop 
 dragged too; Settings → Appearance → Motion turns either off. Several icons dragged at once gather
 in a pile under the pointer with a count badge, like Finder, and fan back out into the arrangement
 they had, moved to where you drop them. Add widgets from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
-Today there are six built-in kinds, plus **custom widgets** you make yourself (see below): **Sticky note** (one of your notes, with checklists you can tick),
+Today there are seven built-in kinds, plus **custom widgets** you make yourself (see below): **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that
 device; double-click or the menu opens the full **Weather** app), **Agenda** (Google Calendar and
 CalDAV, see above), **Code inbox**, **Status** (updown.io) and **Minecraft server** (up or not, the
 address to copy, who is on with their heads, and the in-game day and time when RCON is set up; a
-click opens the Minecraft server window).
+click opens the Minecraft server window) and **Clock** (see below).
+
+**Clock**: a big digital time with the weekday and date under it, drawn straight on the wallpaper
+(manifest appearance `bare`: no card, border, tape or shadow, only a soft text shadow from the
+theme's dark so it reads on any picture). Point at it for the usual frame handle, close button and
+menu (right-click, or long-press on touch); *Source* appears on hover. The time uses the descriptor
+text size `display`, which scales with the widget's width (container query units, one line, so
+longer text such as seconds or AM/PM shrinks to fit), and the date uses the smaller `headline`
+size, so dragging the right edge resizes the clock and a phone gets it full width. Menu: **Hours**
+(follow my language, 24-hour, 12-hour), **Show seconds**, **Date** (weekday and date, short, none)
+and **Accent colour**; the settings sync with the widget's other settings. The host owns one timer,
+the next full minute (or second with seconds on), only while the widget is eligible: nothing runs
+while the notes are put away, a window covers the desktop, the tab is hidden, the widget is minimized
+or the screen is a phone that does not show it. It needs no capabilities and reads no data
+(`input.clock` is already formatted by [`src/widgets/platform/clock.ts`](src/widgets/platform/clock.ts)).
+`pnpm check:widget-clock` covers manifest `phone`/`bare` validation, the clock package in the VM and
+12/24-hour formatting; `pnpm check:widget-clock-ui` runs the desktop (transparent, resize, ticking)
+and phone (390 px, touch) flows.
+
+**Widgets on phones.** A manifest can say `"phone": true` (optional, strict boolean, default false,
+part of the digest). Only then does the host run and show the widget on a phone-sized screen
+(under 720 px); otherwise it stays hidden there exactly as before and nothing runs for it. The
+**active** revision decides: a fork that says false (or nothing) stays hidden on a phone even when
+the built-in it came from says true. The Sticky note, Weather, Agenda, Code inbox, Status, Minecraft
+server and Clock are phone-compatible (checked at 390 px wide: no sideways overflow), and the custom
+widget template says `phone: true`. On a phone they sit in the scrolling column of notes, each full
+width, in the order the phone's column has (hold the top strip to move one); *Show notes and widgets
+on the desktop* in Settings still puts them all away. **Add widget** (desktop menu, All apps,
+Spotlight) lists everything on a big screen, and on a phone only the phone-compatible widgets,
+with a note saying so ("Only widgets that work on a phone"). See `phone` in the SDK reference
+(`/usr/share/mvlos/widgets/SDK.md`).
 
 ### Folder-based widget packages
 
-All six built-ins (Weather, Sticky, Agenda, Code inbox, Status and Minecraft) load executable
+All seven built-ins (Weather, Sticky, Agenda, Code inbox, Status, Minecraft and Clock) load executable
 source folders through the same verifier, compiler, bounded QuickJS WASM worker and descriptor
 renderer used for user forks. Files, msh and Xed can read immutable defaults at
 `/usr/share/mvlos/widgets/<kind>`: real `manifest.json`, `src/main.js`, `styles/tokens.json`,
@@ -5109,7 +5139,8 @@ flags, held game buttons and game canvases. Anything else can opt out with `data
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
 does not select its labels or show the browser's callout (see *Selecting text* above).
 
-On phones desktop widgets are hidden; the built-in headline and shortcut notes remain in a
+On phones desktop widgets are hidden unless their manifest says `phone: true` (see *Widgets on phones*:
+the Clock, Sticky, Weather, Agenda, Code inbox, Status and Minecraft widgets do); the built-in headline and shortcut notes and those widgets sit in a
 scrolling column. Hold one by its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the
 desktop scrolls along near the top bar and the dock); let go without moving, or long-press it, for
 *Move up*, *Move down* and *Move to top*. The order is part of the

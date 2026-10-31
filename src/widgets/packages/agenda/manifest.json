@@ -1,1 +1,1 @@
-{"schema":1,"sdk":1,"id":"agenda","name":"Agenda","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":300,"height":320},"capabilities":["agenda.read","agenda.act"]}
+{"schema":1,"sdk":1,"id":"agenda","name":"Agenda","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":300,"height":320},"capabilities":["agenda.read","agenda.act"],"phone":true}

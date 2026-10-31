@@ -142,6 +142,8 @@
     "check:widget-canonical": "node scripts/widget-canonical-check.ts",
     "check:widget-builtins-ui": "node scripts/widget-builtins-e2e.ts",
     "check:widget-custom": "node scripts/widget-custom-check.ts",
+    "check:widget-clock": "node scripts/widget-clock-check.ts",
+    "check:widget-clock-ui": "node scripts/widget-clock-e2e.ts",
     "check:widget-custom-ui": "node scripts/widget-custom-e2e.ts",
 "check:widget-agent": "node scripts/widget-agent-check.ts",
 "check:widget-agent-ui": "node scripts/widget-agent-e2e.ts",
