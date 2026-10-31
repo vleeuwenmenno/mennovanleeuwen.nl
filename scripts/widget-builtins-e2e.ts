@@ -148,7 +148,7 @@ try {
   await p.eval(`(async()=>{const p=await import('/src/widgets/platform/package.ts'),i=await import('/src/widgets/platform/installations.ts'),d=await import('/src/widgets/platform/defaults.ts');const before=i.installation('six-agenda');const files={...before.active.snapshot.files};const manifest=JSON.parse(files['manifest.json']);manifest.capabilities=['agenda.read'];files['manifest.json']=JSON.stringify(manifest);const snapshot=await p.buildPackage(files),revision={source:before.active.source,snapshot};await i.activate('six-agenda','agenda',revision,before.generation);i.allowRevision('six-agenda',revision)})()`)
   await waitText('agenda','Synthetic meeting')
   check('Read-only Agenda retains display while denying all actions',await p.eval(`!${widget('agenda')}.querySelector('.wp-action,.wp-link')`))
-  const noRaw=await p.eval(`(async()=>{const Original=Worker;window.__projected=[];window.Worker=class extends Original{postMessage(message,...args){if(message.input?.agenda||message.input?.inbox)window.__projected.push(JSON.stringify(message.input));return super.postMessage(message,...args)}};document.querySelectorAll('.wp-controls button').forEach(e=>{if(e.textContent==='Refresh')e.click()});await new Promise(r=>setTimeout(r,600));return window.__projected.length>0&&window.__projected.every(s=>!s.includes('opaque-provider')&&!s.includes('meet.example')&&!s.includes('code.example')&&!s.includes('opaque-event'))})()`)
+  const noRaw=await p.eval(`(async()=>{const Original=Worker;window.__projected=[];window.Worker=class extends Original{postMessage(message,...args){if(message.input?.agenda||message.input?.inbox)window.__projected.push(JSON.stringify(message.input));return super.postMessage(message,...args)}};document.querySelectorAll('.wp-tools button').forEach(e=>{if(e.textContent==='Refresh')e.click()});await new Promise(r=>setTimeout(r,600));return window.__projected.length>0&&window.__projected.every(s=>!s.includes('opaque-provider')&&!s.includes('meet.example')&&!s.includes('code.example')&&!s.includes('opaque-event'))})()`)
   check('VM projection omits provider refs and outbound navigation URLs',noRaw)
   // Cancellation on shell hide is owned by the broker and aborts pending reads, too.
   await p.eval(`window.__hold=true;window.__aborted=0`)
@@ -161,7 +161,7 @@ try {
   await waitText('inbox','Pull request 1')
   await p.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(300)
   check('Mobile hiding preserves all six canonical placements',before===await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>JSON.stringify(m.widgetPlaces.get()))`))
-  await p.send('Emulation.setDeviceMetricsOverride',{width:1800,height:1200,deviceScaleFactor:1,mobile:false});await waitText('status','Service 0')
+  await p.send('Emulation.setDeviceMetricsOverride',{width:1800,height:1200,deviceScaleFactor:1,mobile:false});await waitText('status','Service 12') // phone-compatible widgets stay mounted on a phone, so Status keeps the page it was on
   await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>m.widgetPlaces.set(all=>m.changeSet(all,{'future':{id:'future',kind:'future-widget',x:1,y:1,w:200,h:200,vw:1800,vh:1200,at:Date.now()}})))`)
   await sleep(200)
   check('Unavailable newer kind stays recoverable without tombstone',await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>!!m.widgetPlaces.get().places.future&&!m.widgetPlaces.get().removed.includes('future'))`))

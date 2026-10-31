@@ -42,7 +42,7 @@ await check('manifest: custom.state is the only custom capability; builtins cann
   assert.equal(supportsCapabilities('custom', ['weather.read']), false)
   for (const kind of ['sticky', 'weather', 'agenda', 'inbox', 'status', 'minecraft'] as const) assert.equal(supportsCapabilities(kind, ['custom.state']), false, kind)
   assert.equal(pkg.isInstanceKind('custom'), true)
-  assert.equal(pkg.isWidgetKind('custom'), false, 'the six builtin kinds stay closed')
+  assert.equal(pkg.isWidgetKind('custom'), false, 'the built-in kinds stay closed')
   assert.equal(pkg.isInstanceKind('other'), false)
 })
 await check('manifest: strict exact fields', () => {

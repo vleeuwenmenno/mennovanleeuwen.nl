@@ -18,6 +18,66 @@
   right: -4px;
 }
 
+/* Bare widgets (manifest appearance "bare", the Clock): no card, border, tape or shadow, only the
+   content over the wallpaper, with a soft shadow in the theme's dark so it reads on any picture.
+   The grip strip and the close button still show when the pointer is over it (always on touch,
+   where there is no hover) and the whole strip is still the handle. */
+.window.chrome-note.widget-bare {
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
+  --bare-shadow: color-mix(in srgb, var(--bg-dark) 70%, transparent);
+}
+.window.chrome-note.widget-bare.is-focused {
+  box-shadow: none;
+}
+.window.chrome-note.widget-bare .note-tape {
+  display: none;
+}
+.window.chrome-note.widget-bare .note-grip {
+  height: 22px;
+}
+.window.chrome-note.widget-bare .note-close {
+  color: var(--fg);
+  text-shadow: 0 1px 3px var(--bare-shadow);
+}
+.window.chrome-note.widget-bare .wp-package {
+  position: relative;
+  background: none;
+  color: var(--fg);
+  text-shadow: 0 1px 2px var(--bare-shadow), 0 0 24px var(--bare-shadow);
+}
+.window.chrome-note.widget-bare:hover .note-grip,
+.window.chrome-note.widget-bare:focus-within .note-grip {
+  background: color-mix(in srgb, var(--bg-dark) 35%, transparent);
+  border-radius: 6px;
+}
+.window.chrome-note.widget-bare .wp-controls {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  margin: 0;
+  justify-content: flex-end;
+  opacity: 0;
+  pointer-events: none;
+  text-shadow: none;
+  transition: opacity 0.15s;
+}
+.window.chrome-note.widget-bare:hover .wp-controls,
+.window.chrome-note.widget-bare .wp-controls:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (pointer: coarse) {
+  .window.chrome-note.widget-bare .note-close {
+    opacity: 1;
+  }
+  .window.chrome-note.widget-bare.is-focused .wp-controls {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 /* ---------- Sticky notes ---------- */
 
 .sticky {

@@ -139,7 +139,8 @@ try {
     await api('windows:desktop', []); await api('notes', notes); await api('widgets:placed', seeded)
     const phonePage = await browser(sid, 390, 844)
     await load(phonePage)
-    check('cold mobile load mounts no widgets', (await widgets(phonePage)).length === 0)
+    // Stickies say phone:true, so a phone shows them (full width, in the column); widgets that do not say so stay unmounted (widget-clock-e2e).
+    check('cold mobile load mounts the phone-compatible widgets in the column', (await widgets(phonePage)).length === 2 && (await widgets(phonePage)).every(w => w.x >= 0 && w.x + w.w <= 390))
     await resize(phonePage, 1200, 800)
     check('mobile-first session restores desktop widgets', (await widgets(phonePage)).length === 2)
     check('mobile-first session preserves placements', isDeepStrictEqual(await api('widgets:placed'), seeded))
@@ -164,7 +165,7 @@ try {
     await scale(A, 1); await resize(A, 1200, 800)
     check('grow restores preferred geometry', isDeepStrictEqual(await rects(), resized))
     await resize(A, 390, 844)
-    check('mobile hides every widget including stickies', (await widgets(A)).length === 0)
+    check('mobile shows the phone-compatible stickies within the column', (await widgets(A)).length === 2 && (await widgets(A)).every(w => w.x >= 0 && w.x + w.w <= 390))
     await quiet(A, 'mobile')
     await resize(A, 1200, 800)
     check('desktop restores same instances and geometry', isDeepStrictEqual(await rects(), resized), await rects())

@@ -18,12 +18,15 @@ import { execute } from './runtime'
 import { RuntimeFailure } from './scheduler'
 import { useWidgetVisibility } from './visibility'
 import { WeatherControls, usePackageForecast } from './weatherHost'
+import { Pager, ToolButton, Toolbar } from './Chrome'
 import { DomainBroker, type DomainKind } from './Broker'
 import type { BrokerPresentation } from './brokerTypes'
+import { CLOCK_DEFAULTS, clockConfig, clockDelay, clockInput } from './clock'
 import './platform.css'
+import './display.css'
 
+/** Shell and document eligibility. A phone-sized screen is the widget's own call: its active revision must say `phone: true` (see phoneAllowed). */
 export function useRuntimeVisible() {
-  const mobile = useIsMobile()
   const shell = useWidgetVisibility()
   const [visible, setVisible] = useState(() => document.visibilityState === 'visible')
   useEffect(() => {
@@ -31,8 +34,10 @@ export function useRuntimeVisible() {
     document.addEventListener('visibilitychange', sync)
     return () => document.removeEventListener('visibilitychange', sync)
   }, [])
-  return shell && visible && !mobile
+  return shell && visible
 }
+/** Whether a revision may run on a phone-sized screen: only when its manifest says so. Off a phone it always may. */
+export const phoneAllowed = (mobile: boolean, revision: { snapshot: Snapshot } | null | undefined) => !mobile || revision?.snapshot.manifest.phone === true
 type Presented = { tree: Descriptor; input: WidgetInput; identity: string; broker?: BrokerPresentation; note?: { text: string; revision: string } }
 const EMPTY_VIEW: Descriptor = { type: 'column', children: [] }
 /** What went wrong, by kind: the kind decides which buttons the banner offers. */
@@ -50,15 +55,19 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const records = installations.use()
   const kind = isInstanceKind(win.props.kind) ? win.props.kind : 'weather'
   const custom = kind === CUSTOM_KIND
+  const clock = kind === 'clock'
+  const clockSettings = clockConfig(useWidgetConfig<Record<string, unknown>>(id, CLOCK_DEFAULTS))
   const current = records[id]
   const unavailable = useInstallationPresence(id) && !current
   const removed = useInstallationRemoved(id)
   const stored = useWidgetConfig<{ state?: unknown }>(id, {}).state
+  const [clockNow, setClockNow] = useState(() => Date.now())
   const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60000))
   const version = installationVersion(id)
   const note = kind === 'sticky' ? all.find(n => n.id === id) : undefined
   const alive = !!note && !note.deleted && !note.purged
-  const visible = useRuntimeVisible() && !win.minimized
+  const mobile = useIsMobile()
+  const shellVisible = useRuntimeVisible()
   const [builtin, setBuiltin] = useState<Snapshot | null>(null)
   const [verified, setVerified] = useState<{ current: typeof current; revision: Revision } | null>(null)
   const [error, setError] = useState<Problem | null>(null)
@@ -71,17 +80,20 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const eventAbort = useRef<AbortController | null>(null)
   const renderAbort = useRef<AbortController | null>(null)
   const [tick, setTick] = useState(0)
+  const [placeOpen, setPlaceOpen] = useState(false)
+  const [placeSlot, setPlaceSlot] = useState<HTMLElement | null>(null)
   const [domainPage,setDomainPage]=useState(0)
   const [broker,setBroker]=useState<{identity:string;value:BrokerPresentation}|null>(null)
   const [pages, setPages] = useState<number[]>([0])
   const revision: Revision | null = current ? verified?.current === current ? verified.revision : null : !unavailable && builtin ? { source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: builtin } : null
+  const visible = shellVisible && phoneAllowed(mobile, revision) && !win.minimized
   const permitted = useRevisionGrant(id, revision)
   const holdsState = !!revision?.snapshot.manifest.capabilities.includes('custom.state')
   const stateProblem = custom && holdsState ? (() => { try { customState(stored); return '' } catch { return 'Stored widget state is invalid or too large. Reset it from Source.' } })() : ''
   const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent, permitted])
   const latest = useRef({ identity, visible })
   latest.current = { identity, visible }
-  const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && !isMobile() && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id
+  const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && phoneAllowed(isMobile(), revision) && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id
   const validNow = (expected = identity) => eligible() && latest.current.identity === expected && !!revision && hasGrant(id, revision) && installationVersion(id).identity === version.identity
   const weather = usePackageForecast(id, kind === 'weather' && visible && !!permitted && !!revision?.snapshot.manifest.capabilities.includes('weather.read'), tick, identity, () => validNow())
   const domain = ['agenda','inbox','status','minecraft'].includes(kind)
@@ -89,7 +101,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const brokerRef=useRef(presentedBroker);brokerRef.current=presentedBroker
   const present=useCallback((value:BrokerPresentation|null)=>setBroker(value?{identity,value}:null),[identity])
   const start = Math.min(pages[pages.length - 1], note?.text.length ?? 0)
-  const input = useMemo<WidgetInput>(() => custom ? { custom: customInput(stateProblem ? null : stored, holdsState, minute * 60000) } : domain ? presentedBroker?.input ?? {} : kind === 'weather' ? revision?.snapshot.manifest.capabilities.includes('weather.read') ? weather : {} : alive && note && revision?.snapshot.manifest.capabilities.includes('note.read') ? { note: projectNote(note, start) } : { error: 'Waiting for note sync' }, [kind, weather, alive, note?.text, note?.edited, note?.updated, revision?.snapshot.digest, start, presentedBroker, domain, custom, stored, holdsState, stateProblem, minute])
+  const input = useMemo<WidgetInput>(() => clock ? { clock: clockInput(clockNow, clockSettings) } : custom ? { custom: customInput(stateProblem ? null : stored, holdsState, minute * 60000) } : domain ? presentedBroker?.input ?? {} : kind === 'weather' ? revision?.snapshot.manifest.capabilities.includes('weather.read') ? weather : {} : alive && note && revision?.snapshot.manifest.capabilities.includes('note.read') ? { note: projectNote(note, start) } : { error: 'Waiting for note sync' }, [kind, weather, alive, note?.text, note?.edited, note?.updated, revision?.snapshot.digest, start, presentedBroker, domain, custom, stored, holdsState, stateProblem, minute, clock, clockNow, clockSettings.hours, clockSettings.seconds, clockSettings.show, clockSettings.accent])
   useEffect(() => {
     if (!current) return
     let live = true
@@ -102,6 +114,15 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
     }).catch(() => live && setError({ code: 'package', message: 'Installed package unavailable; rebuild or recover in Source. Nothing was deleted.' }))
     return () => { live = false }
   }, [current, kind, retry])
+  // The clock's one timer: the next minute (or second) boundary, only while the widget is eligible. Hidden, covered, minimized or off a phone: no timer at all.
+  useEffect(() => {
+    if (!clock || !visible) return
+    let timer: ReturnType<typeof setTimeout>
+    const tick = () => { const now = Date.now(); setClockNow(now); timer = setTimeout(tick, clockDelay(now, clockSettings.seconds)) }
+    setClockNow(Date.now())
+    timer = setTimeout(tick, clockDelay(Date.now(), clockSettings.seconds))
+    return () => clearTimeout(timer)
+  }, [clock, visible, clockSettings.seconds])
   useEffect(() => { if (!custom) return; if (!visible) return; const timer = setInterval(() => setMinute(Math.floor(Date.now() / 60000)), 30_000); return () => clearInterval(timer) }, [custom, visible])
   useEffect(() => { if (custom) return; let live = true; defaultBuild(kind).then(value => live && setBuiltin(value), () => live && setError({ code: 'default', message: 'Default package build failed' })); return () => { live = false } }, [kind, custom, retry])
   useLayoutEffect(() => () => { renderAbort.current?.abort(); eventAbort.current?.abort() }, [identity, visible])
@@ -185,21 +206,19 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const actionsEnabled = !!shown && shown.input === input && (!shown.note || !!note && sameNote(note, shown.note)) && visible
   return <div ref={root} className="wp-package" data-package-digest={revision?.snapshot.digest} style={{ '--wp-gap': token(spacing.gap), padding: token(spacing.padding), ...(custom && revision ? { minHeight: revision.snapshot.manifest.sizing.height } : {}) } as CSSProperties}>
     {domain&&visible&&permitted&&revision?.snapshot.manifest.capabilities.includes(`${kind}.read` as Capability)&&<DomainBroker kind={kind as DomainKind} id={id} lifecycle={identity} page={domainPage} tick={tick} capabilities={revision.snapshot.manifest.capabilities} eligible={()=>validNow()} present={present}/>}
-    <div className="wp-controls">
-      {domain&&<button onClick={()=>setTick(value=>value+1)}>Refresh</button>}
-      {kind === 'weather' && <WeatherControls id={id} refresh={() => setTick(n => n + 1)} eligible={eligible} />}
-      <button onClick={() => wm.open('widgetworkshop', { id, kind })} aria-label="Edit widget source">Source</button>
-      {permitted && revision?.source.kind !== 'system' && <button onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }}>Pause access</button>}
-      {kind === 'sticky' && <button onClick={() => wm.open('notebook', { id })}>Notebook & links</button>}
-    </div>
-    {!permitted && revision ? <button onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button> : <>
+    <Toolbar open={placeOpen}>
+      {domain&&<ToolButton icon="refresh" label="Refresh" onClick={()=>setTick(value=>value+1)} />}
+      {kind === 'weather' && <WeatherControls id={id} refresh={() => setTick(n => n + 1)} eligible={eligible} onOpen={setPlaceOpen} slot={placeSlot} />}
+      <ToolButton icon="code" label="Source" title="Edit widget source" aria="Edit widget source" onClick={() => wm.open('widgetworkshop', { id, kind })} />
+      {permitted && revision?.source.kind !== 'system' && <ToolButton icon="pause" label="Pause access" onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }} />}
+      {kind === 'sticky' && <ToolButton icon="book" label="Notebook & links" onClick={() => wm.open('notebook', { id })} />}
+    </Toolbar>
+    <div ref={setPlaceSlot} />
+    {!permitted && revision ? <button className="wp-allow" onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button> : <>
       <Renderer key={identity} view={shown?.tree ?? EMPTY_VIEW} note={permitted && input.note ? note?.text : undefined} write={revision?.snapshot.manifest.capabilities.includes('note.write') ? write : undefined} event={event} actionsEnabled={actionsEnabled} resource={resource} />
-      {input.note && <div className="wp-controls" aria-label="Checklist pages">
-        <button disabled={pages.length <= 1} onClick={() => setPages(value => value.slice(0, -1))}>Previous items</button>
-        <button disabled={input.note.next === undefined} onClick={() => setPages(value => [...value, input.note!.next!])}>Next items</button>
-      </div>}
-      {domainPaging&&<div className="wp-controls" aria-label="Data pages"><span>{domainPaging.shown} of {domainPaging.total} · page {domainPaging.page+1}/{domainPaging.pages}</span><button disabled={domainPaging.page===0} onClick={()=>setDomainPage(domainPaging.page-1)}>Previous results</button><button disabled={domainPaging.page+1>=domainPaging.pages} onClick={()=>setDomainPage(domainPaging.page+1)}>Next results</button></div>}
-      {!shown && <span>Loading widget…</span>}
+      {input.note && <Pager label="Checklist pages" page={pages.length} previous={{ text: 'Previous items', disabled: pages.length <= 1, run: () => setPages(value => value.slice(0, -1)) }} next={{ text: 'Next items', disabled: input.note.next === undefined, run: () => setPages(value => [...value, input.note!.next!]) }} />}
+      {domainPaging&&<Pager label="Data pages" page={domainPaging.page+1} pages={domainPaging.pages} detail={`${domainPaging.shown} of ${domainPaging.total}`} previous={{ text: 'Previous results', disabled: domainPaging.page===0, run: ()=>setDomainPage(domainPaging.page-1) }} next={{ text: 'Next results', disabled: domainPaging.page+1>=domainPaging.pages, run: ()=>setDomainPage(domainPaging.page+1) }} />}
+      {!shown && <span className="wp-loading">Loading widget…</span>}
     </>}
     {custom && !current && <p role="status" data-custom-unavailable>{removed ? 'This custom widget was removed. Take it off the desktop from its menu, or recreate it in the Workshop.' : unavailable ? 'This custom widget\'s installation record is unreadable and was kept untouched. Open the Workshop to rebuild and activate it again.' : 'This custom widget is not installed on this device (yet). It was kept on the desktop; wait for sync, or open the Workshop to install it again.'} <button onClick={() => wm.open('widgetworkshop', { kind: CUSTOM_KIND })}>Open Workshop</button></p>}
     {stateProblem && <p role="status">{stateProblem}</p>}

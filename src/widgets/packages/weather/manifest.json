@@ -1,1 +1,1 @@
-{"schema":1,"sdk":1,"id":"weather","name":"Weather","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":290,"height":300},"capabilities":["weather.read"]}
+{"schema":1,"sdk":1,"id":"weather","name":"Weather","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":290,"height":300},"capabilities":["weather.read"],"phone":true}

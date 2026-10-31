@@ -4,7 +4,8 @@ import { GAME_CATALOG } from '../apps/games/catalog'
 import { launch as launchLink, launcherImage, useLaunchers, type Launcher } from '../data/launchers'
 import { startNativeDrag, type DragItem } from './dnd'
 import { createNote } from '../data/notes'
-import { addWidget, widgetDefs } from '../widgets/registry'
+import { addWidget, widgetDefsHere } from '../widgets/registry'
+import { isMobile } from './useIsMobile'
 import { contributions, profile, projects } from '../data/profile'
 import { getAccount, signedIn } from './account'
 import { appHere, cvMode } from './cvMode'
@@ -170,9 +171,9 @@ export function Launchpad() {
           ]
         : []),
       {
-        label: 'Widgets',
+        label: isMobile() ? 'Widgets (phone-ready only)' : 'Widgets',
         icon: ICONS.widgets,
-        children: () => widgetDefs().map((d) => ({ label: d.name, icon: <span className="om-glyph">{d.glyph}</span>, run: () => addWidget(wm, d.kind, d.instance) })),
+        children: () => widgetDefsHere().map((d) => ({ label: d.name, icon: <span className="om-glyph">{d.glyph}</span>, run: () => addWidget(wm, d.kind, d.instance) })),
       },
       {
         label: 'Games',

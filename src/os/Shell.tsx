@@ -640,7 +640,7 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
   const style = def.useFrame?.(id)
   const menuItems = def.useMenu?.(id, wm) ?? []
   return (
-    <Window win={w} title={def.useTitle?.(id) ?? def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
+    <Window win={w} title={def.useTitle?.(id) ?? def.name} chrome="note" className={`widget widget-${def.kind}${style?.['--widget-bare' as keyof typeof style] === '1' ? ' widget-bare' : ''}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
       {APP_META.widget.render(w)}
     </Window>
   )
@@ -854,7 +854,8 @@ export function Shell() {
       <WidgetVisibility value={!hidden && !covered}><div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
         <Desktop />
         <main className="windows">
-          {wm.windows.filter((w) => !mobile || w.app !== 'widget').map((w) => (
+          {/* A phone only draws the widgets whose package says it works there (`phone: true`). */}
+          {wm.windows.filter((w) => !mobile || w.app !== 'widget' || wm.shown(w)).map((w) => (
             <AppWindow key={w.pid} w={w} />
           ))}
           {/* Phones: where a note being moved up or down the column will land. */}

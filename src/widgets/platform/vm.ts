@@ -1,12 +1,20 @@
 import type { QuickJSWASMModule } from 'quickjs-emscripten-core'
 import { LIMITS, relativePath, type Snapshot, type WidgetInput } from './package.ts'
 /** The only module supplied by the host. No functions or prototypes cross the VM boundary. */
-const SDK = `export const text=(text,tone='normal')=>({type:'text',text:String(text),tone});
-export const column=(...children)=>({type:'column',children});
-export const row=(...children)=>({type:'row',children});
+const SDK = `const split=(a)=>a.length&&a[0]&&typeof a[0]==='object'&&a[0].type===undefined?[a[0],a.slice(1)]:[{},a];
+export const text=(text,tone='normal',options={})=>({type:'text',text:String(text),tone,...options});
+export const column=(...a)=>{const [o,children]=split(a);return {type:'column',...o,children}};
+export const row=(...a)=>{const [o,children]=split(a);return {type:'row',...o,children}};
+export const grid=(columns,...a)=>{const [o,children]=split(a);return {type:'grid',columns,...o,children}};
+export const box=(...a)=>{const [o,children]=split(a);return {type:'box',...o,children}};
 export const button=(text,event)=>({type:'button',text,event});
 export const editor=()=>({type:'editor'});
-const resourceNode=(type,text,resource,options)=>resource?({type,text,resource,...options}):({type:'column',children:[...(text?[{type:'text',text,tone:'muted'}]:[]),...(options.children||[])]});
+export const badge=(text,tone='normal',options={})=>({type:'badge',text:String(text),tone,...options});
+export const icon=(name,tone='normal',options={})=>({type:'icon',name,tone,...options});
+export const progress=(value,tone='accent',options={})=>({type:'progress',value,tone,...options});
+export const divider=(options={})=>({type:'divider',...options});
+export const spacer=(options={})=>({type:'spacer',...options});
+const resourceNode=(type,text,resource,options)=>{const {fallback,...rest}=options;return resource?({type,text,resource,...rest}):({type:fallback==='row'?'row':'column',...(fallback==='row'?{align:'center'}:{}),children:[...(text?[{type:'text',text,tone:'muted'}]:[]),...(rest.children||[])]})};
 export const action=(text,resource,options={})=>resourceNode('action',text,resource,options);
 export const link=(text,resource,options={})=>resourceNode('link',text,resource,options);
 export const image=(resource,text='')=>({type:'image',resource,text});
