@@ -96,7 +96,7 @@ export function Renderer({ view, note, write, event, actionsEnabled = true, reso
     // Presentation fields become data attributes the stylesheet maps to host tokens; none is free-form.
     const look = { 'data-size': node.size, 'data-weight': node.weight, 'data-align': node.align, 'data-justify': node.justify, 'data-gap': node.gap, 'data-pad': node.pad, 'data-clamp': node.clamp, 'data-nowrap': node.wrap === false ? '' : undefined, 'data-span': node.span }
     const placed = node.columns ? { gridTemplateColumns: node.columns.map(t => t === 'auto' ? 'auto' : t === 'min' ? 'min-content' : `minmax(0, ${t})`).join(' ') } : undefined
-    if (node.type === 'text') return <span key={path} className={className} title={node.hint} {...look}>{node.text}</span>
+    if (node.type === 'text') return <span key={path} className={node.size === 'display' || node.size === 'headline' ? `${className} wp-size-${node.size}` : className} style={node.size === 'display' || node.size === 'headline' ? { ['--wp-chars' as string]: Math.max(1, [...(node.text ?? '')].length) } : undefined} title={node.hint} {...look}>{node.text}</span>
     if (node.type === 'badge') return <span key={path} className={className} title={node.hint} {...look}>{node.text}</span>
     if (node.type === 'icon') return <Icon key={path} name={node.name!} className={className} size={node.size} span={node.span} />
     if (node.type === 'progress') return <span key={path} className={className} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((node.value ?? 0) * 100)} {...look}><span style={{ width: `${(node.value ?? 0) * 100}%` }} /></span>

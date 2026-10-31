@@ -21,10 +21,12 @@ import { WeatherControls, usePackageForecast } from './weatherHost'
 import { Pager, ToolButton, Toolbar } from './Chrome'
 import { DomainBroker, type DomainKind } from './Broker'
 import type { BrokerPresentation } from './brokerTypes'
+import { CLOCK_DEFAULTS, clockConfig, clockDelay, clockInput } from './clock'
 import './platform.css'
+import './display.css'
 
+/** Shell and document eligibility. A phone-sized screen is the widget's own call: its active revision must say `phone: true` (see phoneAllowed). */
 export function useRuntimeVisible() {
-  const mobile = useIsMobile()
   const shell = useWidgetVisibility()
   const [visible, setVisible] = useState(() => document.visibilityState === 'visible')
   useEffect(() => {
@@ -32,8 +34,10 @@ export function useRuntimeVisible() {
     document.addEventListener('visibilitychange', sync)
     return () => document.removeEventListener('visibilitychange', sync)
   }, [])
-  return shell && visible && !mobile
+  return shell && visible
 }
+/** Whether a revision may run on a phone-sized screen: only when its manifest says so. Off a phone it always may. */
+export const phoneAllowed = (mobile: boolean, revision: { snapshot: Snapshot } | null | undefined) => !mobile || revision?.snapshot.manifest.phone === true
 type Presented = { tree: Descriptor; input: WidgetInput; identity: string; broker?: BrokerPresentation; note?: { text: string; revision: string } }
 const EMPTY_VIEW: Descriptor = { type: 'column', children: [] }
 /** What went wrong, by kind: the kind decides which buttons the banner offers. */
@@ -51,15 +55,19 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const records = installations.use()
   const kind = isInstanceKind(win.props.kind) ? win.props.kind : 'weather'
   const custom = kind === CUSTOM_KIND
+  const clock = kind === 'clock'
+  const clockSettings = clockConfig(useWidgetConfig<Record<string, unknown>>(id, CLOCK_DEFAULTS))
   const current = records[id]
   const unavailable = useInstallationPresence(id) && !current
   const removed = useInstallationRemoved(id)
   const stored = useWidgetConfig<{ state?: unknown }>(id, {}).state
+  const [clockNow, setClockNow] = useState(() => Date.now())
   const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60000))
   const version = installationVersion(id)
   const note = kind === 'sticky' ? all.find(n => n.id === id) : undefined
   const alive = !!note && !note.deleted && !note.purged
-  const visible = useRuntimeVisible() && !win.minimized
+  const mobile = useIsMobile()
+  const shellVisible = useRuntimeVisible()
   const [builtin, setBuiltin] = useState<Snapshot | null>(null)
   const [verified, setVerified] = useState<{ current: typeof current; revision: Revision } | null>(null)
   const [error, setError] = useState<Problem | null>(null)
@@ -78,13 +86,14 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const [broker,setBroker]=useState<{identity:string;value:BrokerPresentation}|null>(null)
   const [pages, setPages] = useState<number[]>([0])
   const revision: Revision | null = current ? verified?.current === current ? verified.revision : null : !unavailable && builtin ? { source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: builtin } : null
+  const visible = shellVisible && phoneAllowed(mobile, revision) && !win.minimized
   const permitted = useRevisionGrant(id, revision)
   const holdsState = !!revision?.snapshot.manifest.capabilities.includes('custom.state')
   const stateProblem = custom && holdsState ? (() => { try { customState(stored); return '' } catch { return 'Stored widget state is invalid or too large. Reset it from Source.' } })() : ''
   const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent, permitted])
   const latest = useRef({ identity, visible })
   latest.current = { identity, visible }
-  const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && !isMobile() && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id
+  const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && phoneAllowed(isMobile(), revision) && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id
   const validNow = (expected = identity) => eligible() && latest.current.identity === expected && !!revision && hasGrant(id, revision) && installationVersion(id).identity === version.identity
   const weather = usePackageForecast(id, kind === 'weather' && visible && !!permitted && !!revision?.snapshot.manifest.capabilities.includes('weather.read'), tick, identity, () => validNow())
   const domain = ['agenda','inbox','status','minecraft'].includes(kind)
@@ -92,7 +101,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const brokerRef=useRef(presentedBroker);brokerRef.current=presentedBroker
   const present=useCallback((value:BrokerPresentation|null)=>setBroker(value?{identity,value}:null),[identity])
   const start = Math.min(pages[pages.length - 1], note?.text.length ?? 0)
-  const input = useMemo<WidgetInput>(() => custom ? { custom: customInput(stateProblem ? null : stored, holdsState, minute * 60000) } : domain ? presentedBroker?.input ?? {} : kind === 'weather' ? revision?.snapshot.manifest.capabilities.includes('weather.read') ? weather : {} : alive && note && revision?.snapshot.manifest.capabilities.includes('note.read') ? { note: projectNote(note, start) } : { error: 'Waiting for note sync' }, [kind, weather, alive, note?.text, note?.edited, note?.updated, revision?.snapshot.digest, start, presentedBroker, domain, custom, stored, holdsState, stateProblem, minute])
+  const input = useMemo<WidgetInput>(() => clock ? { clock: clockInput(clockNow, clockSettings) } : custom ? { custom: customInput(stateProblem ? null : stored, holdsState, minute * 60000) } : domain ? presentedBroker?.input ?? {} : kind === 'weather' ? revision?.snapshot.manifest.capabilities.includes('weather.read') ? weather : {} : alive && note && revision?.snapshot.manifest.capabilities.includes('note.read') ? { note: projectNote(note, start) } : { error: 'Waiting for note sync' }, [kind, weather, alive, note?.text, note?.edited, note?.updated, revision?.snapshot.digest, start, presentedBroker, domain, custom, stored, holdsState, stateProblem, minute, clock, clockNow, clockSettings.hours, clockSettings.seconds, clockSettings.show, clockSettings.accent])
   useEffect(() => {
     if (!current) return
     let live = true
@@ -105,6 +114,15 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
     }).catch(() => live && setError({ code: 'package', message: 'Installed package unavailable; rebuild or recover in Source. Nothing was deleted.' }))
     return () => { live = false }
   }, [current, kind, retry])
+  // The clock's one timer: the next minute (or second) boundary, only while the widget is eligible. Hidden, covered, minimized or off a phone: no timer at all.
+  useEffect(() => {
+    if (!clock || !visible) return
+    let timer: ReturnType<typeof setTimeout>
+    const tick = () => { const now = Date.now(); setClockNow(now); timer = setTimeout(tick, clockDelay(now, clockSettings.seconds)) }
+    setClockNow(Date.now())
+    timer = setTimeout(tick, clockDelay(Date.now(), clockSettings.seconds))
+    return () => clearTimeout(timer)
+  }, [clock, visible, clockSettings.seconds])
   useEffect(() => { if (!custom) return; if (!visible) return; const timer = setInterval(() => setMinute(Math.floor(Date.now() / 60000)), 30_000); return () => clearInterval(timer) }, [custom, visible])
   useEffect(() => { if (custom) return; let live = true; defaultBuild(kind).then(value => live && setBuiltin(value), () => live && setError({ code: 'default', message: 'Default package build failed' })); return () => { live = false } }, [kind, custom, retry])
   useLayoutEffect(() => () => { renderAbort.current?.abort(); eventAbort.current?.abort() }, [identity, visible])

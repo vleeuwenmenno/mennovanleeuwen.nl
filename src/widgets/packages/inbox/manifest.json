@@ -1,1 +1,1 @@
-{"schema":1,"sdk":1,"id":"inbox","name":"Code inbox","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":320,"height":340},"capabilities":["inbox.read","inbox.navigate"]}
+{"schema":1,"sdk":1,"id":"inbox","name":"Code inbox","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":320,"height":340},"capabilities":["inbox.read","inbox.navigate"],"phone":true}

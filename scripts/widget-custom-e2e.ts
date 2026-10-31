@@ -74,7 +74,7 @@ try {
   check('new custom instance exists with its own id, placed and rendered by PackageHost', /^custom-[a-f0-9]{8}$/.test(id) && await p.eval(`document.querySelector('.widget-custom .wp-package').dataset.packageDigest.length===64`), id)
   check('window title is the package name', await p.eval(`document.querySelector('.widget-custom')?.textContent.includes('Daily tally')`))
   check('placement props are {kind:custom,id}', await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>Object.values(m.widgetPlaces.get().places).some(x=>x.kind==='custom'&&x.id===${JSON.stringify(id)}))`))
-  check('builtins unchanged: kind list still closed to six', await p.eval(`import('/src/widgets/platform/package.ts').then(m=>m.WIDGET_KINDS.length===6)`))
+  check('builtins unchanged: kind list still closed to the seven built-ins', await p.eval(`import('/src/widgets/platform/package.ts').then(m=>m.WIDGET_KINDS.length===7)`))
   // Interact: state changes and is saved in the instance's own state.
   await button('+1', '.widget-custom .wp-package'); await waitBody('1 all time')
   await button('+1', '.widget-custom .wp-package'); await waitBody('2 all time')
@@ -114,11 +114,11 @@ try {
   check('missing installation shows an actionable unavailable state', await p.eval(`document.querySelector('[data-custom-unavailable]').textContent.includes('not installed')&&[...document.querySelectorAll('[data-custom-unavailable] button')].some(b=>b.textContent==='Open Workshop')`))
   await sleep(500)
   check('unavailable custom placement is kept', await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>Object.values(m.widgetPlaces.get().places).some(x=>x.id==='custom-ghost'))`))
-  // Mobile hides widgets and keeps placements.
+  // A phone shows the widgets whose manifest says phone:true (the template does), hides the rest (the unavailable ghost), and keeps every placement.
   const before = await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>JSON.stringify(m.widgetPlaces.get()))`)
   await p.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   await sleep(400)
-  check('mobile hides custom widgets and keeps placements', await p.eval(`!document.querySelector('.widget-custom')`) && before === await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>JSON.stringify(m.widgetPlaces.get()))`))
+  check('mobile shows the phone:true custom widget, hides the ghost and keeps placements', await p.eval(`!!document.querySelector('.widget-custom:not(.is-away)') && !document.querySelector('.widget-custom [data-custom-unavailable]')`) && before === await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>JSON.stringify(m.widgetPlaces.get()))`))
   await p.send('Emulation.clearDeviceMetricsOverride')
   await p.waitFor(`!!document.querySelector('.widget-custom')`, 10_000)
   // Remove the installation from the Workshop (explicit, confirmed).
