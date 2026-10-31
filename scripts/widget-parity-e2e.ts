@@ -151,8 +151,8 @@ try {
   await pressBanner('storage', 'Retry saving'); await sleep(500)
   check('Retrying while storage still fails stays a storage banner', await p.eval(`!!${banner('storage')}`) && !(await status()).includes('Saved'))
   await p.eval(`window.__denyCanonical=false`)
-  await pressBanner('storage', 'Retry saving'); await p.waitFor(`!${banner('storage')}`, 20_000)
-  check('Retry saving after storage recovers stores the revision and then says so', (await status()).includes('Saved') && (await durable())?.['par-sticky']?.active?.source?.kind === 'system', await durable())
+  await pressBanner('storage', 'Retry saving'); await p.waitFor(`!${banner('storage')} && [...document.querySelectorAll('.wp-workshop p[role="status"]')].some(e=>e.textContent.includes('Saved'))`, 20_000)
+  check('Retry saving after storage recovers stores the revision and then says so', (await status()).includes('Saved') && (await durable())?.['par-sticky']?.active?.source?.kind === 'system', [await status(), await bannerButtons('storage')])
 
   // 5. Installation limit (12 records): explained, nothing changed.
   await p.eval(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.canonicalInstallations.set(all=>({...all,...Object.fromEntries(Array.from({length:12},(_,n)=>['future-'+n,{generation:1,future:true}]))})))`)
