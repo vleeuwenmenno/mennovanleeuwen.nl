@@ -146,9 +146,10 @@ unavailable sources and hidden widgets are recoverable, not removals. Revision r
 changes no config, placement or note data. Cross-device conflicting generation/identity
 changes reject stale recovery; same-revision activation retries are idempotent.
 
-Calendar link/unlink and backlinks stay in the trusted menu/Notebook. Inline Sticky calendar
-chips and a package calendar operation, broader catalog, TypeScript/TSX compilation, execution
-of source-defined tests, ClientCalls agent authoring and a cross-device conflict UI remain staged.
+Calendar link/unlink and backlinks stay in the trusted menu/Notebook. The host also draws the
+note's linked-event chips under a Sticky package's output (no package calendar operation or
+authority). A package calendar operation, broader catalog, TypeScript/TSX compilation, execution
+of source-defined tests, ClientCalls agent authoring and automatic conflict resolution remain staged (conflicts show a banner and the user decides).
 
 ## Runtime selection evidence
 

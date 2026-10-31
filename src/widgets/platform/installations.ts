@@ -7,6 +7,12 @@ import { accountGuard } from '../../os/accountSpace'
 import { isWidgetKind, supportsCapabilities, record, verifySnapshot, type Snapshot, type SourceIdentity, type WidgetKind } from './package'
 import { assertSource } from './sources'
 export type Revision = { source: SourceIdentity; snapshot: Snapshot }
+/** Why an activation or recovery did not happen, so the UI can offer the right action. Messages stay user-readable. */
+export type InstallFailureCode = 'conflict' | 'limit' | 'budget' | 'unhydrated' | 'storage' | 'signin'
+export class InstallFailure extends Error {
+  code: InstallFailureCode
+  constructor(code: InstallFailureCode, message: string) { super(message); this.code = code; this.name = 'InstallFailure' }
+}
 export type Installation = { schema: 1; instance: string; kind: WidgetKind; generation: number; active: Revision; previous?: Revision }
 type Installations = Record<string, Installation>
 export function mergeInstallations(local: Installations, remote: Installations): Installations {
@@ -38,7 +44,7 @@ export function installationVersion(id: string) {
 }
 export async function activate(instance: string, kind: Installation['kind'], revision: Revision, expectedGeneration: number, expectedIdentity = installationVersion(instance).identity) {
   assertSource(revision.source)
-  if (!accountGuard() || !getAccount().user) throw new Error('Sign in to install a package')
+  if (!accountGuard() || !getAccount().user) throw new InstallFailure('signin', 'Sign in to install a package')
   const account = getAccount().user!.id
   if (!/^[\w-]{1,80}$/.test(instance) || !isWidgetKind(kind) || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) throw new Error('Invalid installation identity')
   const snapshot = await verifySnapshot(revision.snapshot)
@@ -48,28 +54,31 @@ export async function activate(instance: string, kind: Installation['kind'], rev
   const fallback = { source: { kind: 'system' as const, path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }
   assertSource(revision.source)
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
-  if (!widgetsHydrated()) throw new Error('Widget state is not hydrated; retry activation after sync')
-  let conflict = ''
+  if (!widgetsHydrated()) throw new InstallFailure('unhydrated', 'Widget state is not hydrated; retry activation after sync')
+  let conflict = null as InstallFailure | null
   installations.set(all => {
     const current = all[instance]
     if (current?.active.snapshot.digest === snapshot.digest && JSON.stringify(current.active.source) === JSON.stringify(revision.source)) return all
     const version = installationVersion(instance)
-    if (version.generation !== expectedGeneration || version.identity !== expectedIdentity || !Number.isSafeInteger(expectedGeneration + 1)) { conflict = 'Installation changed; reload before activating'; return all }
+    if (version.generation !== expectedGeneration || version.identity !== expectedIdentity || !Number.isSafeInteger(expectedGeneration + 1)) { conflict = new InstallFailure('conflict', 'Installation changed; reload before activating'); return all }
     const raw = canonicalInstallations.get()
-    if (!Object.hasOwn(raw, instance) && Object.keys(raw).length >= 12) { conflict = 'Installation limit reached (12 records); existing revisions remain editable'; return all }
+    if (!Object.hasOwn(raw, instance) && Object.keys(raw).length >= 12) { conflict = new InstallFailure('limit', 'Installation limit reached (12 records); existing revisions remain editable'); return all }
     const next: Installations = { ...all, [instance]: { schema: 1, instance, kind, generation: expectedGeneration + 1, active: { source: revision.source, snapshot }, previous: current?.active ?? fallback } }
-    if (canonicalInstallationBytes({ ...raw, ...next }) > 480 * 1024) { conflict = 'Widget state exceeds the 480 KiB installation budget'; return all }
+    if (canonicalInstallationBytes({ ...raw, ...next }) > 480 * 1024) { conflict = new InstallFailure('budget', 'Widget state exceeds the 480 KiB installation budget'); return all }
     return next
   })
-  if (conflict) throw new Error(conflict)
-  await installations.flush?.()
+  if (conflict) throw conflict
+  try { await installations.flush?.() } catch (error) {
+    if (error instanceof Error && error.message === 'Account changed') throw error
+    throw new InstallFailure('storage', `Not saved: ${error instanceof Error ? error.message : 'storage failure'}. The earlier saved revision is intact; the new one is active in this session only until it is saved.`)
+  }
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   const installed = installation(instance)
-  if (installed?.active.snapshot.digest !== snapshot.digest || JSON.stringify(installed.active.source) !== JSON.stringify(revision.source)) throw new Error('Installation changed; reload before activating')
+  if (installed?.active.snapshot.digest !== snapshot.digest || JSON.stringify(installed.active.source) !== JSON.stringify(revision.source)) throw new InstallFailure('conflict', 'Installation changed; reload before activating')
 }
 export async function recover(instance: string, expectedGeneration: number, expectedIdentity = installationIdentity(installation(instance))) {
   const current = installation(instance)
-  if (!current?.previous || current.generation !== expectedGeneration || installationIdentity(current) !== expectedIdentity) throw new Error('Previous revision unavailable or installation changed')
+  if (!current?.previous || current.generation !== expectedGeneration || installationIdentity(current) !== expectedIdentity) throw new InstallFailure('conflict', 'Previous revision unavailable or installation changed')
   await activate(instance, current.kind, current.previous, expectedGeneration, expectedIdentity)
 }
 /** Identity grants are local to this live account session, never accepted from imported/synced files. */
