@@ -26,7 +26,7 @@ export const HELP_GROUPS: [string, string[]][] = [
   ['Network', ['curl', 'wget', 'whois', 'ping', 'dig', 'host', 'nslookup', 'minecraft']],
   ['Device', ['htop', 'df', 'du', 'free', 'nproc', 'lscpu', 'xrandr', 'ip', 'watch']],
   ['Shell', ['msh', 'test', 'printf', 'read', 'source', 'alias', 'unalias', 'type', 'sleep', 'seq', 'basename', 'dirname']],
-  ['Agents', ['agents', 'skills', 'mvl']],
+  ['Agents', ['agents', 'skills', 'mvl', 'widget']],
   ['System', ['keys', 'ps', 'kill', 'uname', 'uptime', 'date', 'cal', 'history', 'sudo', 'env', 'export', 'theme', 'tty', 'reboot', 'shutdown', 'clear', 'exit']],
   ['Fun', ['games', 'fastfetch', 'fortune', 'cowsay', 'figlet', 'lolcat', 'cmatrix', 'sl']],
 ]

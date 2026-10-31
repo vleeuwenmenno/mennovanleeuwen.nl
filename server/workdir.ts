@@ -526,6 +526,8 @@ const READ_ONLY = new Set([
   'which', 'type', 'whoami', 'id', 'date', 'cal', 'uname', 'uptime', 'hostname', 'env', 'man', 'help', 'jq', 'jq-safe', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum', 'base64',
   'seq', 'basename', 'dirname', 'test', '[', 'true', 'false', ':', 'cd', 'calc', 'units', 'bc', 'nproc', 'free', 'ps', 'diff', 'read', 'set', 'export', 'local',
   'sleep', 'findmnt', 'lsblk', 'tty', 'history', 'fastfetch', 'fortune', 'cowsay', 'figlet',
+  // Writes no file. Its one change, `widget activate`, always asks the user in a desktop dialog of its own, so it is not asked twice.
+  'widget',
 ])
 // Not here on purpose: find and fd (-delete, -exec, fd -x in ways a word check misses), and dig,
 // host, nslookup and whois (a lookup can carry data out, past web_fetch's guard).

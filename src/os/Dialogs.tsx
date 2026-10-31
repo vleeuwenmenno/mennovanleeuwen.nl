@@ -15,9 +15,18 @@ const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
 
 /** Asks with buttons of your own; answers the chosen button's id, or null for Cancel / Escape. */
-export function choose(d: { title: string; body?: ReactNode; buttons: Button[] }): Promise<string | null> {
+export function choose(d: { title: string; body?: ReactNode; buttons: Button[] }, signal?: AbortSignal): Promise<string | null> {
   return new Promise((resolve) => {
-    queue = [...queue, { ...d, resolve }]
+    if (signal?.aborted) return resolve(null)
+    // With a signal (an agent's call), the question goes away unanswered when the call is cancelled.
+    const entry: Dialog = { ...d, resolve: (id) => (signal?.removeEventListener('abort', gone), resolve(id)) }
+    const gone = () => {
+      queue = queue.filter((x) => x !== entry)
+      emit()
+      resolve(null)
+    }
+    signal?.addEventListener('abort', gone, { once: true })
+    queue = [...queue, entry]
     emit()
   })
 }
