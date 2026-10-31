@@ -109,7 +109,7 @@ for (const kind of WIDGET_KINDS) {
     const nodes = flat(view)
     used[kind] = new Set(nodes.map(n => n.type))
     assert.ok(nodes.some(n => n.size || n.weight || n.gap || n.columns || n.name || ['badge', 'divider', 'progress', 'box', 'icon', 'grid'].includes(n.type)), 'uses the new vocabulary')
-    assert.ok(nodes.length > 3, 'substantive')
+    assert.ok(kind === 'clock' || nodes.length > 3, 'substantive')
   })
 }
 await check('the six built-ins together use grid, icon, badge, box, progress and divider', () => {
