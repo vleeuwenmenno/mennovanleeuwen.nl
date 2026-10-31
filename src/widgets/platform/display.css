@@ -1,16 +1,16 @@
 /* Display text: a descriptor text with size "display" or "headline" scales with the widget's own
    width (container query units), so a big clock face fills a wide widget and still fits a phone.
    The widget is the container only when it has such text; every other package lays out as before. */
-.wp-package:has(.wp-size-display, .wp-size-headline) { container-type: inline-size; }
-span.wp-text.wp-size-display, span.wp-text.wp-size-headline { display: block; text-align: center; white-space: nowrap; overflow: visible; font-variant-numeric: tabular-nums; }
+.wp-package:has(.wp-size-face, .wp-size-subface) { container-type: inline-size; }
+span.wp-text.wp-size-face, span.wp-text.wp-size-subface { display: block; text-align: center; white-space: nowrap; overflow: visible; font-variant-numeric: tabular-nums; }
 /* The theme font is monospace (about .6em per character): .64 per character fills the width with a little air. */
-.wp-text.wp-size-display[data-size] {
+.wp-text.wp-size-face[data-size] {
   font-size: min(calc(100cqw / (var(--wp-chars, 5) * .64)), 40vh);
   line-height: 1;
   font-weight: 300;
   letter-spacing: -.01em;
 }
-.wp-text.wp-size-headline[data-size] {
+.wp-text.wp-size-subface[data-size] {
   font-size: min(calc(100cqw / (var(--wp-chars, 20) * .64)), 7cqw);
   line-height: 1.2;
 }

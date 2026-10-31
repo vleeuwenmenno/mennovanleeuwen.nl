@@ -75,7 +75,7 @@ await check('the clock package builds: bare, phone, no capabilities, 420x160', (
 const texts = (view: any): any[] => [view, ...(view.children ?? []).flatMap(texts)].filter(n => n.type === 'text')
 await check('the clock renders the mock input: a display time over a muted headline date', () => {
   const t = texts(descriptor(invokeVM(qjs, snapshot, MOCK_INPUT)))
-  assert.deepEqual(t.map(n => [n.text, n.size, n.tone]), [['14:32', 'display', 'normal'], ['Friday, 30 October 2026', 'headline', 'muted']])
+  assert.deepEqual(t.map(n => [n.text, n.size, n.tone]), [['14:32', 'face', 'normal'], ['Friday, 30 October 2026', 'subface', 'muted']])
 })
 await check('show short/none and the accent tone change the layout', () => {
   const render = (patch: object) => texts(descriptor(invokeVM(qjs, snapshot, { clock: { ...MOCK_INPUT.clock!, ...patch } })))
@@ -85,10 +85,10 @@ await check('show short/none and the accent tone change the layout', () => {
   assert.equal(render({ period: 'PM', time: '2:32', hour12: true })[0].text, '2:32 PM')
   assert.equal(texts(descriptor(invokeVM(qjs, snapshot, {})))[0].text, 'Clock', 'no clock input still renders something')
 })
-await check('descriptor size is closed to display and headline, and only on text', () => {
-  assert.deepEqual(descriptor({ type: 'text', text: 'x', size: 'display' }).size, 'display')
+await check('descriptor size is closed to the size tokens, and only on text', () => {
+  assert.deepEqual(descriptor({ type: 'text', text: 'x', size: 'face' }).size, 'face')
   assert.throws(() => descriptor({ type: 'text', text: 'x', size: 'huge' }), /Invalid size/)
-  assert.throws(() => descriptor({ type: 'column', size: 'display', children: [] }), /Invalid size/)
+  assert.throws(() => descriptor({ type: 'column', size: 'face', children: [] }), /Invalid size/)
 })
 
 // 2026-10-31 14:05:09 in Europe/Amsterdam (UTC+1 after the clocks went back) = 13:05:09Z

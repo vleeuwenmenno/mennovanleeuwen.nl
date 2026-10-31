@@ -4573,7 +4573,7 @@ click opens the Minecraft server window) and **Clock** (see below).
 theme's dark so it reads on any picture). Point at it for the usual frame handle, close button and
 menu (right-click, or long-press on touch); *Source* appears on hover. The time uses the descriptor
 text size `display`, which scales with the widget's width (container query units, one line, so
-longer text such as seconds or AM/PM shrinks to fit), and the date uses the smaller `headline`
+longer text such as seconds or AM/PM shrinks to fit), and the date uses the smaller `subface`
 size, so dragging the right edge resizes the clock and a phone gets it full width. Menu: **Hours**
 (follow my language, 24-hour, 12-hour), **Show seconds**, **Date** (weekday and date, short, none)
 and **Accent colour**; the settings sync with the widget's other settings. The host owns one timer,

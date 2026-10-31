@@ -31,9 +31,9 @@ the presentation nodes grid(columns,...children), box(...children), badge(value,
 icon(name,tone,options), progress(value,tone,options), divider(options), spacer(options).
 Action/link options: hint, children, tone, fallback ('row' keeps a row layout where the
 handle is missing, as in previews); action also accepts checked (native checkbox role).
-Tones: normal, muted, accent, danger, success, warning. text size 'display' scales the text
+Tones: normal, muted, accent, danger, success, warning. text size 'face' scales the text
 with the widget's width (a big clock face; the longer the text, the smaller it gets, so it always
-fits on one line) and 'headline' is the smaller line under it. No raw HTML,
+fits on one line) and 'subface' is the smaller line under it. No raw HTML,
 URLs, arbitrary attributes, CSS or host functions. Spacing tokens: compact,
 normal, roomy in styles/tokens.json (gap and padding).
 
