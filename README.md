@@ -4572,7 +4572,7 @@ click opens the Minecraft server window) and **Clock** (see below).
 (manifest appearance `bare`: no card, border, tape or shadow, only a soft text shadow from the
 theme's dark so it reads on any picture). Point at it for the usual frame handle, close button and
 menu (right-click, or long-press on touch); *Source* appears on hover. The time uses the descriptor
-text size `display`, which scales with the widget's width (container query units, one line, so
+text size `face`, which scales with the widget's width (container query units, one line, so
 longer text such as seconds or AM/PM shrinks to fit), and the date uses the smaller `subface`
 size, so dragging the right edge resizes the clock and a phone gets it full width. Menu: **Hours**
 (follow my language, 24-hour, 12-hour), **Show seconds**, **Date** (weekday and date, short, none)
