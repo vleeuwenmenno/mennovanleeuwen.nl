@@ -42,6 +42,7 @@ import { chmodCommands } from './chmod'
 import { readFile } from './read'
 import { nanoCommands } from './nano'
 import { skillsCommands } from './skills'
+import { widgetCommands } from './widget'
 import { agentsCommands } from './agents'
 import { vtCommands } from './vt/demo'
 import { tarCommands } from './tar'
@@ -130,6 +131,7 @@ const APPS: Record<string, AppId> = {
   omamp: 'amp',
   winamp: 'amp',
   music: 'amp',
+  widgetworkshop: 'widgetworkshop',
   weather: 'weather',
   changelog: 'changelog',
   releases: 'changelog',
@@ -181,6 +183,7 @@ const APP_NAMES: Record<AppId, string> = {
   photos: 'photos',
   contacts: 'contacts',
   tasks: 'tasks',
+  widgetworkshop: 'widgetworkshop',
   weather: 'weather',
   changelog: 'changelog',
   git: 'git',
@@ -1405,7 +1408,7 @@ export const commands: Record<string, Command> = {
 }
 
 // The real-network and device tools live in extra.ts.
-Object.assign(commands, appDataCommands, extraCommands, byteCommands, findCommands, chmodCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, agentsCommands, vtCommands)
+Object.assign(commands, appDataCommands, extraCommands, byteCommands, findCommands, chmodCommands, mountCommands, nanoCommands, unzipCommands, tarCommands, skillsCommands, widgetCommands, agentsCommands, vtCommands)
 // Menno's CV in the terminal: only on his CV page (src/os/cvMode.ts).
 if (!cvMode()) for (const name of ['cv', 'projects', 'contribs', 'recent', 'stars', 'contact', 'heatmap', 'minecraft', 'mc', 'headlines']) delete commands[name]
 // /bin lists them all, like a real one (hidden easter eggs included; not the odd names like :q).

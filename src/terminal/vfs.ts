@@ -1,3 +1,4 @@
+import { defaultSourceEntries, widgetSDK } from '../widgets/platform/defaults'
 import { AGENTS_MD } from '../data/agentsPrompt'
 import { GAME_CATALOG } from '../apps/games/catalog'
 import { contributions, education, experience, headlines, hobbies, profile, projects, skills } from '../data/profile'
@@ -311,7 +312,22 @@ const devNode: DirNode = {
   },
 }
 
+function widgetSources(): DirNode {
+  const root = dir('widgets', [file('SDK.md', widgetSDK)])
+  for (const [path, text] of Object.entries(defaultSourceEntries())) {
+    const parts = path.split('/')
+    let at = root
+    for (const part of parts.slice(0, -1)) {
+      if (!at.children.has(part)) at.children.set(part, dir(part, []))
+      at = at.children.get(part) as DirNode
+    }
+    const name = parts[parts.length - 1]
+    at.children.set(name, { ...file(name, text), ro: true })
+  }
+  return root
+}
 export const root: DirNode = dir('', [
+  dir('usr', [dir('share', [dir('mvlos', [widgetSources()])])]),
   dir('home', [homeNode]),
   // The site's own home, under a second name: with Seafile mounted on ~ (see /etc/fstab), this is
   // where cv.md and projects/ are.

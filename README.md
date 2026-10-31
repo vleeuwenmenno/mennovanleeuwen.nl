@@ -1529,8 +1529,10 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
   whose session ran out gets nothing. A page whose account hasn't turned push on in this browser
   (a visitor, or someone else) unsubscribes one still there. Empires only gives a multiplayer seat
   back for a kept token to the same account.
-- **Signing out** clears that account's space. A session that just ran out doesn't: the page
-  starts again as a visitor and the account's unsynced changes come back when it signs in again.
+- **Signing out** clears account data from its space, retaining migration receipts and any
+  unfinished migration intents to prevent retained legacy widget data from being imported again.
+  A session that just ran out doesn't clear it: the page starts again as a visitor and the
+  account's unsynced changes come back when it signs in again.
 - **Moving in.** The first time a space is used, what the release before spaces kept in plain keys
   moves into it, if the old marker says it was that account's; later writes to those keys (by a
   tab still running the old release) are never read. A visitor signing in brings their synced
@@ -4558,13 +4560,406 @@ right-click menu, and no text selection (except a sticky being edited). Desktop 
 dragged too; Settings → Appearance → Motion turns either off. Several icons dragged at once gather
 in a pile under the pointer with a count badge, like Finder, and fan back out into the arrangement
 they had, moved to where you drop them. Add widgets from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
-Today there are six: **Sticky note** (one of your notes, with checklists you can tick),
+Today there are six built-in kinds, plus **custom widgets** you make yourself (see below): **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that
 device; double-click or the menu opens the full **Weather** app), **Agenda** (Google Calendar and
 CalDAV, see above), **Code inbox**, **Status** (updown.io) and **Minecraft server** (up or not, the
 address to copy, who is on with their heads, and the in-game day and time when RCON is set up; a
 click opens the Minecraft server window).
+
+### Folder-based widget packages
+
+All six built-ins (Weather, Sticky, Agenda, Code inbox, Status and Minecraft) load executable
+source folders through the same verifier, compiler, bounded QuickJS WASM worker and descriptor
+renderer used for user forks. Files, msh and Xed can read immutable defaults at
+`/usr/share/mvlos/widgets/<kind>`: real `manifest.json`, `src/main.js`, `styles/tokens.json`,
+`assets`, `tests` and `README.md`. `/usr/share/mvlos/widgets/SDK.md` describes the scoped SDK.
+These sources produce the layout and checklist transformations; they are not aliases for
+privileged React widget components. Widgets use the Omarchy theme by default; a Sticky's menu
+can opt into **Paper appearance** without changing its saved colour or tilt.
+
+Open **Source** on any widget, or **Widget Workshop** from All apps/Spotlight. Signed in,
+**Clone & edit in Xed** copies the default to `~/.local/share/mvlos/widgets/<kind>` on the backing
+browser store or writable Seafile home. Edit and save `src/main.js`, return to Workshop, choose
+**Build & mock preview**, review the sample output, opt into this instance's data, then
+**Activate built revision**. Source saves never activate. Activation checks that the source still
+matches the built digest. **Rebuild default & preview** uses the same compiler/verifier/loader;
+**Recover previous revision** restores the prior immutable snapshot, including the default on a
+first install. Recovery does not roll back note contents, settings or placement. Installation
+generations reject a stale activation; imported build.json/dist output is ignored and rebuilt.
+Clone retries keep matching bytes, resume missing files and refuse to overwrite edits.
+Guests keep default widgets and their notes, but do not get writable source folders.
+
+### Custom widgets
+
+Besides the six built-ins, anyone signed in (or an agent working in their folders) can make **new**
+widgets from a package folder. Open **Widget Workshop** (Add widget → *New custom widget…*, All apps or
+Spotlight), pick a folder in your browser files or writable Seafile home (default
+`~/.local/share/mvlos/widgets/daily-tally`) and:
+
+1. **New custom widget template** writes a working starter (a daily tally counter that remembers
+   its total) and opens `src/main.js` in Xed. The same starter is a read-only example at
+   `/usr/share/mvlos/widgets/custom-template` and is printed in `SDK.md`.
+2. **Build & mock preview** validates the package and shows it with sample data.
+3. Tick the opt-in and **Activate as new widget**. This makes a new instance (`custom-xxxxxxxx`, an
+   installation record of kind `custom` with the same generation, previous-revision and
+   recovery rules as the built-ins), places it on the desktop and grants that exact revision for
+   this session. Window title, name and a minimum height come from the package manifest.
+
+Custom widgets run through the same loader, verifier, bounded VM and renderer as the built-ins
+(there is no second renderer) and sync through the same account state. They appear in *Add widget*
+(desktop menu, All apps, Spotlight) as long as their installation exists. Closing one only takes it
+off the desktop; add it again from the menu. **Remove this widget** in its Workshop deletes the
+installation (a synced tombstone, so other devices drop it too) and its saved state, after asking.
+The built-in six cannot be removed. At most 12 widget installations can exist per account; removed
+ones free their slot. Hidden/phone-sized screens run nothing, like every widget. A custom widget whose
+installation is missing, unreadable or removed elsewhere stays on the desktop and says so, with a
+button to the Workshop; it is never deleted or replaced by a default.
+
+A custom package has the single optional capability `custom.state`: a small per-widget JSON state of
+at most 4 KiB, read as `input.custom.state` and replaced only by a button event returning
+`{type:'custom.replace', state, expectedRevision}` (refused if the state changed meanwhile or is too
+large). Every package also sees the clock (`input.custom.now`, `input.custom.today`). There is no
+network, notes, other widget data or DOM. As for any fork, a revision never runs until you grant that
+exact revision for that instance in this session; after a reload the widget asks again
+(*Allow this revision…*) and **Pause access** withdraws it. **Reset saved state** in the Workshop
+clears the state. `pnpm check:widget-custom` covers manifest rules, the starter in the VM, the state
+limit and record merge/limits; `pnpm check:widget-custom-ui` runs the whole create, reload, use and remove
+flow in muted Chromium with scratch data.
+
+**Sticky parity.** A Sticky shows the calendar events its note is linked to as the same chips the
+Notebook shows, under the package's own output: click one to open the event in Calendar, × to
+unlink. The chips, the link and unlink actions and the backlinks are drawn and run by the host, so
+package code gets no calendar access. Web launchers dropped on a Sticky are still added to its
+note as Markdown links.
+
+**When something goes wrong.** A widget or Workshop never falls back silently, deletes data or
+reports a success that did not happen; it shows a small banner with the cause and a button:
+*Installed metadata unavailable* (corrupt or missing record) offers **Rebuild default** (opens
+Workshop with the default previewed; activating is still your click) and **Open Source**; a package
+that cannot be verified, a default that fails to build or a render that fails offer **Retry** and
+**Open Source**. In Workshop, an activation that lost a race with another tab or device (*Installation
+changed*) offers **Reload installation state**, which refreshes what Workshop compares against and
+leaves the decision to you; *not synced yet* offers **Retry after sync**; a storage failure says
+the new revision is not saved, that the earlier saved one is intact and offers **Retry saving**;
+the 12-record limit and the 480 KiB budget explain themselves and change nothing. A sync or
+migration problem that keeps widget data back (original data is retained) shows **Retry sync**;
+nothing is ever chosen for you.
+
+#### Agents making widgets (`widget`)
+
+Agents make widgets through the `terminal` tool they already have: there are no extra server tools.
+The msh command `widget` (also usable by hand in the terminal; `help --json` and `terminal_capabilities`
+list it) works on a package folder in the work folder, while `write_file`/`edit_file` write the files with
+their usual hash and read-before-edit rules:
+
+- `widget docs [full|template]`: the SDK reference an agent needs (workflow, package files, limits,
+  capabilities per widget kind, the `tests/*.json` case format, the descriptor vocabulary and the
+  custom-widget example); `template` prints the starter package's files.
+- `widget list`: installed widgets (id, kind, name, digest, generation) and package folders (a folder with
+  `manifest.json`) up to two levels below the current folder.
+- `widget validate <dir>`: builds the folder exactly as the Workshop does (same `buildPackage`, same
+  limits). Errors name the file and the reason (a file over 32 KiB, more than 48 files, source over 128 KiB,
+  an unsupported file type, bad JSON, an unknown capability) on stderr with exit 1; success prints the manifest
+  summary and the digest.
+- `widget test <dir>`: runs the bounded VM on the mock input, on every button of that view and on every
+  `tests/*.json` case (`{"schema":1,"description","input","event","expect":{"text":[],"absent":[],"mutation":…}}`,
+  `input` merged over the mock input). It prints PASS/FAIL per case, the rendered outline, the runtime error
+  (with the exception's message) or the limit that was hit, and exits 1 on any failure. Cancelling the call
+  stops the VM run.
+- `widget preview <dir>`: `test`, plus a Widget Workshop window on mock data for the user (it refreshes the
+  open one). It never writes installation state.
+- `widget activate <dir> --new | --instance <id> [--generation <n>]`: the only subcommand that changes
+  anything. It always asks the user in the OS's own dialog (package, digest, widget, source folder and the
+  access being granted; Allow or Deny). Deny, Escape, a closed thread or no desktop to ask on: exit 1
+  `activation requires approval` and nothing is written. On Allow the folder and the installation are checked
+  again (changed source or a changed installation is refused as a conflict), then the same
+  `activate` + grant as the Workshop run. `--generation` makes a stale `widget list` a conflict. `--new` takes
+  its instance id from the folder and the digest, so retrying a call whose answer got lost says
+  `already active` and changes nothing (no second widget, no second generation bump, no second dialog);
+  edited source is a new digest, so update an installed widget with `--instance <id>`. Activation needs a
+  signed-in account and is refused in plan mode.
+
+Reads follow the call's policy like `cat` (a folder outside the work folder is refused where it is read;
+browser-stored files are not readable to agents, so agents work in a Seafile folder). Calls run through
+`runAgentCall`, so Stop, closing the thread and `clientDone` cancel them like any terminal call. The server
+treats `widget` as a command that writes no file, so one activation costs one question, the widget dialog.
+`pnpm check:widget-agent` runs the command with synthetic tool calls on an in-memory work folder (every limit
+error, test cases, abort, permissions, denied/approved/retried/conflicting activation);
+`pnpm check:widget-agent-ui` does the whole flow in muted Chromium (template folder, validate, test, preview,
+the approval dialog, the widget on the desktop, retry).
+
+The first SDK accepts JavaScript modules, relative local imports and `@mvlos/widget` descriptors:
+column, row, text, button, native editor, action, link, image, dot, details and card. Styles accept spacing tokens only. No npm packages,
+build hooks, raw HTML/CSS, arbitrary URLs, DOM, fetch, cookies, storage, host objects or generic RPC
+are exposed to packages. Snapshots hash every accepted file, manifest permissions, assets, styles
+and the pinned SDK/QuickJS build identity. Each invocation has 8 MiB heap, 256 KiB stack, a 40 ms
+interrupt deadline, 16 promise jobs and a 3 s worker watchdog; output/render/source limits and
+tab-wide concurrency/rate caps also apply. Saturation waits in a cancellable, round-robin queue
+(8 running, 32 starts/second, at most 256 queued and two queued per instance); it does not
+permanently fail the ninth widget. Invalid input and queue capacity errors are distinct. All VM handles and workers are disposed. The production
+CSP adds `wasm-unsafe-eval` and self-origin workers; JavaScript `unsafe-eval` stays forbidden.
+
+The host owns immediate native note edits, selection, IME, undo, launcher-link drops and list
+continuation. The native editor stays mounted independently of descriptor refresh/failure.
+Package buttons are bound to the exact input revision that produced their displayed labels;
+stale buttons are disabled and stale clicks/results are rejected even before React refreshes.
+Sticky projects at most 64 lines / 8 KiB at a time, with Previous/Next controls and up to 64 task
+buttons. Pages retain complete lines when possible. Oversized lines remain bounded
+and make Unicode-safe progress, including long indentation whose checklist prefix
+would otherwise straddle a byte boundary. All items remain reachable; the editor retains the full note. Packages propose bounded
+`note.edit` ranges (UTF-16 offsets, at most 32 KiB inserted UTF-8), checked against the granted
+window, full source text and revision. Legacy `note.replace` is accepted only for a complete
+small projection. Native notes support 256 KiB UTF-8; existing larger notes remain readable and
+editable without truncation (up to 32 KiB growth per edit). Fork data grants bind account, backing identity, instance and source digest. They are local
+to the live session, never imported from build files or synced approval flags. **Pause access**
+revokes the revision; logout cancels workers and denies stale writes. A reloaded fork needs a fresh local grant. A browser-backed fork arriving on a different browser
+is unavailable until cloned and rebuilt against that browser's own store; its imported UUID is not authority. Weather gets only a forecast projection for a host-selected place:
+search queries come from the trusted user-operated city picker, not package code. Preview uses
+sample data, with no real writes. Domain actions use opaque, presentation-bound handles; packages
+cannot create destinations or send their own strings to clipboard, navigation or provider APIs.
+There is no model forwarding, arbitrary navigation, export or clipboard API.
+
+The four domain packages own their headings, item layout, states, details and summaries in
+`src/main.js`. Trusted brokers project only the granted fields and selected actions:
+
+- **Agenda:** selected/hidden calendars and 1/3/7-day settings; today's due/overdue tasks from
+  visible lists; timed/all-day, live/past and recurring events; meeting links, partial calendar
+  errors and existing linked-note marks. Completion calls the existing task domain, preserving
+  recurrence; opening tasks/events/notes uses their existing app actions. Eight task/event rows
+  per page keep all results reachable without exceeding descriptor budgets.
+- **Code inbox:** reviews, own pull requests and assigned issues, section filters, draft labels,
+  counts and age. Five items per section per page preserve the prior first-page composition and
+  expose later items. Plain click uses the existing Git availability check and provider fallback;
+  modified/middle clicks retain the broker-bound provider destination.
+- **Status:** up/down/paused, uptime, latency, outage details and certificate warnings, with twelve
+  checks per page and fixed check destinations. **Minecraft:** online/offline, server metadata,
+  world clock, twelve player heads/details per page, dimensions/vitals, fixed-address copy feedback
+  and the existing server window. Hover and touch details remain available.
+
+Capabilities distinguish read data from actions (`agenda.act`, `inbox.navigate`,
+`status.navigate`, `minecraft.act`); action capabilities require the matching read capability.
+Resource handles bind account/connection authority, instance, revision and exact displayed input.
+The live installation identity is rechecked synchronously, including equal-generation conflicts.
+The renderer checks current grants and resource type at every interaction. Provider refs,
+credentials and navigation URLs stay outside the VM. Clipboard writes copy only the fixed
+Minecraft address following a user gesture. Shared reads are scoped to account/connection
+identity; visibility/revocation cancels pending reads. Agenda task reads use subscriber-owned
+leases shared with Tasks, Calendar and other live consumers. Hiding/revoking the last owner aborts
+the request and prevents late cache adoption even if a transport ignores abort. Another live app
+keeps its shared request; logout/provider changes cancel old authority and clear its cache.
+Agenda refreshes every five minutes,
+Inbox every two, Status every minute and Minecraft every thirty seconds while eligible.
+Shell visibility owns widget work: putting notes away, covering them with a maximized window,
+minimizing, hiding the document or entering the mobile breakpoint aborts active/queued work and
+pending mutations. Showing them again renders the latest revision. **Use my location** keeps
+coordinates in browser-local memory/storage and syncs only `place: null`; explicit city choices
+still sync. A pending location result after account change cannot write settings or local here.
+Weather refreshes on visibility/resume and every 15 minutes based on forecast age, with one
+cancellable timer/request and no hidden refresh work. Its stable lifecycle identity includes
+the instance, account status/identity, runtime revision and grant epoch: hydration or authority
+changes abort/restart the loop, while ordinary renders do not trigger fetch loops. Results and
+errors are scoped to the same lifecycle.
+
+The SDK build identity is descriptors 1.2. Snapshots from the earlier unreleased 1.0/1.1
+slices need explicit rebuild/preview/activation; they are not silently upgraded or re-granted.
+
+**Canonical state and migration.** `widgets:state:v2` is one versioned envelope containing
+per-config counters/tombstones, placement geometry/tombstones and immutable installation
+revisions/generations. Its presence is the atomic cutover marker. First import waits for successful
+account discovery and complete account-state hydration; failed/offline discovery does not mean
+an empty account. Confirmed guests cut over locally, including servers with sign-in disabled.
+Every accepted edit first enters an account-scoped, per-writer browser journal. Every
+operation has a writer UUID and monotonic sequence. Consumption watermarks commit in the same
+JSON envelope as config/placement/install data and merge by maximum sequence. Every durable canonical
+read/merge/write sequence and receipt cleanup runs inside one origin-wide IndexedDB `readwrite` request
+scope, including server replies, storage-event adoption, startup account transfers and logout
+cleanup. [IndexedDB transaction scheduling](https://w3c.github.io/IndexedDB/#transaction-scheduling)
+excludes overlapping writers even when another tab pauses immediately before native
+`localStorage.setItem`; another pre-write read alone would not provide that guarantee. IndexedDB
+holds no account data here. Its scope supplies mutual exclusion; it does not roll back a
+localStorage write if the transaction later aborts. Receipts precede cleanup, making retry safe.
+Failed writes do not publish their speculative receipts to the in-memory store; journal pruning
+uses only receipts in the stored envelope. Pending operations are included when evaluating each
+new edit, including an edit that returns a field to its earlier value.
+All tabs use this same protocol, with or without Web Locks.
+
+Local UI updates remain optimistic after their journal write succeeds. Explicit installation
+activation requires hydration and waits for its durable canonical result before succeeding.
+Absent/blocked IndexedDB refuses shared canonical writes; durable pending journals remain
+available for recovery. A failed flush gets one retry per caller; background sync retries use
+existing bounded backoff. If localStorage refuses a journal write, the edit is rejected rather
+than acknowledged without recovery. Account guards cancel queued transactions
+on revocation/switch; authorized logout cleanup follows earlier active writers and advances an
+account-space revocation marker so other open tabs cannot recreate cleared state. If storage
+refuses cleanup, authentication is still revoked and the inaccessible copy remains in that
+account's namespace. Ordinary synced stores keep their synchronous persistence behavior.
+Deferred legacy widget transfers bind their intent to the exact source and ownership markers.
+If either changes before the transfer, or an older unbound transfer intent remains, the source
+and intent stay untouched for recovery; they are not attributed to the current account.
+The plain legacy widget envelope and its ownership markers remain in browser storage after a
+successful copy and after logout: older tabs can write them without participating in the gate.
+The account-scoped cutover receipt survives logout and prevents that retained source from being
+imported again. An old `mvlos.owner` marker without an account ID requires an origin-wide,
+durable claim under the storage gate before any legacy account data is imported; the first
+eligible account retains that claim across logout. Conflicting older receipts or an unavailable
+claim store stop the import, and an explicit `mvlos.account` marker takes precedence. Older
+account `moved` flags without an identity-bound intent are ambiguous and prevent automatic
+ownership assignment. Legacy keys come from a marker-checked snapshot and remain in place for
+older tabs. Widget config, placements, installations, desktop/mobile layouts and sticky-note
+content are staged in separate immutable account-scoped keys, never copied over ordinary account
+keys. These snapshots remain account-scoped across logout for recovery, like migration receipts.
+Each snapshot records its source account and ownership markers; an older unbound snapshot blocks
+automatic ownership claims. Its explicit original account can read it when the retained plain
+source still matches; a pending transfer also records a bound snapshot without changing the original.
+Visitor widget and sticky-note dependencies transfer before account cutover, subject to
+account-target precedence.
+Notes use one account-scoped `notes:state:v1` checkpoint for hydration, edits, server
+acknowledgements, storage events and offline reloads. It separates the last server baseline from
+actual unsaved note revisions; an unrelated edit never turns unchanged rows in a stale snapshot
+into dirty notes. Functional edits first read the latest checkpoint and pending records, then
+advance the existing note counters. Every accepted edit writes a unique immutable journal record
+before becoming visible. Only changed notes enter that record. Checkpoint read/merge/write and
+receipt cleanup run under the same IndexedDB gate as widgets; there is no first-edit handoff to
+an ordinary key. A newer server baseline replaces clean old rows, while real dirty edits retain
+the existing per-field merge and final-purge rules. Server acknowledgements consume only revisions
+they actually contain, so an edit made while a request was in flight remains dirty.
+Pending revisions are themselves domain-merged notes for only the already-dirty IDs. Observing
+a terminal server purge converts any surviving pending revision of that note to a tombstone;
+later pruning of the server baseline cannot expose a hidden live component. Unrelated dirty
+notes remain intact. Once acknowledged, a pending tombstone is discharged, and a newer server
+snapshot can remove the clean baseline entry. No separate permanent tombstone ledger is kept.
+
+Every note read collects checkpoint, input fence and immutable journal records, then validates
+their checkpoint revision and key membership again before exposing a projection or applying an
+edit. Startup, storage events, visitor transfer and checkpoint writes use this same read boundary.
+A journal consumed between enumeration and reading causes a bounded retry when its checkpoint or
+receipt proves cleanup. Eight moving snapshots reject the attempt without latching a permanent
+data error; an actual storage exception or unexplained missing record still fails closed. This is
+snapshot validation, not an atomic localStorage read/check/write claim. New checkpoint writes carry
+unique revisions, so a state that changes and changes back cannot evade validation.
+
+Persistence normalization never expires tombstones by wall-clock age. In particular, a purge
+waiting more than 90 days offline still hides its old live server row and remains uploadable.
+An acknowledged tombstone leaves the checkpoint when a newer server snapshot prunes it; aging
+alone cannot invalidate a checkpoint or discard pending deletion evidence.
+
+Before the first note checkpoint, ordinary account notes take precedence over the earlier
+`widget-cache:v2:notes` cache and immutable staged inputs. That first commit waits for migration
+inputs to be resolved; a pending startup transfer resumes when account discovery settles, even
+when an existing account target means no reload was needed. After cutover, those old keys remain
+untouched as recovery inputs, but later old-client writes cannot shadow committed note state.
+An unreadable checkpoint, source or journal fails closed. A rejected journal write rejects the
+edit; a failed checkpoint leaves the admitted journal recoverable across reloads. Admission
+stops at 256 visible pending records (1 MiB per edit). Concurrent admissions can exceed that soft
+count limit and are still replayed and drained. The checkpoint has a 2 MiB limit; receipts cover
+only extant records, not every tab ever opened. Receipt cleanup follows the successful checkpoint
+write, and failed cleanup can retry without replay.
+
+A verified note checkpoint also writes an account-bound `notes:inputs-consumed:v1` fence. It
+closes the old input channel across logout, so an acknowledged, purged and server-pruned note
+cannot return from retained migration sources. The fence keeps a continuation of only the
+initial imported notes still awaiting acknowledgement, using their full merged current values:
+confirmed text, local links, trash/restore clocks and terminal deletion state. It never restores
+the raw component that originally made a note dirty.
+Those unfinished imports remain retryable across logout, even when other imported notes have
+already been acknowledged and pruned. Later ordinary edits are not migration continuations.
+The checkpoint records which notes still belong to this migration; for pre-field checkpoints,
+their unsaved revisions are conservatively treated as unfinished imports on upgrade.
+
+Note checkpoints and journals carry the account-space revocation generation. Logout advances it
+under the gate, repairs the input fence from the verified checkpoint, then clears checkpoint and
+journals while retaining the fence. If the fence write fails, the revoked checkpoint remains as
+consumption proof and a continuation of unfinished imports for the next generation; the old
+source channel stays closed. A failed first checkpoint creates no fence and its authorized
+source can still retry. A non-gated admission paused before its
+native write may leave an old-generation physical record after cleanup, but it cannot replay in
+the new generation or another account. If cleanup itself fails, the retained data stays in that
+account's namespace. Visitor transfer reads the current checkpoint plus admitted journals, so an
+edit survives sign-in even if its visitor tab closed before checkpointing. Ownership checks inspect
+stage evidence even when an older global claim exists; a claim cannot override a later explicit
+owner.
+At canonical cutover the ordinary account value takes precedence over its staged input;
+the canonical write re-reads these inputs inside the storage gate. Conflicting snapshots or
+ambiguous prepared copies stay unresolved. Startup does not save a default window layout while
+migration is unresolved. Other legacy stores retain their existing copy behavior and provenance
+checks; their ordinary writes do not participate in this widget transaction protocol. Separate
+account-scoped copy receipts (up to 256 entries and 1 MiB per source snapshot, retained across
+logout) preserve later local edits and server metadata on retries for those other stores. An older
+partial copy without a receipt can recover when its synced value matches despite changed metadata.
+An unresolved widget transfer
+or startup migration blocks canonical cutover rather than replacing its source with an empty
+envelope, including failures before an intent could be written. Visitor transfers record their
+source and the account target observed at admission; a copied value or preexisting target is
+verified before clearing the intent. An older unbound visitor intent can retry only if no account
+target exists; an existing target stays unresolved for explicit recovery. After a transient storage
+failure, reloading retries the retained source and intent. A successful
+older-marker import reloads the page once so every store reads the claimed account space. A visitor
+cannot import a source marked as belonging to an account.
+Canonical and journal reads distinguish inaccessible storage from absent keys. Legacy inputs
+are read again at hydration, so a transient read failure cannot become an empty cutover. Failed
+hydration reads retry with bounded backoff while preserving the existing data and journals. The
+actual serialized merge read is strict as well; a failed read cannot be treated as an absent state.
+
+Writers store patches rather than stale whole views and never erase another writer's log.
+A late tab or reload cannot reapply an already consumed edit or resurrect a consumed addition.
+A pending addition remapped around a remote tombstone stores a writer-local original-to-target
+identity in the envelope. Later moves/removals use that same target across replay passes and
+reloads; remapped removals beat stale geometry. Original gesture stamps prevent delayed replay
+from gaining a new wall-clock time. Ordinary per-config ordering remains unchanged.
+The log admits at most 1,024 pending operations and replay processes at most 1,024 per pass;
+canonical receipts retain up to 256 writers and 1,024 placement identity mappings.
+Receipts/mappings are never evicted to admit another operation: capacity or conflicting identity
+errors preserve durable data and pending operations for recovery.
+The one-time import preserves IDs, note identities, counters, geometry, overlap, stacking and
+removals from legacy config/placements/installations and desktop/mobile layouts. Legacy records
+remain intact for older clients; later legacy writes cannot overwrite canonical state or resurrect
+removed widgets. Browser source authority still requires this device's store UUID.
+
+Malformed installation metadata stays unavailable until an explicit verified activation repairs it;
+it never selects a default, including records with missing, zero, negative or nonnumeric
+generations. Invalid generations rank below a verified repair; ties merge deterministically.
+Unknown records remain in the envelope and its byte budget.
+Hidden/mobile/minimized, unavailable source/runtime and unknown newer widget kinds never imply
+removal. Only an explicit close records a placement tombstone. Width/content-height sizing,
+regular-window two-axis sizing and the under-720-pixel hide rule stay unchanged. Previous revision
+recovery checks the current generation and active source/digest identity, rejecting conflicting
+newer installations; it never restores older config, placement or note contents. Same-revision
+activation retries reconcile idempotently. Config counters continue past known remote counters,
+and installation activation budgets the complete envelope rather than just package bytes
+(480 KiB, at most twelve new installation records; existing records remain editable).
+
+**Staged gaps.** Calendar link/unlink and backlinks remain in the trusted menu/Notebook. Inline
+Sticky calendar chips and a narrow package calendar operation are still staged. TypeScript/TSX,
+source-defined test execution, broader catalog, executable iframe comparison, conflict UI and
+ClientCalls-based agent source authoring remain the next milestone. Agent browser writes have
+not been broadened. This milestone completes six built-in packages and canonical cutover; it is
+not the final platform release.
+
+`pnpm check:widget-packages` checks verifier/digest/VM attacks and native transaction rules.
+`pnpm check:widget-packages-ui` uses scratch data, synthetic accounts and muted Chromium to prove
+clone/Xed edit/build/mock/activate/recover, native input/IME/undo, stale writes, revocation, weather
+place selection and mobile preservation. `pnpm check:widget-lifecycle` uses fake clocks for
+scheduler fairness/rate limiting/cancellation and forecast age/refresh, plus note paging/edit
+bounds and stale revision fixtures. `pnpm check:widget-review-ui` exercises the seven review
+regressions with synthetic accounts and muted Chromium. Existing widget sync/layout tests cover canonical and legacy fixtures.
+`pnpm check:widget-builtins` executes all six sources and resource-descriptor attack fixtures.
+`pnpm check:widget-builtins-ui` exercises synthetic six-package behavior, source editing in Xed,
+build/mock/activate/recover, action grants, private projections, paging, hidden read cancellation,
+unavailable sources, mobile preservation and explicit removals. `pnpm check:widget-review1-ui` adds real two-tab consumed-journal/reload checks,
+missing-generation repair and shared task-owner hide/close/revocation/logout regressions.
+`pnpm check:widget-review2-ui` pauses native writes in three real tabs, then checks journal
+consumption, later edits, server acknowledgements, remote adoption/storage events, overlapping
+push ownership, remap move/removal/reload, missing Web Locks, denied IndexedDB/localStorage,
+retry/deferred account transfer, cookie account switch and queued logout cleanup.
+`pnpm check:widget-canonical` checks old/new clients, complete/missing/failed hydration, offline edits, CAS conflicts, deterministic
+merges, config counters, placement tombstones, guests and storage denial. `pnpm check:widget-weather-lifecycle` delays `/api/me` and forecast replies to
+check hydration, same-identity renders, runtime changes, grant revocation/re-grant and account
+authority loss/recovery, including stale cancellation. Lifecycle VM tests also exercise checklist
+prefixes at byte boundaries, oversized single lines and exact original edit offsets. Live Seafile and non-Chromium browsers remain
+unverified. Storage denial above is synthetic, including browser API denial before app boot.
+None of the staged migration/platform gaps above are marked complete.
 
 ### Weather
 
@@ -4655,7 +5050,7 @@ made (`create`). List it in [`registry.tsx`](src/widgets/registry.tsx) and it ge
 dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go through
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
 notes. Which widgets are on the desktop, and where, is a set of its own
-([`src/os/widgetPlaces.ts`](src/os/widgetPlaces.ts), synced as `widgets:placed`), not part of the
+([`src/os/widgetPlaces.ts`](src/os/widgetPlaces.ts), the placements projection of `widgets:state:v2`), not part of the
 window layout: signed in, another browser or device shows the same widgets (same ids, so their
 settings apply too), and adding, moving, minimizing or removing one shows up elsewhere on the next
 pull (a refresh, or coming back to the tab). The set merges by widget id, the latest change to
@@ -4665,7 +5060,7 @@ wins with a later change. Taking one off is final: its entry's key goes into a l
 keys, kept for good, so a browser or an old saved layout that still has the widget can't bring it
 back (a key is about 9 bytes, so 20,000 removals are under 200 KB). Putting a sticky back after
 taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync` checks
-these rules in memory. `PORT=5273 node scripts/widgets-sync-e2e.ts` checks migration,
+these rules in memory. `pnpm check:widgets-sync-ui` checks migration,
 cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
 accounts and data; it starts and stops its own server.
 Desktop widgets overlap freely. Dragging, resizing or growing one never pushes another aside;
@@ -4683,9 +5078,9 @@ Their instances, settings and desktop positions remain saved for the return to d
 Chromium using synthetic data. `pnpm check:widget-geometry` checks fitting without a browser.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
-layout by an earlier release move into the set when that layout is loaded or arrives from the
-server or another tab (before a merge of the layouts could drop it) (unless the set already
-has newer entries, or had them and they were removed since). Migrated coordinates have an
+layout by an earlier release move into the canonical set during the one-time, complete account
+hydration import (unless placements have newer entries or removal tombstones). After cutover,
+later legacy window-layout writes are never imported again. Migrated coordinates have an
 unknown-screen marker: they are shown as stored and clamped to fit, without scaling or assigning
 a default spot. Equal change counters prefer a desktop-width source (at least 720 px), then the
 larger width, then a deterministic tie-break. The width of the importing browser is only a

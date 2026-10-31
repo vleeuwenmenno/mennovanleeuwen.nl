@@ -604,6 +604,15 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   as(E.win, () => E.notes.set(['later']))
   await sleep(1200)
   check('storage blocked: after a switch nothing reaches account 2, the tab stops', !JSON.stringify([...stateOf(2)]).includes('later') && E.space.accountFrozen())
+  reset()
+  const retained = JSON.stringify({ value: ['unread-original'], base: 1, dirty: false })
+  storage.set('mvlos.u.1.sync.notes', retained)
+  blocked = true
+  const recovering = await openTab()
+  as(recovering.win, () => recovering.notes.set(['memory-only']))
+  blocked = false
+  as(recovering.win, () => recovering.notes.set(['after-unblock']))
+  check('storage recovers: unread account note is not overwritten by the in-memory fallback', storage.get('mvlos.u.1.sync.notes') === retained)
 }
 
 // --- 11. moving in the release's plain keys, once, and only the account's own ----------------------------
@@ -619,7 +628,7 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   signIn(1)
   const A = await openTab()
   check('moving in: account 1 takes its own', A.notes.get().join() === 'old-release-note' && A.space.accountStorage.get('mvlos.history') === '["ls"]')
-  check('moving in: the plain keys go, the browser’s own stay', !storage.has('mvlos.sync.notes') && !storage.has('mvlos.history') && !storage.has('mvlos.account') && storage.has('mvlos.theme'))
+  check('moving in: ordinary plain keys and ownership marker remain for older tabs', storage.has('mvlos.sync.notes') && storage.has('mvlos.history') && storage.get('mvlos.account') === '1' && storage.has('mvlos.theme'))
   // An old tab writes the plain key again later: never read.
   storage.set('mvlos.sync.notes', JSON.stringify({ value: ['written-by-old-tab'], base: 0, dirty: true }))
   const A2 = await openTab()
@@ -631,12 +640,15 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   reset()
   signIn(0)
   const V = await openTab()
-  as(V.win, () => V.notes.set(['as-a-visitor']))
+  // Visitor migration validates the real Note wire format; the other cases exercise generic
+  // synced-store account isolation with string arrays instead.
+  const visitorNote = { id: 'visitor-note', text: 'as-a-visitor', color: 'yellow', tilt: 0, created: 1, updated: 1 }
+  as(V.win, () => V.notes.set([visitorNote]))
   check('visitor: kept in the visitor space', spaceText(null).includes('as-a-visitor'))
   signIn(1)
   check('visitor: the visitor’s page stops when the browser signs in', !as(V.win, () => V.space.accountGuard()) && V.space.accountFrozen())
   const A = await openTab()
-  check('visitor: the account’s new space starts with the visitor’s notes', A.notes.get().join() === 'as-a-visitor')
+  check('visitor: the account’s new space starts with the visitor’s notes', (A.notes.get() as { id: string; text: string }[]).some(n => n.id === visitorNote.id && n.text === visitorNote.text))
   await sleep(1200)
   check('visitor: and they reach the account', JSON.stringify([...stateOf(1)]).includes('as-a-visitor'))
 }
@@ -667,7 +679,7 @@ const sentTo = (id: number) => requests.filter((q) => q.user === id && !q.refuse
   storage.set('mvlos.gladiator.v1', '{"careers":[]}')
   storage.set('mvlos.empires.mp.last', 'tok')
   await openTab()
-  check('games: old game saves, high scores, Gladiator careers and the Empires player move in', ['gamewin.s-old.empires.campaign', 'highscores.v1', 'gladiator.v1', 'empires.mp.last'].every((k) => storage.has(`mvlos.u.1.${k}`) && !storage.has(`mvlos.${k}`)))
+  check('games: old saves copy into the account while legacy sources remain', ['gamewin.s-old.empires.campaign', 'highscores.v1', 'gladiator.v1', 'empires.mp.last'].every((k) => storage.has(`mvlos.u.1.${k}`) && storage.has(`mvlos.${k}`)))
 }
 
 finish()

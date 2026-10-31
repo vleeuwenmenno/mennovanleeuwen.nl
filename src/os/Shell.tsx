@@ -1,3 +1,4 @@
+import { WidgetVisibility } from '../widgets/platform/visibility'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
 import { dropInTrash, trashOp } from '../data/fileDrop'
@@ -7,6 +8,7 @@ import { filesFor, openWith } from './appDrops'
 import { HOME } from '../terminal/vfs'
 import { whereIs } from '../data/mounts'
 import { widgetDef } from '../widgets/registry'
+import { openWidget } from '../widgets/windows'
 import type { WidgetDef } from '../widgets/types'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
@@ -638,7 +640,7 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
   const style = def.useFrame?.(id)
   const menuItems = def.useMenu?.(id, wm) ?? []
   return (
-    <Window win={w} title={def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
+    <Window win={w} title={def.useTitle?.(id) ?? def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
       {APP_META.widget.render(w)}
     </Window>
   )
@@ -747,6 +749,16 @@ export function Shell() {
     return () => window.removeEventListener('mvlos:open', onOpen)
   }, [wm.open])
 
+  // An agent's `widget activate` puts the widget it made on the desktop (focuses it when it is there already).
+  useEffect(() => {
+    const onWidget = (e: Event) => {
+      const d = (e as CustomEvent<{ kind: string; id: string }>).detail
+      if (d && typeof d.kind === 'string' && typeof d.id === 'string') openWidget(wm, d.kind, d.id)
+    }
+    window.addEventListener('mvlos:open-widget', onWidget)
+    return () => window.removeEventListener('mvlos:open-widget', onWidget)
+  }, [wm])
+
   // A reboot (or powering on again) starts from a clean desk, like a real one.
   useEffect(() => {
     if (power.run > 0) wm.reset()
@@ -839,7 +851,7 @@ export function Shell() {
       <TopBar />
       {/* Icons and windows. On phones this layer scrolls down when windows reach below the
           screen; the top bar, the dock and the wallpaper stay where they are. */}
-      <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
+      <WidgetVisibility value={!hidden && !covered}><div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
         <Desktop />
         <main className="windows">
           {wm.windows.filter((w) => !mobile || w.app !== 'widget').map((w) => (
@@ -849,6 +861,7 @@ export function Shell() {
           <NoteStackSlot />
         </main>
       </div>
+      </WidgetVisibility>
       <SnapPreview />
       <Dock />
       {overlay === 'launchpad' && <Launchpad />}

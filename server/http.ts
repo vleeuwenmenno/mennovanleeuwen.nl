@@ -8,8 +8,9 @@ export const SECURITY = {
   'X-Frame-Options': 'SAMEORIGIN',
   // Browsers ignore this over plain HTTP, so it only bites behind TLS. No includeSubDomains or preload: not every subdomain is known to be HTTPS.
   'Strict-Transport-Security': 'max-age=31536000',
+  // WASM is needed by the bounded widget VM. JavaScript eval remains forbidden.
   // Blocks injected script (inline, eval, other origins) and plugins; nothing else, because the app uses third-party fonts, public APIs, blob/data media and inline styles. Spread SECURITY first: UNTRUSTED and the share page's own policy replace it.
-  'Content-Security-Policy': "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'",
+  'Content-Security-Policy': "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'",
 }
 
 /** The policy of the app's own HTML pages (index.html and its /cv and /play variants). Only the
@@ -19,7 +20,7 @@ export const SECURITY = {
  * <script src> in markup still does not. Browsers that don't know 'strict-dynamic' fall back to
  * 'self'. A nonce is only good for the response that carried it: never cache these pages shared. */
 export function documentCsp(nonce: string) {
-  return `script-src 'nonce-${nonce}' 'strict-dynamic' 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`
+  return `script-src 'nonce-${nonce}' 'strict-dynamic' 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`
 }
 
 /** For file bytes passed through from Seafile: never rendered as a page of this site, even when

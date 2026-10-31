@@ -24,6 +24,9 @@ const FOLDERS = ['/Desktop', '/Documents', '/Downloads', '/Music', '/Pictures', 
 
 let db: IDBDatabase | null = null
 let owner: number | null = null
+let storeUUID: string | null = null
+/** Backing identity; never inferred from the mount label or a home path. */
+export const browserStoreIdentity = () => state === 'ready' && owner !== null && storeUUID ? { account: owner, storeUUID } : null
 let state: 'off' | 'loading' | 'ready' | 'error' = 'off'
 /** Settles once the account is known and its store (or none) is open: until then nobody can tell. */
 let settleFirst: () => void = () => {}
@@ -124,6 +127,15 @@ async function load(userId: number) {
   const opened = await openDb(userId)
   if (owner !== userId) return opened.close()
   db = opened
+  const identityTx = opened.transaction(BLOBS, 'readwrite')
+  const identityStore = identityTx.objectStore(BLOBS)
+  const identityKey = '\0mvlos-store-uuid'
+  const previous = await result(identityStore.get(identityKey))
+  const uuid = typeof previous === 'string' ? previous : crypto.randomUUID()
+  if (!previous) identityStore.put(uuid, identityKey)
+  await done(identityTx)
+  if (owner !== userId) return
+  storeUUID = uuid
   nodes.clear()
   children.clear()
   texts.clear()
@@ -146,6 +158,7 @@ function openFor(userId: number | null) {
   owner = userId
   db?.close()
   db = null
+  storeUUID = null
   nodes.clear()
   children.clear()
   texts.clear()

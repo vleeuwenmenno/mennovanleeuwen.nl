@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from 'react'
 import { api, getAccount, subscribeAccount } from './account'
-import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT } from './accountSpace'
+import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT, TAB_REVOCATION, SPACE, waitAccountSpace, widgetLegacyStage, widgetMigrationUnresolved, WIDGET_NOTE_CACHE_KEY } from './accountSpace'
+import { noteReplica, NoteStartupPending, NOTE_STATE_KEY, NOTE_PENDING_PREFIX, parseNoteMeta } from './notePersistence'
+import type { Note } from '../data/noteModel'
 
 // State that follows the user between devices: notes, window layouts, desktop icons, launchers,
 // dock order. Every store keeps its value in localStorage, so visitors get it per browser.
@@ -26,6 +28,19 @@ import { accountFrozen, accountGuard, accountKey, accountStorage, TAB_ACCOUNT } 
 type Meta<T> = { value: T; /** server version this value is based on */ base: number; /** changed since */ dirty: boolean }
 type Remote = { value: unknown; updatedAt: number }
 
+/** A successful whole-account read, including keys absent from the account. Unlike onSynced,
+ * this does not require a key to have a server version. Consumers can atomically migrate keys
+ * only after every existing store has reconciled. A failed/offline read never establishes it. */
+export type SyncedHydration = Readonly<Record<string, Remote>>
+let hydration: SyncedHydration | null = null
+const hydrationListeners = new Set<(snapshot: SyncedHydration) => void>()
+export const getSyncedHydration = () => hydration
+export function onSyncedHydration(l: (snapshot: SyncedHydration) => void) {
+  hydrationListeners.add(l)
+  if (hydration) l(hydration)
+  return () => { hydrationListeners.delete(l) }
+}
+
 export type Synced<T> = {
   key: string
   get: () => T
@@ -36,11 +51,17 @@ export type Synced<T> = {
   onRemote: (l: (v: T) => void) => () => void
   /** Whether this browser's copy was ever saved to or loaded from the account. */
   everSynced: () => boolean
+  /** Wait for serialized durable persistence, when configured. */
+  flush?: () => Promise<void>
+  /** Request a durable pass even when no optimistic value changed (serialized stores only). */
+  persist?: () => Promise<void>
   /** Called after account metadata is established, after any remote value callbacks. */
   onSynced: (l: () => void) => () => void
 }
 
 type Internal = Synced<unknown> & {
+  verify?: () => void
+  reconcile?: (remote: Remote | undefined) => void
   meta: () => Meta<unknown>
   adopt: (r: Remote, dirty?: boolean, notify?: boolean) => void
   pushed: (updatedAt: number, sent: unknown) => void
@@ -65,17 +86,22 @@ if (typeof window !== 'undefined') window.addEventListener('mvlos:forget', () =>
 const frozen = () => forgetting || accountFrozen()
 /** The store's key as written before account spaces (accountStorage puts it in this tab's space). */
 const storageKey = (key: string) => `mvlos.sync.${key}`
+class NoteCacheReadError extends Error {}
 
-function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (v: unknown) => T): Meta<T> {
+function readMeta<T>(key: string, fallback: T, legacyKey?: string, normalize?: (v: unknown) => T, strict = false, onStage?: () => void, onFailure?: (error: unknown) => void): Meta<T> {
   try {
-    const raw = accountStorage.get(storageKey(key))
-    if (raw) {
+    let raw = strict || key === 'notes' ? accountStorage.getStrict(storageKey(key)) : accountStorage.get(storageKey(key))
+    if (raw === null) { raw = widgetLegacyStage(storageKey(key)); if (raw !== null) onStage?.() }
+    if (raw !== null) {
       const m = JSON.parse(raw) as Meta<unknown>
+      if (key === 'notes' && !Array.isArray(m?.value)) throw new NoteCacheReadError('Widget notes unreadable')
       return { value: normalize ? normalize(m.value) : (m.value as T), base: m.base ?? 0, dirty: !!m.dirty }
     }
-    const legacy = legacyKey && accountStorage.get(legacyKey)
+    const legacy = legacyKey && (strict ? accountStorage.getStrict(legacyKey) : accountStorage.get(legacyKey))
     if (legacy) return { value: normalize ? normalize(JSON.parse(legacy)) : (JSON.parse(legacy) as T), base: 0, dirty: true }
-  } catch {
+  } catch (error) {
+    if (strict) throw error
+    onFailure?.(error)
     /* fall back */
   }
   return { value: fallback, base: 0, dirty: false }
@@ -92,11 +118,29 @@ export function synced<T>(
     yieldWhenNew?: boolean
     /** Merge what another tab saved into this tab's value (with `merge`) right before saving. */
     mergeTabs?: boolean
+    /** A failed canonical merge must preserve the durable copy and pending operation journal. */
+    preserveOnMergeError?: boolean
+    /** Canonical stores serialize every durable write, including remote metadata updates. */
+    serialize?: <R>(run: () => R) => Promise<R>
+    /** Both hooks run synchronously inside serialize, never during optimistic admission. */
+    beforeRead?: () => void
+    prepare?: (value: T) => T
+    afterPersist?: (value: T) => void
     /** Sees every newer value from the server or another tab before any merge can drop it. */
     onIncoming?: (remote: unknown) => void
   } = {},
 ): Synced<T> {
-  let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize)
+  let stageOnly = false, noteReadError = false, noteMemoryFallback = false
+  const noteFailure = (error: unknown) => {
+    if (key !== 'notes') return
+    noteReadError = true
+    // Fully blocked browser storage still permits ordinary notes in memory. A specific unreadable
+    // snapshot/cache must never be mistaken for an empty store and overwritten.
+    if (!(error instanceof NoteCacheReadError) && !(error instanceof Error && error.message.startsWith('Widget migration snapshot'))) {
+      try { Object.keys(localStorage) } catch { noteMemoryFallback = true }
+    }
+  }
+  let meta = readMeta(key, fallback, opts.legacyKey, opts.normalize, false, () => { stageOnly = true }, noteFailure)
   /** The server's copy at a version, as last sent or received here (a save of the same is skipped). */
   let known: { base: number; json: string } | null = null
   /** A copy marked saved is the server's at its base. */
@@ -112,27 +156,66 @@ export function synced<T>(
   }
   const emit = () => listeners.forEach((l) => l())
   const normalize = (v: unknown) => (opts.normalize ? opts.normalize(v) : (v as T))
-  const save = () => {
+  let persistence: Promise<void> = Promise.resolve()
+  const serialized = (run: () => void) => {
+    const task = persistence.catch(() => {}).then(() => opts.serialize!(() => {
+      if (frozen() || !accountGuard()) throw new Error('Widget persistence cancelled: account authority changed')
+      run()
+    }))
+    persistence = task
+    void task.catch(reportSyncFailure)
+  }
+  const saveNow = () => {
     if (frozen() || !accountGuard()) return
+    if (noteReadError) {
+      if (noteMemoryFallback) return // Storage may recover: never overwrite a value we could not read.
+      throw new Error('Widget note storage unavailable; reload to retry')
+    }
+    if (stageOnly) {
+      // Sync bookkeeping must not materialize a staged input into an ordinary shared key.
+      // If another tab established that key, it is the account's authoritative value.
+      const actual = accountStorage.getStrict(storageKey(key))
+      if (actual === null) return
+      const stored = JSON.parse(actual) as Meta<unknown>
+      if (key === 'notes' && !Array.isArray(stored?.value)) throw new NoteCacheReadError('Widget notes unreadable')
+      meta = { value: normalize(stored.value), base: stored.base ?? 0, dirty: !!stored.dirty }
+      stageOnly = false
+      learn(); emit(); remoteListeners.forEach(l => l(meta.value)); emitSynced()
+      return
+    }
+    opts.beforeRead?.()
     let others = false
+    // Preparation may produce receipts. Keep them speculative until the write succeeds.
+    let candidate = meta
     // Another tab's save this tab hasn't heard of yet: merged in first.
-    const raw = opts.mergeTabs && opts.merge ? accountStorage.get(storageKey(key)) : null
+    const raw = opts.mergeTabs && opts.merge ? (opts.serialize || key === 'notes' ? accountStorage.getStrict(storageKey(key)) : accountStorage.get(storageKey(key))) : null
     if (raw !== null)
       try {
         const stored = JSON.parse(raw) as Meta<unknown>
+        if (key === 'notes' && !Array.isArray(stored?.value)) throw new NoteCacheReadError('Widget notes unreadable')
         const theirs = normalize(stored.value)
-        const merged = opts.merge!(meta.value, theirs)
-        others = JSON.stringify(merged) !== JSON.stringify(meta.value)
-        const base = Math.max(meta.base, stored.base ?? 0)
+        const merged = opts.merge!(candidate.value, theirs)
+        others = JSON.stringify(merged) !== JSON.stringify(candidate.value)
+        const base = Math.max(candidate.base, stored.base ?? 0)
         // Unsaved only for what is unsaved here, or what the stored copy brought that wasn't saved
         // yet. Not for the stored copy's flag alone: that is often this tab's own earlier write
         // (or another tab's copy of it), and taking it in again after every save kept both tabs
         // saving the same value to the server forever.
-        meta = { value: others ? merged : meta.value, base, dirty: meta.dirty || (!!stored.dirty && others) || (base > meta.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
-      } catch {
+        candidate = { value: others ? merged : candidate.value, base, dirty: candidate.dirty || (!!stored.dirty && others) || (base > candidate.base && JSON.stringify(merged) !== JSON.stringify(theirs)) }
+      } catch (error) {
+        if (opts.preserveOnMergeError || key === 'notes') throw error
         /* not readable: written over */
       }
-    accountStorage.set(storageKey(key), JSON.stringify(meta))
+    if (opts.prepare) {
+      const value = opts.prepare(candidate.value)
+      if (JSON.stringify(value) !== JSON.stringify(candidate.value)) { candidate = { ...candidate, value, dirty: true }; others = true }
+    }
+    const durable = candidate
+    const saved = accountStorage.set(storageKey(key), JSON.stringify(durable))
+    if (opts.serialize && !saved) throw new Error('Widget storage write refused; pending changes retained')
+    meta = candidate
+    if (saved) opts.afterPersist?.(durable.value)
+    if (opts.prepare && meta.dirty) schedulePush(key)
     // Another tab's changes came along: show them, as when they arrive by themselves.
     if (others) {
       emit()
@@ -140,15 +223,38 @@ export function synced<T>(
     }
   }
 
+  let saveQueued: object | undefined
+  let retrySave = false
+  const save = () => {
+    if (!opts.serialize) return saveNow()
+    if (saveQueued) return
+    const ticket = {}
+    saveQueued = ticket
+    serialized(() => { saveQueued = undefined; saveNow(); retrySave = false })
+    void persistence.catch(() => { retrySave = true }).finally(() => {
+      if (saveQueued === ticket) saveQueued = undefined
+    })
+  }
+  const flush = async () => {
+    // One bounded retry per caller. Permanent storage denial surfaces as an error, while a
+    // transient denial can recover without requiring another user edit.
+    if (retrySave && !saveQueued) save()
+    for (;;) { const prior = persistence; await prior; if (prior === persistence) return }
+  }
+
   const store: Synced<T> = {
     key,
+    ...(opts.serialize ? { flush, persist: async () => { save(); await flush() } } : {}),
     get: () => meta.value,
     set(next) {
+      if (noteReadError && !noteMemoryFallback) throw new Error('Widget note storage unavailable; reload to retry')
       const value = typeof next === 'function' ? (next as (v: T) => T)(meta.value) : next
       // Nothing changed (the same value made again): nothing to save or send.
       if (value === meta.value || JSON.stringify(value) === JSON.stringify(meta.value)) return
+      const before = meta, wasStageOnly = stageOnly
       meta = { ...meta, value, dirty: true }
-      save()
+      stageOnly = false
+      try { save() } catch (error) { meta = before; stageOnly = wasStageOnly; throw error }
       emit()
       emitSynced()
       schedulePush(key)
@@ -174,33 +280,38 @@ export function synced<T>(
 
   const internal: Internal = {
     ...(store as Synced<unknown>),
+    ...(key === 'notes' ? { verify: () => { if (noteReadError) throw new Error('Widget note storage unavailable; reload to retry') } } : {}),
     meta: () => meta,
     adopt(r, dirty = false, notify = true) {
+      const before = meta, previousKnown = known
       meta = { value: normalize(r.value), base: r.updatedAt, dirty }
       if (!dirty) known = { base: r.updatedAt, json: JSON.stringify(meta.value) }
-      save()
+      try { save() } catch (error) { meta = before; known = previousKnown; throw error }
       emit()
       if (notify) remoteListeners.forEach((l) => l(meta.value))
       emitSynced()
     },
     pushed(updatedAt, sent) {
+      const before = meta, previousKnown = known
       known = { base: updatedAt, json: JSON.stringify(sent) }
       // Still dirty if it changed while the request was out.
       meta = { ...meta, base: updatedAt, dirty: meta.value !== sent && JSON.stringify(meta.value) !== known.json }
-      save()
+      try { save() } catch (error) { meta = before; known = previousKnown; throw error }
       emitSynced()
       if (meta.dirty) schedulePush(key)
     },
     sameAsServer: () => !!known && known.base === meta.base && known.json === JSON.stringify(meta.value),
     clean() {
+      const before = meta
       meta = { ...meta, dirty: false }
-      save()
+      try { save() } catch (error) { meta = before; throw error }
       emitSynced()
     },
     reset() {
       known = null
       meta = { value: fallback, base: 0, dirty: false }
-      accountStorage.remove(storageKey(key))
+      if (opts.serialize) serialized(() => accountStorage.remove(storageKey(key)))
+      else accountStorage.remove(storageKey(key))
       emit()
     },
     merge: opts.merge as Internal['merge'],
@@ -215,15 +326,74 @@ export function synced<T>(
   if (typeof window !== 'undefined')
     window.addEventListener('storage', (e) => {
       if (e.key !== accountKey(storageKey(key)) || frozen()) return
-      const before = meta.value
-      meta = readMeta(key, fallback, undefined, opts.normalize)
-      learn()
-      if (e.newValue !== null) opts.onIncoming?.(meta.value)
-      emit()
-      if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach((l) => l(meta.value))
-      emitSynced()
+      const receive = () => {
+        const before = meta.value
+        let incomingStage = false
+        const incoming = readMeta(key, fallback, undefined, opts.normalize, !!opts.serialize, () => { incomingStage = true }, noteFailure)
+        if (noteReadError) return
+        // A storage notification must not discard this tab's unpersisted optimistic edits.
+        if (opts.serialize && meta.dirty && opts.merge) {
+          const value = opts.merge(meta.value, incoming.value)
+          meta = { value, base: Math.max(meta.base, incoming.base), dirty: JSON.stringify(value) !== JSON.stringify(incoming.value) || incoming.dirty }
+        } else meta = incoming
+        stageOnly = incomingStage
+        learn()
+        if (e.newValue !== null) opts.onIncoming?.(meta.value)
+        emit()
+        if (JSON.stringify(meta.value) !== JSON.stringify(before)) remoteListeners.forEach(l => l(meta.value))
+        emitSynced()
+      }
+      if (opts.serialize) serialized(receive)
+      else receive()
     })
 
+  return store
+}
+
+/** Notes have a single replica protocol; they never switch to the generic whole-value writer. */
+export function syncedNotes(): Synced<Note[]> {
+  const listeners = new Set<() => void>(), remoteListeners = new Set<(notes: Note[]) => void>(), syncedListeners = new Set<() => void>()
+  const fallback = () => {
+    if (widgetMigrationUnresolved()) throw new NoteStartupPending('Note migration incomplete; original data retained')
+    const raw = accountStorage.getStrict('mvlos.sync.notes') ?? accountStorage.getStrict(WIDGET_NOTE_CACHE_KEY) ?? widgetLegacyStage('mvlos.sync.notes')
+    return raw === null ? { value: [], base: 0, dirty: false } : parseNoteMeta(raw)
+  }
+  const replica = noteReplica(SPACE, TAB_REVOCATION, () => !frozen() && accountGuard() && localStorage.getItem(accountKey('mvlos.revocation:v1')) === TAB_REVOCATION, fallback, () => {
+    listeners.forEach(l => l())
+    remoteListeners.forEach(l => l(replica.get().value))
+    if (replica.get().base > 0) syncedListeners.forEach(l => l())
+    if (replica.get().dirty) schedulePush('notes')
+  }, reportSyncFailure)
+  const store: Synced<Note[]> = {
+    key: 'notes', get: () => replica.get().value,
+    set(next) { try { replica.set(next) } catch (error) { reportSyncFailure(error); throw error } },
+    subscribe(l) { listeners.add(l); return () => { listeners.delete(l) } },
+    use: () => useSyncExternalStore(store.subscribe, store.get),
+    onRemote(l) { remoteListeners.add(l); return () => { remoteListeners.delete(l) } },
+    everSynced: () => replica.get().base > 0,
+    onSynced(l) { syncedListeners.add(l); if (store.everSynced()) l(); return () => { syncedListeners.delete(l) } },
+    flush: replica.flush, persist: async () => { replica.receive(); await replica.flush() },
+  }
+  const internal: Internal = {
+    ...(store as Synced<unknown>), meta: replica.get, verify: replica.verify,
+    reconcile(remote) {
+      replica.receive(remote)
+      // An offline checkpoint can already be dirty when this tab starts. Even an absent
+      // server key must schedule its upload, without requiring a new visible edit first.
+      void replica.flush().then(() => { if (replica.get().dirty) schedulePush('notes') }, reportSyncFailure)
+    },
+    adopt: remote => replica.receive(remote), pushed: (updatedAt, value) => replica.receive({ value, updatedAt }),
+    sameAsServer: () => !replica.get().dirty, clean: () => {}, reset: replica.reset,
+    normalize: value => value,
+  }
+  stores.set('notes', internal)
+  void waitAccountSpace().then(() => { try { replica.verify() } catch (error) { reportSyncFailure(error) } })
+  if (typeof window !== 'undefined') window.addEventListener('storage', event => {
+    if (frozen() || !accountGuard()) return
+    if (event.key === accountKey(NOTE_STATE_KEY) || event.key?.startsWith(accountKey(NOTE_PENDING_PREFIX))) {
+      try { replica.refresh() } catch (error) { reportSyncFailure(error) }
+    }
+  })
   return store
 }
 
@@ -239,9 +409,19 @@ export type SyncStatus = { state: 'local' | 'syncing' | 'synced' | 'error'; at: 
 let status: SyncStatus = { state: 'local', at: 0 }
 const statusListeners = new Set<() => void>()
 const setStatus = (s: SyncStatus) => {
+  // A different store's network activity cannot make an unreadable note cache look healthy.
+  // Such a store remains read-only until reload; keep the failure visible for that lifetime.
+  if (s.state === 'syncing' || s.state === 'synced') for (const store of stores.values()) {
+    try { store.verify?.() } catch (error) {
+      s = { state: 'error', at: status.at, error: error instanceof Error ? error.message : 'State storage unavailable' }
+      break
+    }
+  }
   status = s
   statusListeners.forEach((l) => l())
 }
+/** A local canonical-state failure is still a sync failure; keep the durable copy for retry. */
+export const reportSyncFailure = (error: unknown) => setStatus({ state: 'error', at: status.at, error: error instanceof Error ? error.message : 'State synchronization failed' })
 export const getSyncStatus = () => status
 export const subscribeSyncStatus = (l: () => void) => {
   statusListeners.add(l)
@@ -324,6 +504,16 @@ async function push(key: string) {
   }
   const wait = backoff(key)
   if (wait > 0) return schedulePush(key, wait)
+  if (s.flush) {
+    try { await s.flush() } catch (error) {
+      paceOf(key).errors = Math.min(paceOf(key).errors + 1, 16)
+      reportSyncFailure(error)
+      return schedulePush(key, 1000)
+    }
+  }
+  // Another timer may have reached this await while persistence was blocked in another tab.
+  // Recheck ownership after the await so only one request can claim this store.
+  if (frozen() || !accountGuard() || inFlight.has(key)) return
   const { value, base } = s.meta()
   const pace = paceOf(key)
   counted(key)
@@ -336,6 +526,7 @@ async function push(key: string) {
     pace.errors = 0
     if (r.conflict) reconcile(s, r)
     else s.pushed(r.updatedAt, value)
+    if (s.flush) await s.flush()
     setStatus({ state: 'synced', at: Date.now() })
   } catch (e) {
     pace.errors = Math.min(pace.errors + 1, 16)
@@ -350,6 +541,7 @@ async function push(key: string) {
 }
 
 function reconcile(s: Internal, remote: Remote | undefined) {
+  if (s.reconcile) { s.reconcile(remote); return }
   const local = s.meta()
   if (!remote) {
     if (local.dirty) schedulePush(s.key, 0)
@@ -378,10 +570,16 @@ export function pullAll(): Promise<void> {
   lastPull = Date.now()
   setStatus({ state: 'syncing', at: status.at })
   pulling = api<Record<string, Remote>>('/api/state')
-    .then((remote) => {
+    .then(async (remote) => {
       if (frozen() || !accountGuard()) return
-      for (const s of stores.values()) reconcile(s, remote[s.key])
-      setStatus({ state: 'synced', at: Date.now() })
+      for (const s of stores.values()) { s.verify?.(); reconcile(s, remote[s.key]) }
+      await Promise.all([...stores.values()].flatMap(s => s.flush ? [s.flush()] : []))
+      if (frozen() || !accountGuard()) return
+      hydration = remote
+      hydrationListeners.forEach((l) => l(remote))
+      await Promise.all([...stores.values()].flatMap(s => s.flush ? [s.flush()] : []))
+      if (frozen() || !accountGuard()) return
+      if (status.state !== 'error') setStatus({ state: 'synced', at: Date.now() })
     })
     .catch((e: Error) => setStatus({ state: 'error', at: status.at, error: e.message }))
     .finally(() => (pulling = null))
@@ -396,6 +594,7 @@ export function startSync() {
     if (now === was) return
     if (now === 'user') void pullAll()
     if (was === 'user' && now === 'anon') {
+      hydration = null
       for (const s of stores.values()) s.reset()
       setStatus({ state: 'local', at: 0 })
     }
@@ -423,8 +622,13 @@ export function startSync() {
       // The server's copy, as far as this tab knows, unless a save is still out: then the server
       // may be about to hold that save's value instead (a change undone meanwhile), so send it.
       if (!s || !s.meta().dirty || (!inFlight.has(key) && s.sameAsServer())) continue
-      const { value, base } = s.meta()
-      fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
+      const send = () => {
+        if (frozen() || !accountGuard()) return
+        const { value, base } = s.meta()
+        fetch(`/api/state/${encodeURIComponent(key)}`, { method: 'PUT', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MvL-Account': TAB_ACCOUNT }, body: JSON.stringify({ value, base }) }).catch(() => {})
+      }
+      if (s.flush) void s.flush().then(send, reportSyncFailure)
+      else send()
     }
   })
   // Back from the back/forward cache: the page runs on, so what it hadn't saved is saved now

@@ -55,7 +55,7 @@ if (!log.includes('ready')) throw new Error(`vite did not start:\n${log}`)
 const api = (u: typeof U1, p: string, init: { method?: string; json?: unknown } = {}) =>
   fetch(origin + p, { method: init.method ?? 'GET', headers: { Cookie: `mvlos_sid=${u.apiSid}`, Origin: origin, 'Content-Type': 'application/json', 'X-MvL-Account': String(u.id) }, body: init.json === undefined ? undefined : JSON.stringify(init.json) }).then((r) => r.json())
 const serverWidgets = async (u = U1) => {
-  return ((await api(u, '/api/state'))['widgets:placed']?.value?.places ?? {}) as Record<string, { id: string; kind: string; x: number; y: number }>
+  return ((await api(u, '/api/state'))['widgets:state:v2']?.value?.placements?.places ?? {}) as Record<string, { id: string; kind: string; x: number; y: number }>
 }
 
 // --- browsers -----------------------------------------------------------------------------------
@@ -79,7 +79,7 @@ const shown = (page: P) =>
   page.eval<{ ids: string[]; titles: string[]; rects: { x: number; y: number }[] }>(`(() => {
     const els = [...document.querySelectorAll('.window[data-app="widget"]')]
     let set = {}
-    try { set = JSON.parse(localStorage.getItem(((document.cookie.match(/mvlos_uid=(\\d+)/) || [])[1] ? 'mvlos.u.' + document.cookie.match(/mvlos_uid=(\\d+)/)[1] + '.' : 'mvlos.visitor.') + 'sync.widgets:placed') || '{}').value.places || {} } catch {}
+    try { set = JSON.parse(localStorage.getItem(((document.cookie.match(/mvlos_uid=(\\d+)/) || [])[1] ? 'mvlos.u.' + document.cookie.match(/mvlos_uid=(\\d+)/)[1] + '.' : 'mvlos.visitor.') + 'sync.widgets:state:v2') || '{}').value.placements.places || {} } catch {}
     return { ids: Object.values(set).map((p) => p.id).sort(), titles: els.map((e) => e.getAttribute('aria-label')).sort(), rects: els.map((e) => { const r = e.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y) } }) }
   })()`)
 const count = async (page: P) => (await page.eval<number>(`document.querySelectorAll('.window[data-app="widget"]').length`))
@@ -201,7 +201,7 @@ try {
     await refocus(A)
     s = await shown(A)
     check('A after refocus: the removed widget is gone', !s.titles.includes('Code inbox') && s.titles.length === 2, s)
-    const aMoved = await A.eval<{ x: number; y: number } | null>(`(() => { const v = JSON.parse(localStorage.getItem(((document.cookie.match(/mvlos_uid=(\\d+)/) || [])[1] ? 'mvlos.u.' + document.cookie.match(/mvlos_uid=(\\d+)/)[1] + '.' : 'mvlos.visitor.') + 'sync.widgets:placed')).value.places; const p = v[${JSON.stringify(mc?.id ?? '')}]; return p ? { x: p.x, y: p.y } : null })()`)
+    const aMoved = await A.eval<{ x: number; y: number } | null>(`(() => { const v = JSON.parse(localStorage.getItem(((document.cookie.match(/mvlos_uid=(\\d+)/) || [])[1] ? 'mvlos.u.' + document.cookie.match(/mvlos_uid=(\\d+)/)[1] + '.' : 'mvlos.visitor.') + 'sync.widgets:state:v2')).value.placements.places; const p = v[${JSON.stringify(mc?.id ?? '')}]; return p ? { x: p.x, y: p.y } : null })()`)
     check('A after refocus: the moved widget has its new place', !!mc && aMoved?.x === mc.x && aMoved?.y === mc.y, { aMoved, mc })
     // 4. Refresh A: the removed widget stays removed.
     await load(A)
@@ -286,7 +286,7 @@ try {
   await load(D)
   // A sticky entry can arrive well before its note. It must remain in the synced set,
   // hide its whole frame, and reappear when the independently synced note arrives.
-  await D.eval(`import('/src/os/widgetPlaces.ts').then(m => m.importWidgets([{ id: 'delayed-note', kind: 'sticky', x: 500, y: 200, w: 260, h: 240, vw: 1400, vh: 900 }]))`)
+  await D.eval(`import('/src/os/widgetPlaces.ts').then(m => m.placeWidgets([{ id: 'delayed-note', kind: 'sticky', x: 500, y: 200, w: 260, h: 240, vw: 1400, vh: 900 }]))`)
   await sleep(2200) // Longer than the removed 1.5 s auto-close timer.
   const delayedState = () => D.eval(`import('/src/os/widgetPlaces.ts').then(m => ({ present: !!m.widgetPlaces.get().places['delayed-note'], removed: m.widgetPlaces.get().removed }))`)
   check('delayed note: missing contents do not remove the widget', (await delayedState()).present)
@@ -294,8 +294,11 @@ try {
   const deliverNote = async (extra: Record<string, unknown> = {}) => {
     const note = { id: 'delayed-note', text: 'Arrived after widget', color: 'yellow', tilt: 0, created: Date.now(), updated: Date.now(), edited: Date.now(), ...extra }
     await D.eval(`(() => {
-      const key = 'mvlos.visitor.sync.notes'
-      const value = JSON.stringify({ value: [${JSON.stringify(note)}], base: 0, dirty: true })
+      // Deliver an independently admitted edit using the current note protocol. Retained
+      // ordinary keys belong to older clients and cannot shadow a checkpoint after cutover.
+      const generation = localStorage.getItem('mvlos.visitor.revocation:v1')
+      const key = 'mvlos.visitor.notes:pending:v1:' + encodeURIComponent(generation ?? 'initial') + ':' + crypto.randomUUID()
+      const value = JSON.stringify({ generation, changes: [${JSON.stringify(note)}] })
       localStorage.setItem(key, value)
       window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }))
     })()`)
@@ -310,7 +313,7 @@ try {
 
   // Legacy coordinates belong to an unknown original viewport: never scale or use a
   // phone-created widget's default position when displaying them on a desktop.
-  await D.eval(`import('/src/os/widgetPlaces.ts').then(m => m.importWidgets([{ id: 'unknown-screen', kind: 'status', x: 700, y: 250, w: 280, h: 220, vw: 390, vh: 800, screenUnknown: true }]))`)
+  await D.eval(`import('/src/os/widgetPlaces.ts').then(m => m.placeWidgets([{ id: 'unknown-screen', kind: 'status', x: 700, y: 250, w: 280, h: 220, vw: 390, vh: 800, screenUnknown: true }]))`)
   await sleep(300)
   check('migration: unknown-screen position is displayed as stored', await D.eval(`[...document.querySelectorAll('.window[data-app="widget"]')].some(e => Math.abs(parseFloat(e.style.left) - 700) < 2 && Math.abs(parseFloat(e.style.top) - 250) < 2)`))
 

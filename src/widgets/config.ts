@@ -1,13 +1,9 @@
 import type { MenuItem } from '../os/ContextMenu'
-import { synced } from '../os/synced'
+import { canonicalConfigs as store } from './platform/canonicalState'
 
 // Per-widget settings (a weather widget's place and units, any widget's tilt), keyed by the
 // widget's id. Kept in this browser, synced when signed in; where the widget sits on the desktop
-// is part of the window layout instead.
-
-type Configs = Record<string, Record<string, unknown>>
-
-const store = synced<Configs>('widgets', {}, { normalize: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Configs) : {}) })
+// lives in the canonical placement set instead.
 
 /** This widget's settings over `defaults`. */
 export function useWidgetConfig<C extends Record<string, unknown>>(id: string, defaults: C): C {
@@ -19,6 +15,15 @@ export const getWidgetConfig = <C extends Record<string, unknown>>(id: string, d
 
 export function setWidgetConfig(id: string, patch: Record<string, unknown>) {
   store.set((all) => ({ ...all, [id]: { ...all[id], ...patch } }))
+}
+
+/** Removes one key from a widget's settings (a custom widget's saved state). */
+export function unsetWidgetConfig(id: string, key: string) {
+  store.set((all) => {
+    if (!all[id] || !(key in all[id])) return all
+    const { [key]: _, ...rest } = all[id]
+    return { ...all, [id]: rest }
+  })
 }
 
 export function dropWidgetConfig(id: string) {

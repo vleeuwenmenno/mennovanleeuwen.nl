@@ -5,6 +5,7 @@ import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
+import { widgetMigrationUnresolved } from './accountSpace'
 import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
@@ -12,7 +13,7 @@ import { opensMaximized } from './windowPrefs'
 import { newTab } from './powerState'
 import { rememberedWorkspace, moveTabWorkspace, startTabWorkspaces, stopTabWorkspaces, tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from './tabWorkspaces'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp' | 'tasks' | 'contacts' | 'photos' | 'mail' | 'weather' | 'git' | 'changelog' | 'about' | 'imagestudio' | 'videostudio'
+export type AppId = 'widgetworkshop' | 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp' | 'tasks' | 'contacts' | 'photos' | 'mail' | 'weather' | 'git' | 'changelog' | 'about' | 'imagestudio' | 'videostudio'
 
 export type WinState = {
   pid: number
@@ -808,6 +809,7 @@ export function WindowManagerProvider({
   const savedEdits = useRef(0)
   const saveNow = useCallback(() => {
     if (stateRef.current.edits === savedEdits.current) return
+    if (widgetMigrationUnresolved()) return
     // Starting with the welcome windows or nothing: the layout saved before stays as it was, for
     // when Last windows is chosen again (and other devices keep theirs).
     if (startupPrefs().windows !== 'last') return
@@ -865,6 +867,7 @@ export function WindowManagerProvider({
     firstPhone.current = state.phone
     showSet(widgetPlaces.get())
   }, [state.phone, showSet])
+  const explicitWidgetCloses = useRef(new Set<string>())
   const lastWidgets = useRef<Map<string, WinState> | null>(null)
   useLayoutEffect(() => {
     const now = new Map<string, WinState>()
@@ -896,6 +899,8 @@ export function WindowManagerProvider({
     for (const id of before.keys()) {
       if (now.has(id)) continue
       applied.current.delete(id)
+      // Runtime discovery, hydration and visibility are not removal authority.
+      if (!explicitWidgetCloses.current.delete(id)) continue
       for (const e of entriesOf(all, id)) remove.push(e.key)
     }
     if (Object.keys(put).length || remove.length) widgetPlaces.set((cur) => changeSet(cur, put, remove))
@@ -961,14 +966,19 @@ export function WindowManagerProvider({
       open,
       openNew,
       close: (pid) => {
+        const finish = () => {
+          const target=stateRef.current.windows.find(w=>w.pid===pid)
+          if(target?.app==='widget'&&target.props.id)explicitWidgetCloses.current.add(target.props.id)
+          dispatch({type:'close',pid})
+        }
         const guard = closeGuards.get(pid)
-        if (!guard) return dispatch({ type: 'close', pid })
+        if (!guard) return finish()
         if (asking.has(pid)) return // its question is already on screen
         asking.add(pid)
         Promise.resolve()
           .then(guard)
           .catch(() => true)
-          .then((ok) => ok && dispatch({ type: 'close', pid }))
+          .then((ok) => ok && finish())
           .finally(() => asking.delete(pid))
       },
       focus: (pid) => {

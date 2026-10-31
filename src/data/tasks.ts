@@ -1,5 +1,6 @@
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { api, getAccount, subscribeAccount } from '../os/account'
+import { accountGuard } from '../os/accountSpace'
 import { synced } from '../os/synced'
 import { useCalendarVersion } from './calendar'
 import { DEFAULT_TASK_PREFS, normalizeTaskPrefs, type TaskPrefs } from './taskPrefs'
@@ -100,68 +101,103 @@ const set = (next: Partial<TasksState>) => {
 }
 
 let loadedAt = 0
-let inFlight: Promise<void> | null = null
-let again = false
 const STALE_MS = 2 * 60_000
-
-/** Fetches the lists and tasks (`fresh`: past the server's cache of the CalDAV servers too). */
-export function reloadTasks(fresh = false): Promise<void> {
-  if (getAccount().status !== 'user') {
+const owners = new Set<() => boolean>()
+const authority = () => { const a = getAccount(); return JSON.stringify([a.status, a.user?.id, a.caldav]) }
+const hasOwners = () => document.visibilityState === 'visible' && [...owners].some(valid => valid())
+type TaskRead = { controller: AbortController; authority: string; promise: Promise<void>; again: boolean; fresh: boolean }
+let inFlight: TaskRead | null = null
+function cancelRead() {
+  const prior = inFlight
+  inFlight = null
+  prior?.controller.abort()
+  if (state.loading) set({ loading: false })
+}
+function readTasks(fresh: boolean, repeat: boolean): Promise<void> {
+  if (getAccount().status !== 'user' || !accountGuard()) {
+    cancelRead(); loadedAt = 0
     set({ lists: null, tasks: [], errors: [], loading: false })
     return Promise.resolve()
   }
-  // One at a time; a change made while one is out asks once more after it.
+  if (!hasOwners()) { cancelRead(); loadedAt = 0; return Promise.resolve() }
   if (inFlight) {
-    again = true
-    return inFlight
+    if (repeat) { inFlight.again = true; inFlight.fresh ||= fresh }
+    return inFlight.promise
   }
+  const request: TaskRead = { controller: new AbortController(), authority: authority(), promise: Promise.resolve(), again: false, fresh: false }
+  inFlight = request
+  const valid = () => inFlight === request && !request.controller.signal.aborted && accountGuard() && getAccount().status === 'user' && authority() === request.authority && hasOwners()
   set({ loading: true })
-  inFlight = api<{ lists: TaskList[]; tasks: Task[]; errors: string[] }>(`/api/tasks${fresh ? '?fresh=1' : ''}`)
-    .then(
-      (r) => set({ lists: r.lists, tasks: r.tasks, errors: r.errors }),
-      (e: Error) => set({ lists: state.lists ?? [], errors: [e.message] }),
-    )
-    .finally(() => {
+  request.promise = api<{ lists: TaskList[]; tasks: Task[]; errors: string[] }>(`/api/tasks${fresh ? '?fresh=1' : ''}`, { signal: request.controller.signal })
+    .then(r => {
+      if (!valid()) return
       loadedAt = Date.now()
+      set({ lists: r.lists, tasks: r.tasks, errors: r.errors })
+    }, (error: Error) => {
+      if (valid()) set({ lists: state.lists ?? [], errors: [error.message] })
+    }).finally(() => {
+      if (inFlight !== request) return
       inFlight = null
       set({ loading: false })
-      if (again) {
-        again = false
-        void reloadTasks()
-      }
+      if (request.again && !request.controller.signal.aborted && authority() === request.authority && hasOwners()) void readTasks(request.fresh, false)
     })
-  return inFlight
+  return request.promise
+}
+/** Explicit invalidation/manual refresh. Without a live reader, keep the cache stale until used. */
+export const reloadTasks = (fresh = false): Promise<void> => readTasks(fresh, true)
+/** A trusted UI owns a lease, distinct from rendering/store listeners. Last release aborts reads. */
+export function retainTasks(eligible: () => boolean = () => true): () => void {
+  owners.add(eligible)
+  if (Date.now() - loadedAt > 1500 || state.lists === null) void readTasks(false, false)
+  return () => { owners.delete(eligible); if (!hasOwners()) cancelRead() }
+}
+let accountIdentity = authority()
+subscribeAccount(() => {
+  const next = authority()
+  if (next !== accountIdentity || getAccount().status !== 'user') {
+    accountIdentity = next
+    cancelRead(); loadedAt = 0
+    set({ lists: null, tasks: [], errors: [], loading: false })
+    if (getAccount().status === 'user' && hasOwners()) void readTasks(false, false)
+  }
+})
+if (typeof window !== 'undefined') {
+  for (const event of ['mvlos:forget', 'mvlos:account-changed']) window.addEventListener(event, () => {
+    cancelRead(); loadedAt = 0
+    set({ lists: null, tasks: [], errors: [], loading: false })
+  })
+  document.addEventListener('visibilitychange', () => {
+    if (!hasOwners()) cancelRead()
+    else if (Date.now() - loadedAt > STALE_MS || state.lists === null) void readTasks(false, false)
+  })
 }
 
-subscribeAccount(() => {
-  // Signed out (or in as someone else): nothing of the last account's stays.
-  if (getAccount().status !== 'user') set({ lists: null, tasks: [], errors: [] })
-  else if (state.lists === null && listeners.size) void reloadTasks()
-})
-
-/** Every list and task (lists null while the first load is out). Loads on first use and keeps up. */
-export function useTasks(): TasksState {
+/** Current domain object for revision-bound widget actions; never exported to packages. */
+export const currentTask = (id: string) => state.tasks.find(task => task.id === id)
+export function useTasks(options: { identity?: string; eligible?: () => boolean } = {}): TasksState {
   const snapshot = useSyncExternalStore(
-    (l) => {
-      listeners.add(l)
-      return () => listeners.delete(l)
-    },
+    l => { listeners.add(l); return () => listeners.delete(l) },
     () => state,
   )
-  // Something changed elsewhere (the server's live stream): fetch again, unless we just did.
+  const eligibility = useRef(options.eligible)
+  eligibility.current = options.eligible
+  useLayoutEffect(() => retainTasks(() => eligibility.current?.() ?? true), [options.identity])
+  useEffect(() => {
+    // Parent DOM refs are attached by the passive phase; a widget lease can be ineligible in
+    // its child's layout effect during the initial mount. Joining an existing read is inert.
+    if (Date.now() - loadedAt > 1500 || state.lists === null) void readTasks(false, false)
+  }, [options.identity])
   const version = useCalendarVersion()
+  const previousVersion = useRef(version)
   useEffect(() => {
-    if (Date.now() - loadedAt > 1500 || state.lists === null) void reloadTasks()
+    if (previousVersion.current !== version && (Date.now() - loadedAt > 1500 || state.lists === null)) void reloadTasks()
+    previousVersion.current = version
   }, [version])
-  // Every five minutes, and when the tab comes back after a while.
   useEffect(() => {
-    const tick = () => document.visibilityState === 'visible' && Date.now() - loadedAt > STALE_MS && void reloadTasks()
+    const tick = () => document.visibilityState === 'visible' && Date.now() - loadedAt > STALE_MS && void readTasks(false, false)
     const t = setInterval(tick, 5 * 60_000)
     document.addEventListener('visibilitychange', tick)
-    return () => {
-      clearInterval(t)
-      document.removeEventListener('visibilitychange', tick)
-    }
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', tick) }
   }, [])
   return snapshot
 }

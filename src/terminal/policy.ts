@@ -70,6 +70,8 @@ export const EFFECTS: Record<string, Effect> = {
   // Commands that write what they are given.
   touch: 'write', mkdir: 'write', tee: 'write', cp: 'write', mv: 'write', chmod: 'write',
   rm: 'delete', rmdir: 'delete',
+  // Reads a source folder like cat does; its one change (activate) waits for the user's own yes in a dialog.
+  widget: 'read',
   // The network.
   curl: 'network', wget: 'network', ping: 'network', dig: 'network', host: 'network', nslookup: 'network', whois: 'network', pepper: 'blocked',
 }
@@ -233,6 +235,11 @@ export function fileOperands(name: string, args: string[]): string[] {
       if (!a.startsWith('-')) files.push(a)
     }
     return files
+  }
+  if (name === 'widget') {
+    // Only the folder of validate, test, preview and activate is a path; --instance takes an id.
+    if (!['validate', 'test', 'preview', 'activate'].includes(args[0])) return []
+    return args.slice(1).filter((a, k, rest) => !a.startsWith('-') && !['--instance', '--generation'].includes(rest[k - 1] ?? ''))
   }
   const words = operands(args)
   if (['jq', 'fd'].includes(name)) return words.slice(1)

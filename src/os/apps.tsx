@@ -1,3 +1,4 @@
+import { Workshop } from '../widgets/platform/Workshop'
 import type { ReactNode } from 'react'
 import { CalendarApp } from '../apps/calendar/Calendar'
 import { ContactsApp } from '../apps/contacts/Contacts'
@@ -77,6 +78,7 @@ const gamesMenu = (w: WinState, wm: ReturnType<typeof useWM>): MenuItem[] => {
 }
 
 export const APP_META: Record<AppId, AppMeta> = {
+  widgetworkshop: { title: 'Widget Workshop', dock: 'Widgets', blurb: 'Clone, edit, build, preview and activate widget source', size: [780, 620], render: w => <Workshop win={w} /> },
   terminal: { title: `${HANDLE}@mvlos: ~`, dock: 'Terminal', blurb: 'A shell that actually works', size: [760, 500], titleOf: terminalTitle, render: (w) => <Terminal win={w} />, menu: terminalMenu },
   files: { title: 'Files', dock: 'Files', blurb: 'Browse the filesystem', size: [940, 600], render: (w) => <Files win={w} />, menu: settingsMenu('Files', 'files') },
   zed: { title: 'Xed', dock: 'Xed', blurb: 'Edit Markdown and text files', size: [960, 620], render: (w) => <Zed win={w} /> },

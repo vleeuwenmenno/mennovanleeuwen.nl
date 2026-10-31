@@ -1,0 +1,1 @@
+{"schema":1,"sdk":1,"id":"status","name":"Status","entry":"src/main.js","settings":{"appearance":"panel"},"sizing":{"width":300,"height":220},"capabilities":["status.read","status.navigate"]}

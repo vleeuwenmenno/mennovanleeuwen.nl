@@ -73,6 +73,11 @@ async function load(page: P) {
 }
 const api = async (key: string, value?: unknown) => {
   const state = await fetch(origin + '/api/state', { headers: { Cookie: `mvlos_sid=${sid2}`, 'X-MvL-Account': '1' } }).then(async r => { if (!r.ok) throw new Error('state read: ' + r.status); return r.json() })
+  if (key === 'widgets:placed' && state['widgets:state:v2']?.value?.schema === 2) {
+    const envelope = state['widgets:state:v2'].value
+    if (value === undefined) return envelope.placements
+    key = 'widgets:state:v2'; value = { ...envelope, placements: value }
+  }
   if (value === undefined) return state[key]?.value
   const response = await fetch(origin + '/api/state/' + key, { method: 'PUT', headers: { Cookie: `mvlos_sid=${sid2}`, Origin: origin, 'Content-Type': 'application/json', 'X-MvL-Account': '1' }, body: JSON.stringify({ value, base: state[key]?.updatedAt ?? 0 }) })
   if (!response.ok) throw new Error(`seed ${key}: ${response.status} ${await response.text()}`)
@@ -99,7 +104,7 @@ async function instrument(p: P) {
 async function quiet(p: P, label: string) {
   await sleep(1500)
   const r = await p.eval<{ saves: { widgets: number; windows: number }; puts: Record<string, number> }>(`({ saves: window.__saves, puts: window.__puts })`)
-  check(label + ': zero store saves and sync PUTs', r.saves.widgets === 0 && r.saves.windows === 0 && !r.puts['widgets:placed'] && !r.puts['windows:desktop'], r)
+  check(label + ': zero store saves and sync PUTs', r.saves.widgets === 0 && r.saves.windows === 0 && !r.puts['widgets:state:v2'] && !r.puts['windows:desktop'], r)
 }
 async function drag(p: P, pid: number, dx: number, dy: number, edge = false) {
   const at = await p.eval<{ x: number; y: number }>(`(() => {
@@ -265,6 +270,7 @@ try {
   }
 } catch (error) {
   failed++; console.error(error)
+  console.log('Layout failure state',await pages.at(-1)?.eval(`(async()=>({places:(await import('/src/os/widgetPlaces.ts')).widgetPlaces.get(),notes:(await import('/src/data/notes.ts')).allNotes(),hidden:(await import('/src/os/deskPrefs.ts')).notesHidden.get(),body:document.body.textContent.slice(-1500)}))()`).catch(()=>null))
 } finally {
   for (const b of browsers) await b.close()
   vite.kill()
