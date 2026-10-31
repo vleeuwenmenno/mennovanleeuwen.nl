@@ -28,7 +28,7 @@ function openWeatherApp(place: Place | null, units: Units) {
 
 function useWeatherFrame(id: string): CSSProperties {
   const config = useWidgetConfig<Config>(id, DEFAULTS)
-  return { ['--widget-bg' as string]: 'var(--bg)', ['--widget-fg' as string]: 'var(--fg)', ['--widget-tilt' as string]: `${config.tilt}deg` }
+  return { ['--widget-bg' as string]: 'linear-gradient(165deg, color-mix(in srgb, var(--accent) 11%, var(--bg)) 0%, var(--bg) 62%)', ['--widget-fg' as string]: 'var(--fg)', ['--widget-tilt' as string]: `${config.tilt}deg` }
 }
 
 function useWeatherMenu(id: string): MenuItem[] {

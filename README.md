@@ -4691,7 +4691,7 @@ error, test cases, abort, permissions, denied/approved/retried/conflicting activ
 the approval dialog, the widget on the desktop, retry).
 
 The first SDK accepts JavaScript modules, relative local imports and `@mvlos/widget` descriptors:
-column, row, text, button, native editor, action, link, image, dot, details and card. Styles accept spacing tokens only. No npm packages,
+column, row, text, button, native editor, action, link, image, dot, details and card, plus the presentation nodes grid, box, badge, icon, progress, divider and spacer and closed text/layout tokens (size, weight, align, gap, clamp, span). The host maps every token to the Omarchy theme palette; packages never carry CSS or colours, and older packages render unchanged (the additions are additive, so the build identity is unchanged). Styles accept spacing tokens only. No npm packages,
 build hooks, raw HTML/CSS, arbitrary URLs, DOM, fetch, cookies, storage, host objects or generic RPC
 are exposed to packages. Snapshots hash every accepted file, manifest permissions, assets, styles
 and the pinned SDK/QuickJS build identity. Each invocation has 8 MiB heap, 256 KiB stack, a 40 ms
@@ -4761,6 +4761,8 @@ cancellable timer/request and no hidden refresh work. Its stable lifecycle ident
 the instance, account status/identity, runtime revision and grant epoch: hydration or authority
 changes abort/restart the loop, while ordinary renders do not trigger fetch loops. Results and
 errors are scoped to the same lifecycle.
+
+**Widget look.** The six built-ins share one design: a bold heading, status banners (box), aligned columns for numbers (grid with auto tracks), icons from a closed set (drawn by the host in currentColor) and badges for state. The Refresh, Source, Pause access and Notebook buttons are a small icon toolbar that appears on hover or keyboard focus (always shown on touch); paged widgets show a compact ‹ 1/3 › control, only when there is more than one page. `pnpm check:widget-design` checks the new nodes' validation limits and that every built-in renders the mock input with them.
 
 The SDK build identity is descriptors 1.2. Snapshots from the earlier unreleased 1.0/1.1
 slices need explicit rebuild/preview/activation; they are not silently upgraded or re-granted.

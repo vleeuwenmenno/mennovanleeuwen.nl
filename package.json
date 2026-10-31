@@ -157,7 +157,8 @@
     "check:widget-review12-ui": "node scripts/widget-review12-e2e.ts",
     "check:widget-review13-ui": "node scripts/widget-review13-e2e.ts",
     "check:widget-review14-ui": "node scripts/widget-review14-e2e.ts",
-    "check:widget-parity-ui": "node scripts/widget-parity-e2e.ts"
+    "check:widget-parity-ui": "node scripts/widget-parity-e2e.ts",
+    "check:widget-design": "node scripts/widget-design-check.ts"
   },
   "dependencies": {
     "figlet": "^1.12.0",
