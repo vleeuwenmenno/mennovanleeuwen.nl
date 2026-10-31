@@ -8,6 +8,12 @@ import { CUSTOM_KIND, isInstanceKind, supportsCapabilities, record, verifySnapsh
 import { assertSource } from './sources'
 import { admission, INSTANCE_ID, isTombstone, mergeInstallations as mergeRecords, normalizeInstallations as normalize, tombstone, type Installation, type Installations, type Revision } from './records'
 export type { Installation, Revision }
+/** Why an activation or recovery did not happen, so the UI can offer the right action. Messages stay user-readable. */
+export type InstallFailureCode = 'conflict' | 'limit' | 'budget' | 'unhydrated' | 'storage' | 'signin'
+export class InstallFailure extends Error {
+  code: InstallFailureCode
+  constructor(code: InstallFailureCode, message: string) { super(message); this.code = code; this.name = 'InstallFailure' }
+}
 export const mergeInstallations = (local: Installations, remote: Installations) => mergeRecords(local, remote) as Installations
 export const installations: Synced<Installations> = { ...canonicalInstallations, get: () => normalize(canonicalInstallations.get()), set: next => canonicalInstallations.set(all => { const current=normalize(all);return {...all,...(typeof next==='function'?next(current):next)} }), use: useInstallationRecords, onRemote: listener => canonicalInstallations.onRemote(raw=>listener(normalize(raw))) }
 function useInstallationRecords(){const raw=canonicalInstallations.use();return useMemo(()=>normalize(raw),[raw])}
@@ -24,7 +30,7 @@ export function installationVersion(id: string) {
 }
 export async function activate(instance: string, kind: InstanceKind, revision: Revision, expectedGeneration: number, expectedIdentity = installationVersion(instance).identity) {
   assertSource(revision.source)
-  if (!accountGuard() || !getAccount().user) throw new Error('Sign in to install a package')
+  if (!accountGuard() || !getAccount().user) throw new InstallFailure('signin', 'Sign in to install a package')
   const account = getAccount().user!.id
   if (kind === CUSTOM_KIND && revision.source.kind === 'system') throw new Error('Custom widgets come from a folder, not a system source')
   if (!INSTANCE_ID.test(instance) || !isInstanceKind(kind) || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) throw new Error('Invalid installation identity')
@@ -35,28 +41,31 @@ export async function activate(instance: string, kind: InstanceKind, revision: R
   const fallback = kind === CUSTOM_KIND ? undefined : { source: { kind: 'system' as const, path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }
   assertSource(revision.source)
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
-  if (!widgetsHydrated()) throw new Error('Widget state is not hydrated; retry activation after sync')
-  let conflict = ''
+  if (!widgetsHydrated()) throw new InstallFailure('unhydrated', 'Widget state is not hydrated; retry activation after sync')
+  let conflict = null as InstallFailure | null
   installations.set(all => {
     const current = all[instance]
     if (current?.active.snapshot.digest === snapshot.digest && JSON.stringify(current.active.source) === JSON.stringify(revision.source)) return all
     const version = installationVersion(instance)
-    if (version.generation !== expectedGeneration || version.identity !== expectedIdentity || !Number.isSafeInteger(expectedGeneration + 1)) { conflict = 'Installation changed; reload before activating'; return all }
+    if (version.generation !== expectedGeneration || version.identity !== expectedIdentity || !Number.isSafeInteger(expectedGeneration + 1)) { conflict = new InstallFailure('conflict', 'Installation changed; reload before activating'); return all }
     const raw = canonicalInstallations.get()
-    if (isTombstone(raw[instance])) { conflict = 'This widget was removed; create a new one instead'; return all }
-    if (current && current.kind !== kind) { conflict = 'Installation kind cannot change'; return all }
-    conflict = admission(raw, instance)
-    if (conflict) return all
+    if (isTombstone(raw[instance])) { conflict = new InstallFailure('conflict', 'This widget was removed; create a new one instead'); return all }
+    if (current && current.kind !== kind) { conflict = new InstallFailure('conflict', 'Installation kind cannot change'); return all }
+    const refusal = admission(raw, instance)
+    if (refusal) { conflict = new InstallFailure(refusal.startsWith('Installation limit') ? 'limit' : 'conflict', refusal); return all }
     const previous = current?.active ?? fallback
     const next: Installations = { ...all, [instance]: { schema: 1, instance, kind, generation: expectedGeneration + 1, active: { source: revision.source, snapshot }, ...(previous ? { previous } : {}) } }
-    if (canonicalInstallationBytes({ ...raw, ...next }) > 480 * 1024) { conflict = 'Widget state exceeds the 480 KiB installation budget'; return all }
+    if (canonicalInstallationBytes({ ...raw, ...next }) > 480 * 1024) { conflict = new InstallFailure('budget', 'Widget state exceeds the 480 KiB installation budget'); return all }
     return next
   })
-  if (conflict) throw new Error(conflict)
-  await installations.flush?.()
+  if (conflict) throw conflict
+  try { await installations.flush?.() } catch (error) {
+    if (error instanceof Error && error.message === 'Account changed') throw error
+    throw new InstallFailure('storage', `Not saved: ${error instanceof Error ? error.message : 'storage failure'}. The earlier saved revision is intact; the new one is active in this session only until it is saved.`)
+  }
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   const installed = installation(instance)
-  if (installed?.active.snapshot.digest !== snapshot.digest || JSON.stringify(installed.active.source) !== JSON.stringify(revision.source)) throw new Error('Installation changed; reload before activating')
+  if (installed?.active.snapshot.digest !== snapshot.digest || JSON.stringify(installed.active.source) !== JSON.stringify(revision.source)) throw new InstallFailure('conflict', 'Installation changed; reload before activating')
 }
 /** Removes a custom widget's installation (explicit user action). Builtins are never removable. */
 export async function removeInstallation(instance: string, expectedGeneration: number, expectedIdentity = installationVersion(instance).identity) {
@@ -78,7 +87,7 @@ export async function removeInstallation(instance: string, expectedGeneration: n
 }
 export async function recover(instance: string, expectedGeneration: number, expectedIdentity = installationIdentity(installation(instance))) {
   const current = installation(instance)
-  if (!current?.previous || current.generation !== expectedGeneration || installationIdentity(current) !== expectedIdentity) throw new Error('Previous revision unavailable or installation changed')
+  if (!current?.previous || current.generation !== expectedGeneration || installationIdentity(current) !== expectedIdentity) throw new InstallFailure('conflict', 'Previous revision unavailable or installation changed')
   await activate(instance, current.kind, current.previous, expectedGeneration, expectedIdentity)
 }
 /** Identity grants are local to this live account session, never accepted from imported/synced files. */

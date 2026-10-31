@@ -4628,6 +4628,25 @@ clears the state. `pnpm check:widget-custom` covers manifest rules, the starter 
 limit and record merge/limits; `pnpm check:widget-custom-ui` runs the whole create, reload, use and remove
 flow in muted Chromium with scratch data.
 
+**Sticky parity.** A Sticky shows the calendar events its note is linked to as the same chips the
+Notebook shows, under the package's own output: click one to open the event in Calendar, × to
+unlink. The chips, the link and unlink actions and the backlinks are drawn and run by the host, so
+package code gets no calendar access. Web launchers dropped on a Sticky are still added to its
+note as Markdown links.
+
+**When something goes wrong.** A widget or Workshop never falls back silently, deletes data or
+reports a success that did not happen; it shows a small banner with the cause and a button:
+*Installed metadata unavailable* (corrupt or missing record) offers **Rebuild default** (opens
+Workshop with the default previewed; activating is still your click) and **Open Source**; a package
+that cannot be verified, a default that fails to build or a render that fails offer **Retry** and
+**Open Source**. In Workshop, an activation that lost a race with another tab or device (*Installation
+changed*) offers **Reload installation state**, which refreshes what Workshop compares against and
+leaves the decision to you; *not synced yet* offers **Retry after sync**; a storage failure says
+the new revision is not saved, that the earlier saved one is intact and offers **Retry saving**;
+the 12-record limit and the 480 KiB budget explain themselves and change nothing. A sync or
+migration problem that keeps widget data back (original data is retained) shows **Retry sync**;
+nothing is ever chosen for you.
+
 The first SDK accepts JavaScript modules, relative local imports and `@mvlos/widget` descriptors:
 column, row, text, button, native editor, action, link, image, dot, details and card. Styles accept spacing tokens only. No npm packages,
 build hooks, raw HTML/CSS, arbitrary URLs, DOM, fetch, cookies, storage, host objects or generic RPC

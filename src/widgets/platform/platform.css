@@ -23,3 +23,9 @@
 .wp-details summary { cursor: pointer; list-style: none; }
 .wp-detail-body { background: var(--panel); color: var(--fg); border: 1px solid var(--line-strong); padding: 6px; max-width: 100%; overflow-wrap: anywhere; }
 .wp-card { cursor: pointer; }
+.wp-banner { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--yellow); border-left-width: 4px; border-radius: 5px; color: var(--fg); background: var(--panel); overflow-wrap: anywhere; min-width: 0; }
+.wp-banner.is-error { border-color: var(--red); }
+.wp-banner-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.wp-banner button { border: 1px solid var(--line-strong); border-radius: 5px; padding: 5px 10px; color: inherit; background: var(--bg); cursor: pointer; min-height: 32px; }
+@media (pointer: coarse) { .wp-banner button { min-height: 44px; padding: 8px 12px; } }
+.wp-chips { margin-top: 8px; }

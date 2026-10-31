@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import { pullAll, useSyncStatus } from '../../os/synced'
+import { widgetMigrationUnresolved } from '../../os/accountSpace'
+import { StatusBanner, type StatusAction } from './Status'
+import { widgetsHydrated } from './canonicalState'
 import { useWM, type WinState } from '../../os/wm'
 import { useAccount } from '../../os/account'
 import { ask } from '../../os/Dialogs'
 import { defaultBuild } from './defaults'
-import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, recover, removeInstallation, type Revision } from './installations'
+import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, useInstallationPresence, type Revision } from './installations'
 import { CUSTOM_KIND, isInstanceKind, buildPackage, descriptor, supportsCapabilities, type Descriptor } from './package'
 import { cloneDefault, cloneTemplate, readSource, sourceIdentity, WIDGET_HOME } from './sources'
 import { execute } from './runtime'
@@ -27,6 +31,11 @@ export function Workshop({ win }: { win: WinState }) {
   const [revision, setRevision] = useState<Revision | null>(null)
   const [view, setView] = useState<Descriptor | null>(null)
   const [message, setMessage] = useState(custom ? 'Write the starter template to a folder, edit it in Xed, build and preview with mocks, then activate it as a new widget.' : 'Clone the source folder, edit in Xed, build and preview with mocks, then activate explicitly.')
+  // A failed action never leaves a success message behind: it becomes a banner with what to do.
+  const [problem, setProblem] = useState<{ code: string; message: string } | null>(null)
+  const [dismissed, setDismissed] = useState('')
+  const sync = useSyncStatus()
+  const unavailable = useInstallationPresence(instance ?? '') && !!instance && !current
   const [optIn, setOptIn] = useState(false)
   const [busy, setBusy] = useState(false)
   const generation = useRef(instance ? installationVersion(instance).generation : 0)
@@ -35,7 +44,13 @@ export function Workshop({ win }: { win: WinState }) {
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const run = async (action: () => Promise<void>) => {
     setBusy(true)
-    try { await action() } catch (error) { if (mounted.current) setMessage(error instanceof Error ? error.message : 'Widget operation failed') }
+    setProblem(null); setDismissed('')
+    try { await action() } catch (error) {
+      if (mounted.current) {
+        setMessage('')
+        setProblem({ code: error instanceof InstallFailure ? error.code : 'error', message: error instanceof Error ? error.message : 'Widget operation failed' })
+      }
+    }
     finally { if (mounted.current) setBusy(false) }
   }
   const preview = async (value: Revision) => {
@@ -51,7 +66,35 @@ export function Workshop({ win }: { win: WinState }) {
     const latest = await buildPackage(await readSource(value.source))
     if (latest.digest !== value.snapshot.digest) throw new Error('Source changed after build; build and preview again')
   }
-  const sync = (id: string) => { generation.current = installation(id)!.generation; expectedIdentity.current = installationVersion(id).identity }
+  const adopt = (id: string) => { generation.current = installation(id)!.generation; expectedIdentity.current = installationVersion(id).identity }
+  const rebuildDefault = () => run(async () => preview({ source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }))
+  // Opened from a widget's "Rebuild default": preview the default now; activation stays a separate, explicit step.
+  useEffect(() => { if (win.props.rebuild) void rebuildDefault() }, [win.props.rebuild, win.props.t]) // eslint-disable-line react-hooks/exhaustive-deps
+  const reload = () => {
+    generation.current = instance ? installationVersion(instance).generation : 0
+    expectedIdentity.current = instance ? installationVersion(instance).identity : ''
+    setOptIn(false); setProblem(null)
+    setMessage(`Installation state reloaded. Active: ${current?.active.snapshot.digest ?? 'none'}. Nothing was changed; review it, then activate again to replace it.`)
+  }
+  const retrySave = () => run(async () => {
+    try { await installations.flush?.() } catch (error) { throw new InstallFailure('storage', `Still not saved: ${error instanceof Error ? error.message : 'storage failure'}. The earlier saved revision is intact.`) }
+    reload(); setMessage('Saved. The active revision is now stored.')
+  })
+  const retryAfterSync = async () => {
+    setBusy(true)
+    try { await pullAll() } catch { /* shown below */ }
+    if (!mounted.current) return
+    setBusy(false)
+    if (widgetsHydrated()) { setProblem(null); setMessage('Widget state is synced. Activate again.') }
+    else setProblem({ code: 'unhydrated', message: 'Widget state is still not synced. Check the connection, then retry.' })
+  }
+  const actions: Record<string, StatusAction[]> = {
+    conflict: [{ label: 'Reload installation state', run: reload }],
+    unhydrated: [{ label: 'Retry after sync', run: () => void retryAfterSync() }],
+    storage: [{ label: 'Retry saving', run: () => void retrySave() }],
+  }
+  const shown = problem && dismissed !== `${problem.code}:${problem.message}` ? problem : null
+  const syncProblem = sync.state === 'error' && (widgetMigrationUnresolved() || /widget/i.test(sync.error ?? '')) ? `Widget data is not synced: ${sync.error ?? 'unknown problem'}. Original data was kept; nothing was overwritten or deleted.` : ''
   return <div className="wp-workshop">
     <strong>Widget Workshop · {custom ? (current ? current.active.snapshot.manifest.name : 'new custom widget') : kind}</strong>
     <p>Source is executable JavaScript in a bounded VM. Preview uses sample data. Activation grants only this instance's {access(kind)}.</p>
@@ -70,7 +113,7 @@ export function Workshop({ win }: { win: WinState }) {
         const source = await sourceIdentity(path)
         await preview({ source, snapshot: await buildPackage(await readSource(source)) })
       })}>Build & mock preview</button>
-      {!custom && <button disabled={busy} onClick={() => void run(async () => preview({ source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: await defaultBuild(kind) }))}>Rebuild default & preview</button>}
+      {!custom && <button disabled={busy} onClick={() => void rebuildDefault()}>Rebuild default & preview</button>}
     </div>
     {account.status !== 'user' && <p>Guests can use defaults and notes. Sign in to clone or activate source.</p>}
     {view && <div className="wp-preview" aria-label="Mock widget preview"><Renderer view={view} note={kind === 'sticky' ? MOCK_INPUT.note!.text : undefined} event={() => setMessage('Mock preview: no real writes.')} /></div>}
@@ -84,7 +127,7 @@ export function Workshop({ win }: { win: WinState }) {
           await activate(id, CUSTOM_KIND, revision, 0, installationVersion(id).identity)
           allowRevision(id, revision)
           setWidgetConfig(id, { tilt: randomTilt() })
-          setMade(id); sync(id)
+          setMade(id); adopt(id)
           openWidget(wm, CUSTOM_KIND, id)
           setMessage(`New widget "${revision.snapshot.manifest.name}" activated and placed on the desktop.`); setOptIn(false)
         })}>Activate as new widget</button>}
@@ -93,14 +136,14 @@ export function Workshop({ win }: { win: WinState }) {
           await verified(revision)
           await activate(instance, kind, revision, generation.current, expectedIdentity.current)
           allowRevision(instance, revision)
-          sync(instance)
+          adopt(instance)
           setMessage('Revision activated. The desktop now loads this immutable snapshot.'); setOptIn(false)
         })}>Activate built revision</button>}
         {instance && <button disabled={busy || !current?.previous || !optIn || account.status !== 'user'} onClick={() => void run(async () => {
           await recover(instance, current?.generation ?? 0, installationIdentity(current))
           const active = installation(instance)!.active
           allowRevision(instance, active)
-          sync(instance)
+          adopt(instance)
           setMessage('Previous revision restored. Note contents, settings and placement unchanged.'); setOptIn(false)
         })}>Recover previous revision</button>}
         {custom && instance && current && <button disabled={busy || account.status !== 'user'} onClick={() => void run(async () => { unsetWidgetConfig(instance, 'state'); setMessage('Saved state cleared.') })}>Reset saved state</button>}
@@ -114,7 +157,10 @@ export function Workshop({ win }: { win: WinState }) {
         })}>Remove this widget</button>}
       </div>
     </> : <p>Open Source from a widget to activate for that instance.</p>}
-    <p role="status">{message}</p>
+    {unavailable && <StatusBanner code="unavailable" message="Installed metadata unavailable. Nothing was deleted and no default is used in its place. Rebuild the default, then activate it explicitly to repair." actions={[{ label: 'Rebuild default', run: () => void rebuildDefault() }]} />}
+    {syncProblem && dismissed !== `sync:${syncProblem}` && <StatusBanner code="sync" tone="error" message={syncProblem} actions={[{ label: 'Retry sync', run: () => void pullAll().catch(() => {}) }]} onDismiss={() => setDismissed(`sync:${syncProblem}`)} />}
+    {shown && <StatusBanner code={shown.code} tone="error" message={shown.message} actions={actions[shown.code]} onDismiss={() => setDismissed(`${shown.code}:${shown.message}`)} />}
+    {message && <p role="status">{message}</p>}
     {current && <pre>Active: {current.active.snapshot.digest}{'\n'}Generation: {current.generation}</pre>}
   </div>
 }

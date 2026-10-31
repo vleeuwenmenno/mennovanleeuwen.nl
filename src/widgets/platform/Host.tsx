@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { getNote, updateNote, useAllNotes } from '../../data/notes'
+import { getNote, updateNote, useAllNotes, useNoteSlot } from '../../data/notes'
+import { useDropTarget, type DragItem } from '../../os/dnd'
 import { getAccount, useAccount } from '../../os/account'
 import { notesHidden } from '../../os/deskPrefs'
 import { accountGuard } from '../../os/accountSpace'
@@ -12,6 +13,7 @@ import { customInput, customRevision } from './records'
 import { getWidgetConfig, setWidgetConfig, useWidgetConfig } from '../config'
 import { allowNativeText, applyPackageEdit, projectNote, sameNote } from './noteTransactions'
 import { Renderer } from './Renderer'
+import { StatusBanner, type StatusAction } from './Status'
 import { execute } from './runtime'
 import { RuntimeFailure } from './scheduler'
 import { useWidgetVisibility } from './visibility'
@@ -33,6 +35,13 @@ export function useRuntimeVisible() {
 }
 type Presented = { tree: Descriptor; input: WidgetInput; identity: string; broker?: BrokerPresentation; note?: { text: string; revision: string } }
 const EMPTY_VIEW: Descriptor = { type: 'column', children: [] }
+/** What went wrong, by kind: the kind decides which buttons the banner offers. */
+type Problem = { code: 'package' | 'default' | 'runtime' | 'note' | 'event' | 'grant'; message: string }
+/** A web launcher dragged onto a note, as a Markdown link (apps and files have no address to link). */
+const linkOf = (i: DragItem): string | null => {
+  const l = i.kind === 'launcher' ? i : i.kind === 'file' ? i.launcher : undefined
+  return l?.url ? `[${l.label.replace(/[[\]]/g, '')}](${l.url})` : null
+}
 export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const root = useRef<HTMLDivElement>(null)
   const wm = useWM()
@@ -52,7 +61,10 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const visible = useRuntimeVisible() && !win.minimized
   const [builtin, setBuiltin] = useState<Snapshot | null>(null)
   const [verified, setVerified] = useState<{ current: typeof current; revision: Revision } | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Problem | null>(null)
+  const [retry, setRetry] = useState(0)
+  const [dismissed, setDismissed] = useState('')
+  const chips = useNoteSlot('chips')
   const [view, setView] = useState<Presented | null>(null)
   const [consent, setConsent] = useState(0)
   const busy = useRef(false)
@@ -87,11 +99,11 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       const snapshot = await verifySnapshot(current.active.snapshot)
       if (!supportsCapabilities(kind,snapshot.manifest.capabilities)) throw new Error('Invalid instance capability')
       if (live) setVerified({ current, revision: { source, snapshot } })
-    }).catch(() => live && setError('Installed package unavailable; rebuild or recover in Source'))
+    }).catch(() => live && setError({ code: 'package', message: 'Installed package unavailable; rebuild or recover in Source. Nothing was deleted.' }))
     return () => { live = false }
-  }, [current, kind])
+  }, [current, kind, retry])
   useEffect(() => { if (!custom) return; if (!visible) return; const timer = setInterval(() => setMinute(Math.floor(Date.now() / 60000)), 30_000); return () => clearInterval(timer) }, [custom, visible])
-  useEffect(() => { if (custom) return; let live = true; defaultBuild(kind).then(value => live && setBuiltin(value), () => live && setError('Default package build failed')); return () => { live = false } }, [kind, custom])
+  useEffect(() => { if (custom) return; let live = true; defaultBuild(kind).then(value => live && setBuiltin(value), () => live && setError({ code: 'default', message: 'Default package build failed' })); return () => { live = false } }, [kind, custom, retry])
   useLayoutEffect(() => () => { renderAbort.current?.abort(); eventAbort.current?.abort() }, [identity, visible])
   useEffect(() => { if (note?.deleted || note?.purged) wm.close(win.pid) }, [note?.deleted, note?.purged, win.pid, wm])
   useEffect(() => {
@@ -102,17 +114,30 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
     const timer = setTimeout(() => {
       execute(revision.snapshot, input, undefined, abort.signal, { owner: `widget:${id}`, eligible: () => validNow() }).then(result => {
         const fresh = getNote(id)
-        if (!abort.signal.aborted && validNow() && (!bound || fresh && sameNote(fresh, bound))) { setView({ tree: descriptor(result), input, identity, note: bound, broker: presentedBroker }); setError('') }
-      }, failure => { if (!abort.signal.aborted && !(failure instanceof RuntimeFailure && failure.code === 'cancelled')) setError(failure.message) })
+        if (!abort.signal.aborted && validNow() && (!bound || fresh && sameNote(fresh, bound))) { setView({ tree: descriptor(result), input, identity, note: bound, broker: presentedBroker }); setError(null) }
+      }, failure => { if (!abort.signal.aborted && !(failure instanceof RuntimeFailure && failure.code === 'cancelled')) setError({ code: 'runtime', message: failure.message }) })
     }, 80)
     return () => { clearTimeout(timer); abort.abort() }
-  }, [identity, visible, permitted, input])
+  }, [identity, visible, permitted, input, retry])
+  // Web launchers dropped on a sticky are added to its note as links, one per line. This is the
+  // person's own gesture handled by the host, not authority for package code.
+  useDropTarget(root, {
+    accept: d => kind === 'sticky' && d.items.some(i => linkOf(i)) ? 'link' : null,
+    drop: d => {
+      const fresh = getNote(id)
+      const links = d.items.map(linkOf).filter((x): x is string => !!x)
+      if (kind !== 'sticky' || !fresh || fresh.deleted || fresh.purged || !links.length) return
+      const text = `${fresh.text}${fresh.text && !fresh.text.endsWith('\n') ? '\n' : ''}${links.join('\n')}`
+      if (allowNativeText(fresh.text, text)) updateNote(id, { text })
+      else setError({ code: 'note', message: 'Note edit exceeds the supported size; existing contents were kept' })
+    },
+  }, kind === 'sticky')
   if (kind === 'sticky' && !alive) return null
   const write = (text: string, expected: string): string => {
     const fresh = getNote(id)
     if (fresh && !fresh.deleted && !fresh.purged && validNow() && revision?.snapshot.manifest.capabilities.includes('note.write') && fresh.text === expected) {
       if (allowNativeText(fresh.text, text)) { updateNote(id, { text }); return text }
-      setError('Note edit exceeds the supported size; existing contents were kept')
+      setError({ code: 'note', message: 'Note edit exceeds the supported size; existing contents were kept' })
     }
     return fresh?.text ?? expected
   }
@@ -128,7 +153,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       if (effect && effect.type === 'custom.replace') {
         const live = customRevision(getWidgetConfig<{ state?: unknown }>(id, {}).state ?? null)
         if (revision.snapshot.manifest.capabilities.includes('custom.state') && validNow(presented.identity) && !controller.signal.aborted && presented.input.custom?.revision === live && effect.expectedRevision === live) setWidgetConfig(id, { state: customState(effect.state) })
-        else if (!controller.signal.aborted) setError('Widget state changed meanwhile; the action was not applied')
+        else if (!controller.signal.aborted) setError({ code: 'event', message: 'Widget state changed meanwhile; the action was not applied' })
         return
       }
       const latestNote = getNote(id)
@@ -136,7 +161,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
         const next = applyPackageEdit(latestNote, presented.note, presented.input.note, effect)
         if (next !== null) updateNote(id, { text: next })
       }
-    } catch (error) { if (!controller.signal.aborted) setError(error instanceof Error ? error.message : 'Widget event failed') }
+    } catch (error) { if (!controller.signal.aborted) setError({ code: 'event', message: error instanceof Error ? error.message : 'Widget event failed' }) }
     finally { busy.current = false }
   }
   const resource=(handle:string)=>{
@@ -149,6 +174,14 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const spacing = revision ? JSON.parse(revision.snapshot.files['styles/tokens.json']) as { gap?: string; padding?: string } : {}
   const token = (value?: string) => value === 'compact' ? '4px' : value === 'roomy' ? '14px' : '8px'
   const shown = permitted && view?.identity === identity ? view : null
+  const source = () => wm.open('widgetworkshop', { id, kind, t: String(Date.now()) })
+  const rebuild = () => wm.open('widgetworkshop', { id, kind, rebuild: '1', t: String(Date.now()) })
+  const again = () => { setError(null); setRetry(n => n + 1) }
+  const open: StatusAction = { label: 'Open Source', run: source }
+  const problem: { code: string; message: string; actions: StatusAction[] } | null = unavailable && !custom
+    ? { code: 'unavailable', message: 'Installed metadata unavailable. Your note and settings are untouched. Rebuild the default, then activate it explicitly to repair.', actions: [{ label: 'Rebuild default', run: rebuild }, open] }
+    : error ? { code: error.code, message: error.message, actions: error.code === 'package' ? [{ label: 'Rebuild default', run: rebuild }, open] : error.code === 'default' || error.code === 'runtime' ? [{ label: 'Retry', run: again }, open] : error.code === 'grant' ? [open] : [] } : null
+  const banner = problem && dismissed !== `${problem.code}:${problem.message}` ? <StatusBanner code={problem.code} tone={problem.code === 'unavailable' ? 'warn' : 'error'} message={problem.message} actions={problem.actions} onDismiss={() => setDismissed(`${problem.code}:${problem.message}`)} /> : null
   const actionsEnabled = !!shown && shown.input === input && (!shown.note || !!note && sameNote(note, shown.note)) && visible
   return <div ref={root} className="wp-package" data-package-digest={revision?.snapshot.digest} style={{ '--wp-gap': token(spacing.gap), padding: token(spacing.padding), ...(custom && revision ? { minHeight: revision.snapshot.manifest.sizing.height } : {}) } as CSSProperties}>
     {domain&&visible&&permitted&&revision?.snapshot.manifest.capabilities.includes(`${kind}.read` as Capability)&&<DomainBroker kind={kind as DomainKind} id={id} lifecycle={identity} page={domainPage} tick={tick} capabilities={revision.snapshot.manifest.capabilities} eligible={()=>validNow()} present={present}/>}
@@ -159,7 +192,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       {permitted && revision?.source.kind !== 'system' && <button onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }}>Pause access</button>}
       {kind === 'sticky' && <button onClick={() => wm.open('notebook', { id })}>Notebook & links</button>}
     </div>
-    {!permitted && revision ? <button onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError(error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally') } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button> : <>
+    {!permitted && revision ? <button onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : kind+' data and selected actions'}</button> : <>
       <Renderer key={identity} view={shown?.tree ?? EMPTY_VIEW} note={permitted && input.note ? note?.text : undefined} write={revision?.snapshot.manifest.capabilities.includes('note.write') ? write : undefined} event={event} actionsEnabled={actionsEnabled} resource={resource} />
       {input.note && <div className="wp-controls" aria-label="Checklist pages">
         <button disabled={pages.length <= 1} onClick={() => setPages(value => value.slice(0, -1))}>Previous items</button>
@@ -170,7 +203,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
     </>}
     {custom && !current && <p role="status" data-custom-unavailable>{removed ? 'This custom widget was removed. Take it off the desktop from its menu, or recreate it in the Workshop.' : unavailable ? 'This custom widget\'s installation record is unreadable and was kept untouched. Open the Workshop to rebuild and activate it again.' : 'This custom widget is not installed on this device (yet). It was kept on the desktop; wait for sync, or open the Workshop to install it again.'} <button onClick={() => wm.open('widgetworkshop', { kind: CUSTOM_KIND })}>Open Workshop</button></p>}
     {stateProblem && <p role="status">{stateProblem}</p>}
-    {unavailable && !custom && <p role="status">Installed metadata unavailable. Rebuild default or source in Source, then activate explicitly to repair.</p>}
-    {error && <p role="status">{error}</p>}
+    {kind === 'sticky' && note && chips?.(note, 'sticky') ? <div className="wp-chips">{chips(note, 'sticky')}</div> : null}
+    {banner}
   </div>
 }
