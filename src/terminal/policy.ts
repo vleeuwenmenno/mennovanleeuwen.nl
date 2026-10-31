@@ -263,7 +263,6 @@ export function commandBounds(name: string): string | undefined {
   if (['cat', 'less', 'more', 'bat', 'head', 'tail', 'wc', 'grep', 'sort', 'uniq', 'xxd', 'hexdump', 'od', 'lolcat', 'sha1sum', 'sha256sum', 'sha384sum', 'sha512sum', 'md5sum'].includes(name)) return 'One input; at most 65536 characters; conservative shared allocation accounting before processing. Seafile, /tmp and bounded devices only.'
   if (['ls', 'll'].includes(name)) return 'Nonrecursive; metadata and formatting count against shared limits.'
   if (['curl', 'wget', 'whois', 'git', 'dig', 'host', 'nslookup', 'ping', 'calc', 'units', 'bc'].includes(name)) return 'Network bodies stream through shared byte/text accounting before decode/parse; structured responses also have depth/node/size limits. Synchronous formatting capped at 65536 characters.'
-  if (name === 'widget') return 'Reads one package folder (at most 48 files, 128 KiB) inside the work folder. activate is the only change: it needs the user\'s yes in a dialog, whatever the mode.'
   if (name === 'seq') return 'Each retained number is reserved before allocation; finite advancing ranges only.'
   if (name === 'cowsay') return '65536-character input ceiling; 40-column wrapping and shared allocation reservation.'
   return undefined

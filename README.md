@@ -4628,6 +4628,49 @@ clears the state. `pnpm check:widget-custom` covers manifest rules, the starter 
 limit and record merge/limits; `pnpm check:widget-custom-ui` runs the whole create, reload, use and remove
 flow in muted Chromium with scratch data.
 
+#### Agents making widgets (`widget`)
+
+Agents make widgets through the `terminal` tool they already have: there are no extra server tools.
+The msh command `widget` (also usable by hand in the terminal; `help --json` and `terminal_capabilities`
+list it) works on a package folder in the work folder, while `write_file`/`edit_file` write the files with
+their usual hash and read-before-edit rules:
+
+- `widget docs [full|template]`: the SDK reference an agent needs (workflow, package files, limits,
+  capabilities per widget kind, the `tests/*.json` case format, the descriptor vocabulary and the
+  custom-widget example); `template` prints the starter package's files.
+- `widget list`: installed widgets (id, kind, name, digest, generation) and package folders (a folder with
+  `manifest.json`) up to two levels below the current folder.
+- `widget validate <dir>`: builds the folder exactly as the Workshop does (same `buildPackage`, same
+  limits). Errors name the file and the reason (a file over 32 KiB, more than 48 files, source over 128 KiB,
+  an unsupported file type, bad JSON, an unknown capability) on stderr with exit 1; success prints the manifest
+  summary and the digest.
+- `widget test <dir>`: runs the bounded VM on the mock input, on every button of that view and on every
+  `tests/*.json` case (`{"schema":1,"description","input","event","expect":{"text":[],"absent":[],"mutation":…}}`,
+  `input` merged over the mock input). It prints PASS/FAIL per case, the rendered outline, the runtime error
+  (with the exception's message) or the limit that was hit, and exits 1 on any failure. Cancelling the call
+  stops the VM run.
+- `widget preview <dir>`: `test`, plus a Widget Workshop window on mock data for the user (it refreshes the
+  open one). It never writes installation state.
+- `widget activate <dir> --new | --instance <id> [--generation <n>]`: the only subcommand that changes
+  anything. It always asks the user in the OS's own dialog (package, digest, widget, source folder and the
+  access being granted; Allow or Deny). Deny, Escape, a closed thread or no desktop to ask on: exit 1
+  `activation requires approval` and nothing is written. On Allow the folder and the installation are checked
+  again (changed source or a changed installation is refused as a conflict), then the same
+  `activate` + grant as the Workshop run. `--generation` makes a stale `widget list` a conflict. `--new` takes
+  its instance id from the folder and the digest, so retrying a call whose answer got lost says
+  `already active` and changes nothing (no second widget, no second generation bump, no second dialog);
+  edited source is a new digest, so update an installed widget with `--instance <id>`. Activation needs a
+  signed-in account and is refused in plan mode.
+
+Reads follow the call's policy like `cat` (a folder outside the work folder is refused where it is read;
+browser-stored files are not readable to agents, so agents work in a Seafile folder). Calls run through
+`runAgentCall`, so Stop, closing the thread and `clientDone` cancel them like any terminal call. The server
+treats `widget` as a command that writes no file, so one activation costs one question, the widget dialog.
+`pnpm check:widget-agent` runs the command with synthetic tool calls on an in-memory work folder (every limit
+error, test cases, abort, permissions, denied/approved/retried/conflicting activation);
+`pnpm check:widget-agent-ui` does the whole flow in muted Chromium (template folder, validate, test, preview,
+the approval dialog, the widget on the desktop, retry).
+
 The first SDK accepts JavaScript modules, relative local imports and `@mvlos/widget` descriptors:
 column, row, text, button, native editor, action, link, image, dot, details and card. Styles accept spacing tokens only. No npm packages,
 build hooks, raw HTML/CSS, arbitrary URLs, DOM, fetch, cookies, storage, host objects or generic RPC
