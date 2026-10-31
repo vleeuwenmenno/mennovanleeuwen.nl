@@ -192,7 +192,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       {permitted && revision?.source.kind !== 'system' && <button onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }}>Pause access</button>}
       {kind === 'sticky' && <button onClick={() => wm.open('notebook', { id })}>Notebook & links</button>}
     </div>
-    {!permitted && revision ? <button onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : kind+' data and selected actions'}</button> : <>
+    {!permitted && revision ? <button onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button> : <>
       <Renderer key={identity} view={shown?.tree ?? EMPTY_VIEW} note={permitted && input.note ? note?.text : undefined} write={revision?.snapshot.manifest.capabilities.includes('note.write') ? write : undefined} event={event} actionsEnabled={actionsEnabled} resource={resource} />
       {input.note && <div className="wp-controls" aria-label="Checklist pages">
         <button disabled={pages.length <= 1} onClick={() => setPages(value => value.slice(0, -1))}>Previous items</button>
