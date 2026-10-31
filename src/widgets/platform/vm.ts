@@ -40,7 +40,13 @@ export function invokeVM(qjs: QuickJSWASMModule, snapshot: Snapshot, input: Widg
   }, modulePath)
   const context = runtime.newContext()
   const take = (result: ReturnType<typeof context.evalCode>) => {
-    if (result.error) { result.error.dispose(); throw new Error('Widget execution failed (exception, memory or CPU limit)') }
+    if (result.error) {
+      // The author's own message (an exception's name and text, or "interrupted" for the CPU limit), so a broken widget can be fixed.
+      let detail = ''
+      try { const e = context.dump(result.error) as { name?: unknown; message?: unknown } | string; detail = typeof e === 'string' ? e : `${String(e?.name ?? 'Error')}: ${String(e?.message ?? '')}` } catch { /* generic message only */ }
+      result.error.dispose()
+      throw new Error(`Widget execution failed (exception, memory or CPU limit)${detail ? `: ${detail.replace(/[^\x20-\x7e]/g, ' ').slice(0, 160)}` : ''}`)
+    }
     return result.value
   }
   try {

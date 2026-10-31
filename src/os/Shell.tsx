@@ -8,6 +8,7 @@ import { filesFor, openWith } from './appDrops'
 import { HOME } from '../terminal/vfs'
 import { whereIs } from '../data/mounts'
 import { widgetDef } from '../widgets/registry'
+import { openWidget } from '../widgets/windows'
 import type { WidgetDef } from '../widgets/types'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
@@ -747,6 +748,16 @@ export function Shell() {
     window.addEventListener('mvlos:open', onOpen)
     return () => window.removeEventListener('mvlos:open', onOpen)
   }, [wm.open])
+
+  // An agent's `widget activate` puts the widget it made on the desktop (focuses it when it is there already).
+  useEffect(() => {
+    const onWidget = (e: Event) => {
+      const d = (e as CustomEvent<{ kind: string; id: string }>).detail
+      if (d && typeof d.kind === 'string' && typeof d.id === 'string') openWidget(wm, d.kind, d.id)
+    }
+    window.addEventListener('mvlos:open-widget', onWidget)
+    return () => window.removeEventListener('mvlos:open-widget', onWidget)
+  }, [wm])
 
   // A reboot (or powering on again) starts from a clean desk, like a real one.
   useEffect(() => {

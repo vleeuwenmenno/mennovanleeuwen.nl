@@ -23,7 +23,7 @@ export function Workshop({ win }: { win: WinState }) {
   const instance = win.props.id ?? made
   const records = installations.use()
   const current = instance ? records[instance] : undefined
-  const [path, setPath] = useState(custom ? `${WIDGET_HOME}/daily-tally` : `${WIDGET_HOME}/${kind}`)
+  const [path, setPath] = useState(win.props.path ?? (custom ? `${WIDGET_HOME}/daily-tally` : `${WIDGET_HOME}/${kind}`))
   const [revision, setRevision] = useState<Revision | null>(null)
   const [view, setView] = useState<Descriptor | null>(null)
   const [message, setMessage] = useState(custom ? 'Write the starter template to a folder, edit it in Xed, build and preview with mocks, then activate it as a new widget.' : 'Clone the source folder, edit in Xed, build and preview with mocks, then activate explicitly.')
@@ -52,6 +52,13 @@ export function Workshop({ win }: { win: WinState }) {
     if (latest.digest !== value.snapshot.digest) throw new Error('Source changed after build; build and preview again')
   }
   const sync = (id: string) => { generation.current = installation(id)!.generation; expectedIdentity.current = installationVersion(id).identity }
+  // An agent's `widget preview` opens (or refreshes, with a new t) this window on its folder and builds it with mock data.
+  useEffect(() => {
+    if (!win.props.preview || !win.props.path || account.status !== 'user') return
+    setPath(win.props.path)
+    void run(async () => { const source = await sourceIdentity(win.props.path!); await preview({ source, snapshot: await buildPackage(await readSource(source)) }) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [win.props.preview, win.props.path, win.props.t, account.status])
   return <div className="wp-workshop">
     <strong>Widget Workshop · {custom ? (current ? current.active.snapshot.manifest.name : 'new custom widget') : kind}</strong>
     <p>Source is executable JavaScript in a bounded VM. Preview uses sample data. Activation grants only this instance's {access(kind)}.</p>
