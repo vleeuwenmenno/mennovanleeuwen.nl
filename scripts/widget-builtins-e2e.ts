@@ -161,7 +161,7 @@ try {
   await waitText('inbox','Pull request 1')
   await p.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(300)
   check('Mobile hiding preserves all six canonical placements',before===await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>JSON.stringify(m.widgetPlaces.get()))`))
-  await p.send('Emulation.setDeviceMetricsOverride',{width:1800,height:1200,deviceScaleFactor:1,mobile:false});await waitText('status','Service 0')
+  await p.send('Emulation.setDeviceMetricsOverride',{width:1800,height:1200,deviceScaleFactor:1,mobile:false});await waitText('status','Service 12') // phone-compatible widgets stay mounted on a phone, so Status keeps the page it was on
   await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>m.widgetPlaces.set(all=>m.changeSet(all,{'future':{id:'future',kind:'future-widget',x:1,y:1,w:200,h:200,vw:1800,vh:1200,at:Date.now()}})))`)
   await sleep(200)
   check('Unavailable newer kind stays recoverable without tombstone',await p.eval(`import('/src/os/widgetPlaces.ts').then(m=>!!m.widgetPlaces.get().places.future&&!m.widgetPlaces.get().removed.includes('future'))`))
