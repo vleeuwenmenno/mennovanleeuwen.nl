@@ -18,6 +18,7 @@ import { execute } from './runtime'
 import { RuntimeFailure } from './scheduler'
 import { useWidgetVisibility } from './visibility'
 import { WeatherControls, usePackageForecast } from './weatherHost'
+import { Pager, ToolButton, Toolbar } from './Chrome'
 import { DomainBroker, type DomainKind } from './Broker'
 import type { BrokerPresentation } from './brokerTypes'
 import './platform.css'
@@ -71,6 +72,8 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const eventAbort = useRef<AbortController | null>(null)
   const renderAbort = useRef<AbortController | null>(null)
   const [tick, setTick] = useState(0)
+  const [placeOpen, setPlaceOpen] = useState(false)
+  const [placeSlot, setPlaceSlot] = useState<HTMLElement | null>(null)
   const [domainPage,setDomainPage]=useState(0)
   const [broker,setBroker]=useState<{identity:string;value:BrokerPresentation}|null>(null)
   const [pages, setPages] = useState<number[]>([0])
@@ -185,21 +188,19 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const actionsEnabled = !!shown && shown.input === input && (!shown.note || !!note && sameNote(note, shown.note)) && visible
   return <div ref={root} className="wp-package" data-package-digest={revision?.snapshot.digest} style={{ '--wp-gap': token(spacing.gap), padding: token(spacing.padding), ...(custom && revision ? { minHeight: revision.snapshot.manifest.sizing.height } : {}) } as CSSProperties}>
     {domain&&visible&&permitted&&revision?.snapshot.manifest.capabilities.includes(`${kind}.read` as Capability)&&<DomainBroker kind={kind as DomainKind} id={id} lifecycle={identity} page={domainPage} tick={tick} capabilities={revision.snapshot.manifest.capabilities} eligible={()=>validNow()} present={present}/>}
-    <div className="wp-controls">
-      {domain&&<button onClick={()=>setTick(value=>value+1)}>Refresh</button>}
-      {kind === 'weather' && <WeatherControls id={id} refresh={() => setTick(n => n + 1)} eligible={eligible} />}
-      <button onClick={() => wm.open('widgetworkshop', { id, kind })} aria-label="Edit widget source">Source</button>
-      {permitted && revision?.source.kind !== 'system' && <button onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }}>Pause access</button>}
-      {kind === 'sticky' && <button onClick={() => wm.open('notebook', { id })}>Notebook & links</button>}
-    </div>
-    {!permitted && revision ? <button onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button> : <>
+    <Toolbar open={placeOpen}>
+      {domain&&<ToolButton icon="refresh" label="Refresh" onClick={()=>setTick(value=>value+1)} />}
+      {kind === 'weather' && <WeatherControls id={id} refresh={() => setTick(n => n + 1)} eligible={eligible} onOpen={setPlaceOpen} slot={placeSlot} />}
+      <ToolButton icon="code" label="Source" title="Edit widget source" aria="Edit widget source" onClick={() => wm.open('widgetworkshop', { id, kind })} />
+      {permitted && revision?.source.kind !== 'system' && <ToolButton icon="pause" label="Pause access" onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }} />}
+      {kind === 'sticky' && <ToolButton icon="book" label="Notebook & links" onClick={() => wm.open('notebook', { id })} />}
+    </Toolbar>
+    <div ref={setPlaceSlot} />
+    {!permitted && revision ? <button className="wp-allow" onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button> : <>
       <Renderer key={identity} view={shown?.tree ?? EMPTY_VIEW} note={permitted && input.note ? note?.text : undefined} write={revision?.snapshot.manifest.capabilities.includes('note.write') ? write : undefined} event={event} actionsEnabled={actionsEnabled} resource={resource} />
-      {input.note && <div className="wp-controls" aria-label="Checklist pages">
-        <button disabled={pages.length <= 1} onClick={() => setPages(value => value.slice(0, -1))}>Previous items</button>
-        <button disabled={input.note.next === undefined} onClick={() => setPages(value => [...value, input.note!.next!])}>Next items</button>
-      </div>}
-      {domainPaging&&<div className="wp-controls" aria-label="Data pages"><span>{domainPaging.shown} of {domainPaging.total} · page {domainPaging.page+1}/{domainPaging.pages}</span><button disabled={domainPaging.page===0} onClick={()=>setDomainPage(domainPaging.page-1)}>Previous results</button><button disabled={domainPaging.page+1>=domainPaging.pages} onClick={()=>setDomainPage(domainPaging.page+1)}>Next results</button></div>}
-      {!shown && <span>Loading widget…</span>}
+      {input.note && <Pager label="Checklist pages" page={pages.length} previous={{ text: 'Previous items', disabled: pages.length <= 1, run: () => setPages(value => value.slice(0, -1)) }} next={{ text: 'Next items', disabled: input.note.next === undefined, run: () => setPages(value => [...value, input.note!.next!]) }} />}
+      {domainPaging&&<Pager label="Data pages" page={domainPaging.page+1} pages={domainPaging.pages} detail={`${domainPaging.shown} of ${domainPaging.total}`} previous={{ text: 'Previous results', disabled: domainPaging.page===0, run: ()=>setDomainPage(domainPaging.page-1) }} next={{ text: 'Next results', disabled: domainPaging.page+1>=domainPaging.pages, run: ()=>setDomainPage(domainPaging.page+1) }} />}
+      {!shown && <span className="wp-loading">Loading widget…</span>}
     </>}
     {custom && !current && <p role="status" data-custom-unavailable>{removed ? 'This custom widget was removed. Take it off the desktop from its menu, or recreate it in the Workshop.' : unavailable ? 'This custom widget\'s installation record is unreadable and was kept untouched. Open the Workshop to rebuild and activate it again.' : 'This custom widget is not installed on this device (yet). It was kept on the desktop; wait for sync, or open the Workshop to install it again.'} <button onClick={() => wm.open('widgetworkshop', { kind: CUSTOM_KIND })}>Open Workshop</button></p>}
     {stateProblem && <p role="status">{stateProblem}</p>}

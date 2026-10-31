@@ -20,10 +20,24 @@ export type Manifest = {
 export type Files = Record<string, string>
 export type SourceIdentity = { kind: 'system'; path: string } | { kind: 'browser'; account: number; storeUUID: string; path: string } | { kind: 'seafile'; account: number; repo: string; path: string }
 export type Snapshot = { manifest: Manifest; files: Files; digest: string; build: typeof BUILD_ID }
-export type Descriptor = { type: 'column' | 'row' | 'text' | 'button' | 'editor' | 'link' | 'action' | 'image' | 'dot' | 'details' | 'card'; resource?: string; hint?: string; checked?: boolean; text?: string; event?: string; tone?: 'normal' | 'muted' | 'accent' | 'danger' | 'success' | 'warning'; children?: Descriptor[] }
+export const ICONS = ['sun', 'moon', 'cloud-sun', 'cloud-moon', 'cloud', 'fog', 'drizzle', 'rain', 'snow', 'storm', 'sunrise', 'sunset', 'wind', 'droplet', 'thermometer', 'pr', 'draft', 'issue', 'check', 'alert', 'down', 'pause', 'calendar', 'clock', 'video', 'note', 'external', 'server', 'users', 'heart', 'bell', 'zap', 'shield', 'cube', 'copy', 'refresh', 'code', 'book', 'pin', 'square', 'square-check', 'chevron-left', 'chevron-right'] as const
+export type IconName = typeof ICONS[number]
+export const SIZES = ['xs', 'sm', 'md', 'lg', 'xl', 'display'] as const
+export const WEIGHTS = ['normal', 'medium', 'bold'] as const
+export const GAPS = ['none', 'xs', 'sm', 'md', 'lg'] as const
+export const TRACKS = ['auto', '1fr', '2fr', '3fr', 'min'] as const
+export const NODE_TYPES = ['column', 'row', 'text', 'button', 'editor', 'link', 'action', 'image', 'dot', 'details', 'card', 'grid', 'box', 'badge', 'icon', 'progress', 'divider', 'spacer'] as const
+export type Descriptor = {
+  type: typeof NODE_TYPES[number]; resource?: string; hint?: string; checked?: boolean; text?: string; event?: string; tone?: 'normal' | 'muted' | 'accent' | 'danger' | 'success' | 'warning'; children?: Descriptor[]
+  /** Additive presentation fields (SDK 1.3). Each is valid on certain node types only; see descriptor(). */
+  size?: typeof SIZES[number]; weight?: typeof WEIGHTS[number]; align?: 'start' | 'center' | 'end' | 'baseline' | 'stretch'; justify?: 'start' | 'center' | 'end' | 'between'
+  gap?: typeof GAPS[number]; pad?: 'none' | 'sm' | 'md' | 'lg'; clamp?: 1 | 2 | 3; wrap?: boolean; columns?: typeof TRACKS[number][]; span?: 'all' | 2 | 3 | 4 | 5 | 6 | 7 | 8; value?: number; name?: IconName
+}
 /** What a custom widget sees: host clock, and its own small JSON state when it holds custom.state. */
 export type CustomInput = { now: number; today: string; state?: unknown; revision?: string }
-export type WidgetInput = BrokerProjection & { custom?: CustomInput; note?: { text: string; revision: string; offset?: number; next?: number; continues?: boolean }; weather?: { place: string; units: string; summary: string; hours: string[]; days: string[] }; error?: string }
+/** `now`, `hourly` and `daily` are structured companions of the legacy strings (summary/hours/days), which stay for older packages. */
+export type WeatherInput = { place: string; units: string; summary: string; hours: string[]; days: string[]; now?: { temp: number; feels: number; text: string; icon: IconName; high: number; low: number; wind: number; windUnit: string; humidity: number; day: boolean }; hourly?: { time: string; temp: number; icon: IconName; rain: number }[]; daily?: { label: string; max: number; min: number; icon: IconName; rain: number }[] }
+export type WidgetInput = BrokerProjection & { custom?: CustomInput; note?: { text: string; revision: string; offset?: number; next?: number; continues?: boolean }; weather?: WeatherInput; error?: string }
 export type Mutation = { type: 'note.replace'; text: string; expectedRevision: string } | { type: 'note.edit'; start: number; end: number; text: string; expectedRevision: string } | { type: 'custom.replace'; state: unknown; expectedRevision: string }
 const CAPABILITIES = new Set<Capability>(Object.values(KIND_CAPABILITIES).flat())
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
@@ -80,20 +94,46 @@ export async function verifySnapshot(snapshot: Snapshot) {
   if (rebuilt.digest !== snapshot.digest || snapshot.build !== BUILD_ID || JSON.stringify(rebuilt.manifest) !== JSON.stringify(snapshot.manifest)) throw new Error('Snapshot identity mismatch')
   return rebuilt
 }
+const oneOf = (v: unknown, list: readonly unknown[]) => list.includes(v)
+const CONTAINERS = ['column', 'row', 'details', 'card', 'link', 'action', 'grid', 'box']
+const PRESENTATION = ['size', 'weight', 'align', 'justify', 'gap', 'pad', 'clamp', 'wrap', 'columns', 'span', 'value', 'name']
+/** Which presentation fields each node type accepts (all optional unless noted in the checks below). */
+const ACCEPTS: Record<string, string[]> = {
+  text: ['size', 'weight', 'align', 'clamp', 'span'], badge: ['size', 'weight', 'span'], icon: ['name', 'size', 'span'], progress: ['value', 'span'], divider: ['span'], spacer: ['span'],
+  column: ['align', 'justify', 'gap', 'span'], row: ['align', 'justify', 'gap', 'wrap', 'span'], grid: ['columns', 'align', 'justify', 'gap', 'span'], box: ['align', 'justify', 'gap', 'pad', 'span'],
+  button: ['span'], link: ['span'], action: ['span'], card: ['span'], details: [], image: [], dot: [], editor: [],
+}
 export function descriptor(raw: unknown): Descriptor {
   let nodes = 0
   const walk = (v: unknown, depth: number): Descriptor => {
     if (++nodes > LIMITS.nodes || depth > LIMITS.depth || !record(v)) throw new Error('Descriptor limit')
-    exact(v, ['type', 'text', 'event', 'tone', 'children', 'resource', 'hint', 'checked'])
-    if (!['column', 'row', 'text', 'button', 'editor', 'link', 'action', 'image', 'dot', 'details', 'card'].includes(String(v.type))) throw new Error('Unknown descriptor')
+    exact(v, ['type', 'text', 'event', 'tone', 'children', 'resource', 'hint', 'checked', ...PRESENTATION])
+    if (!oneOf(v.type, NODE_TYPES)) throw new Error('Unknown descriptor')
+    const type = v.type as Descriptor['type']
     if (v.text !== undefined && (typeof v.text !== 'string' || v.text.length > LIMITS.fileBytes)) throw new Error('Invalid text')
     if (v.event !== undefined && (typeof v.event !== 'string' || !/^[a-zA-Z0-9:._-]{1,80}$/.test(v.event) || v.type !== 'button')) throw new Error('Invalid event')
     if (v.tone !== undefined && !['normal', 'muted', 'accent', 'danger', 'success', 'warning'].includes(String(v.tone))) throw new Error('Invalid tone')
-    if (v.children !== undefined && (!['column', 'row', 'details', 'card', 'link', 'action'].includes(String(v.type)) || !Array.isArray(v.children))) throw new Error('Invalid children')
+    if (v.children !== undefined && (!CONTAINERS.includes(type) || !Array.isArray(v.children))) throw new Error('Invalid children')
     if (v.resource !== undefined && (typeof v.resource !== 'string' || !/^[a-f0-9-]{36}$/.test(v.resource) || !['link','action','image','dot','card'].includes(String(v.type)))) throw new Error('Invalid resource handle')
     if (v.hint !== undefined && (typeof v.hint !== 'string' || v.hint.length > 1024)) throw new Error('Invalid hint')
     if (v.checked !== undefined && (typeof v.checked !== 'boolean' || v.type !== 'action')) throw new Error('Invalid checkbox')
-    return { type: v.type as Descriptor['type'], ...(v.resource ? { resource: v.resource as string } : {}), ...(v.hint ? { hint: v.hint as string } : {}), ...(v.checked === undefined ? {} : {checked:v.checked as boolean}), ...(v.text === undefined ? {} : { text: v.text as string }), ...(v.event ? { event: v.event as string } : {}), ...(v.tone ? { tone: v.tone as Descriptor['tone'] } : {}), ...(Array.isArray(v.children) ? { children: v.children.map(c => walk(c, depth + 1)) } : {}) }
+    for (const key of PRESENTATION) if (v[key] !== undefined && !ACCEPTS[type].includes(key)) throw new Error(`Invalid ${key}`)
+    if (v.size !== undefined && !oneOf(v.size, SIZES)) throw new Error('Invalid size')
+    if (v.weight !== undefined && !oneOf(v.weight, WEIGHTS)) throw new Error('Invalid weight')
+    if (v.align !== undefined && !oneOf(v.align, type === 'text' ? ['start', 'center', 'end'] : ['start', 'center', 'end', 'baseline', 'stretch'])) throw new Error('Invalid align')
+    if (v.justify !== undefined && !oneOf(v.justify, ['start', 'center', 'end', 'between'])) throw new Error('Invalid justify')
+    if (v.gap !== undefined && !oneOf(v.gap, GAPS)) throw new Error('Invalid gap')
+    if (v.pad !== undefined && !oneOf(v.pad, ['none', 'sm', 'md', 'lg'])) throw new Error('Invalid pad')
+    if (v.clamp !== undefined && !oneOf(v.clamp, [1, 2, 3])) throw new Error('Invalid clamp')
+    if (v.wrap !== undefined && typeof v.wrap !== 'boolean') throw new Error('Invalid wrap')
+    if (v.span !== undefined && !oneOf(v.span, ['all', 2, 3, 4, 5, 6, 7, 8])) throw new Error('Invalid span')
+    if (type === 'grid' && (!Array.isArray(v.columns) || v.columns.length < 1 || v.columns.length > 8 || v.columns.some(c => !oneOf(c, TRACKS)))) throw new Error('Invalid columns')
+    if (type === 'progress' && (typeof v.value !== 'number' || !Number.isFinite(v.value) || v.value < 0 || v.value > 1)) throw new Error('Invalid progress value')
+    if (type === 'icon' && !oneOf(v.name, ICONS)) throw new Error('Invalid icon name')
+    if (type === 'badge' && (typeof v.text !== 'string' || v.text.length > 64)) throw new Error('Invalid badge text')
+    const out: Descriptor = { type, ...(v.resource ? { resource: v.resource as string } : {}), ...(v.hint ? { hint: v.hint as string } : {}), ...(v.checked === undefined ? {} : {checked:v.checked as boolean}), ...(v.text === undefined ? {} : { text: v.text as string }), ...(v.event ? { event: v.event as string } : {}), ...(v.tone ? { tone: v.tone as Descriptor['tone'] } : {}), ...(Array.isArray(v.children) ? { children: v.children.map(c => walk(c, depth + 1)) } : {}) }
+    for (const key of PRESENTATION) if (v[key] !== undefined) (out as Record<string, unknown>)[key] = v[key]
+    return out
   }
   if (new TextEncoder().encode(JSON.stringify(raw)).length > LIMITS.outputBytes) throw new Error('Output limit')
   return walk(raw, 0)

@@ -1,4 +1,4 @@
-import { column, text, button, editor } from '@mvlos/widget';
+import { column, text, button, editor, divider } from '@mvlos/widget';
 export function render(input) {
   if (!input.note) return column(text('Note unavailable', 'muted'), editor());
   const tasks = input.note.text.split('\n').slice(0, 64).flatMap((line, index) => {
@@ -6,7 +6,7 @@ export function render(input) {
     const match = /^\s*[-*+] \[([ xX])\]\s?(.*)$/.exec(line);
     return match ? [button(`${match[1] === ' ' ? '☐' : '☑'} ${Array.from(match[2] || 'Item').slice(0, 256).join('')}`, `toggle:${index}`)] : [];
   });
-  return column(text('Note', 'accent'), editor(), ...tasks);
+  return column(editor(), ...(tasks.length ? [divider(), ...tasks] : []));
 }
 export function event(input, event) {
   if (!input.note || !/^toggle:\d+$/.test(event)) return null;

@@ -24,13 +24,43 @@ is distinct from capacity errors. Hidden/covered/mobile desktops do not execute.
 
 ## Descriptor vocabulary
 
-@mvlos/widget exports column(...children), row(...children), text(value,tone),
+@mvlos/widget exports column(...children), row(...children), text(value,tone,options),
 button(label,eventID), editor(), action(label,handle,options), link(label,handle,options),
-image(handle,alt), dot(handle), details(summary,...body), card(handle,...children).
-Action/link options: hint, children, tone; action also accepts checked (native checkbox role).
+image(handle,alt), dot(handle), details(summary,...body), card(handle,...children) and
+the presentation nodes grid(columns,...children), box(...children), badge(value,tone,options),
+icon(name,tone,options), progress(value,tone,options), divider(options), spacer(options).
+Action/link options: hint, children, tone, fallback ('row' keeps a row layout where the
+handle is missing, as in previews); action also accepts checked (native checkbox role).
 Tones: normal, muted, accent, danger, success, warning. No raw HTML,
 URLs, arbitrary attributes, CSS or host functions. Spacing tokens: compact,
 normal, roomy in styles/tokens.json (gap and padding).
+
+Presentation (additive; every value is a closed token, anything else fails validation).
+column, row, grid and box take an options object as their FIRST argument (an object
+without a type), e.g. row({gap:'sm',align:'center'}, a, b):
+- gap: none xs sm md lg. align: start center end baseline stretch (cross axis).
+  justify: start center end between. row also wrap:false (no wrapping).
+- box: a tinted, rounded panel; tone (muted accent success warning danger) sets its tint,
+  pad none/sm/md/lg. Use it for banners and callouts.
+- text options: size xs sm md lg xl display; weight normal medium bold; align start center end;
+  clamp 1-3 (line limit with ellipsis); hint (tooltip).
+- badge(value, tone, {size}): a small chip, 64 characters at most.
+- icon(name, tone, {size}): a host-drawn glyph in the tone's colour. Names: sun moon cloud-sun
+  cloud-moon cloud fog drizzle rain snow storm sunrise sunset wind droplet thermometer pr draft
+  issue check alert down pause calendar clock video note external server users heart bell zap
+  shield cube copy refresh code book pin square square-check chevron-left chevron-right.
+- progress(value, tone): a bar, value a number from 0 to 1.
+- divider(), spacer(): a hairline; a flexible gap that pushes siblings apart in a row.
+- grid(columns, options, ...children): children fill the columns row by row. columns is 1-8
+  tracks from auto (fits its content), 1fr 2fr 3fr (share the rest) and min. A row, link,
+  action, card or box placed directly in a grid and WITHOUT span becomes a full grid row whose
+  own children sit on the grid's columns, so numbers line up across rows. Any node can take
+  span: 'all' (a full-width cell, e.g. a heading or divider) or 2-8 columns.
+Layout never reads package CSS: the host maps each token to the Omarchy theme, so light and
+dark themes and accents apply. Older packages render unchanged. Widget design checklist:
+one heading, one idea per row, numbers right-aligned in auto columns, tone only for meaning
+(danger for outages, success for healthy, warning for expiring), muted for secondary text.
+The built-in packages (src/widgets/packages) are worked examples.
 The parent owns window/menu/theme controls. The editor is native, with immediate
 host transactions, selection, IME and native undo; events cannot preventDefault
 retroactively. The host keeps one stable native editor even if descriptors are pending or fail.
@@ -55,8 +85,8 @@ The displayed view, input, page and source identity are one immutable presentati
 Shell notesHidden/coverage eligibility, document/mobile/minimized state, grants and
 account identity are checked again at admission and completion, with layout-time
 cancellation when eligibility changes.
-weather.read: input.weather = {place,units,summary,hours,days} for the host-selected
-place only. Device here stays browser-local; only explicit cities sync. Visibility-aware
+weather.read: input.weather = {place,units,summary,hours,days,now,hourly,daily} for the host-selected
+place only. summary/hours/days are display strings kept for older packages; now = {temp,feels,text,icon,high,low,wind,windUnit,humidity,day}, hourly = [{time,temp,icon,rain}] (next six hours) and daily = [{label,max,min,icon,rain}] (next five days) are structured (icon is an icon name, rain a percentage). Device here stays browser-local; only explicit cities sync. Visibility-aware
 refresh uses forecast age and a 15-minute timer, aborted while hidden. Account
 hydration, instance/runtime revision and grant changes restart the refresh loop using
 a stable lifecycle identity; ordinary renders do not. Results and errors remain
