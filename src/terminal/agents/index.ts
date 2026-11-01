@@ -1,11 +1,12 @@
+import { ClientCalls } from './lifecycle'
 import { generatedImage } from '../../data/agentImages'
-import { agentSettings, answerApproval, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, threadMatches, type Permission, type Thread, type Workdir } from '../../data/agents'
+import { agentSettings, answerApproval, claimClientCall, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, threadMatches, type Permission, type Thread, type Workdir } from '../../data/agents'
 import { seafileAt, syncAgentPlaces } from '../../data/agentPlaces'
 import { getAccount } from '../../os/account'
 import { CmdError, type Ctx } from '../types'
 import { prettyPath } from '../vfs'
 import { Session } from './app'
-import { runCommand, workdirPath } from './client'
+import { runAgentCall } from './exec'
 import { markdown } from './markdown'
 import { toolTitle } from './render'
 import { ago, lines as toMarkup, seg } from './text'
@@ -173,33 +174,39 @@ async function listing(ctx: Ctx): Promise<string> {
 /** agents -p: one answer, printed; nobody is there to allow changes, so those are declined. */
 async function printMode(ctx: Ctx, prompt: string, o: { workdir: Workdir | null; mode: 'quick' | 'deep'; model: string | null; projectId: number | null; permission: Permission; tools: ReturnType<typeof agentSettings>['tools'] }): Promise<string> {
   const thread = await createThread({ mode: o.mode, model: o.model ?? undefined, tools: o.tools, projectId: o.projectId, workdir: o.workdir, permission: o.permission })
+  const calls = new ClientCalls()
   const imageLinks = new Map<string, string>()
   const imageSettingsLinks = new Map<string, string>()
   let answer = ''
   let failure: string | null = null
-  const dir = o.workdir ? workdirPath(o.workdir) : ctx.cwd
-  await sendMessage(
-    thread.id,
-    prompt,
-    [],
-    (e) => {
-      if (e.type === 'message' && e.message.role === 'tool' && e.message.toolName === 'generate_image') {
-        const image = generatedImage(e.message.content)
-        if (image) { imageLinks.set(new URL(image.url, location.origin).href, image.settings?.operation === 'remove' ? 'Image with objects removed' : image.settings?.operation === 'inpaint' ? 'Inpainted image' : image.settings?.operation === 'upscale' ? 'Upscaled image' : image.settings?.operation === 'refine' ? 'Refined image' : image.settings && 'hires' in image.settings && image.settings.hires ? 'Generated image with hires refinement' : 'Generated image'); if (image.settings) imageSettingsLinks.set(new URL(image.url + '/metadata', location.origin).href, image.settings.operation === 'remove' ? 'Removal settings' : image.settings.operation === 'inpaint' ? 'Inpaint settings' : image.settings.operation === 'upscale' ? 'Upscale settings' : image.settings.operation === 'refine' ? 'Refinement settings' : 'hires' in image.settings && image.settings.hires ? 'Generation and hires settings' : 'Generation settings') }
-      }
-      if (e.type === 'message' && e.message.role === 'assistant') {
-        if (e.message.content.trim()) answer = e.message.content.trim()
-        if (ctx.tty) for (const c of e.message.toolCalls ?? []) ctx.print(toMarkup([[seg('● ', 'muted'), seg(toolTitle(c).filter(Boolean).join(' '), 'muted')]]))
-      } else if (e.type === 'approval') void answerApproval(thread.id, e.callId, false, { feedback: 'This runs non-interactively (agents -p), with nobody to allow changes: say what you would change instead.' })
-      else if (e.type === 'question') void answerForm(thread.id, e.callId, null)
-      else if (e.type === 'client') {
-        const command = typeof e.call.arguments?.command === 'string' ? e.call.arguments.command : ''
-        void (dir ? runCommand(ctx, dir, command, ctx.signal) : Promise.resolve({ output: 'The work folder is not mounted here', status: 1 })).then((r) => sendClientResult(thread.id, e.callId, r.output, r.status).catch(() => {}))
-      } else if (e.type === 'error') failure = e.error
-    },
-    ctx.signal,
-    { terminal: true },
-  )
+  try {
+    await sendMessage(
+      thread.id,
+      prompt,
+      [],
+      (e) => {
+        if (e.type === 'message' && e.message.role === 'tool' && e.message.toolName === 'generate_image') {
+          const image = generatedImage(e.message.content)
+          if (image) { imageLinks.set(new URL(image.url, location.origin).href, image.settings?.operation === 'remove' ? 'Image with objects removed' : image.settings?.operation === 'inpaint' ? 'Inpainted image' : image.settings?.operation === 'upscale' ? 'Upscaled image' : image.settings?.operation === 'refine' ? 'Refined image' : image.settings && 'hires' in image.settings && image.settings.hires ? 'Generated image with hires refinement' : 'Generated image'); if (image.settings) imageSettingsLinks.set(new URL(image.url + '/metadata', location.origin).href, image.settings.operation === 'remove' ? 'Removal settings' : image.settings.operation === 'inpaint' ? 'Inpaint settings' : image.settings.operation === 'upscale' ? 'Upscale settings' : image.settings.operation === 'refine' ? 'Refinement settings' : 'hires' in image.settings && image.settings.hires ? 'Generation and hires settings' : 'Generation settings') }
+        }
+        if (e.type === 'message' && e.message.role === 'assistant') {
+          if (e.message.content.trim()) answer = e.message.content.trim()
+          if (ctx.tty) for (const c of e.message.toolCalls ?? []) ctx.print(toMarkup([[seg('● ', 'muted'), seg(toolTitle(c).filter(Boolean).join(' '), 'muted')]]))
+        } else if (e.type === 'approval') void answerApproval(thread.id, e.callId, false, { feedback: 'This runs non-interactively (agents -p), with nobody to allow changes: say what you would change instead.' })
+        else if (e.type === 'question') void answerForm(thread.id, e.callId, null)
+        else if (e.type === 'client') {
+          void calls.run(e.callId, () => claimClientCall(thread.id, e.callId), (signal) =>
+            runAgentCall({ name: e.call.name, arguments: e.call.arguments ?? {}, workdir: o.workdir, fallbackDir: ctx.cwd, grant: e.grant, signal }),
+            (r) => sendClientResult(thread.id, e.callId, r.output, r.status, { result: r.result, capabilities: r.capabilities }), ctx.signal).catch(() => {})
+        } else if (e.type === 'clientDone') calls.done(e.callId)
+        else if (e.type === 'error') failure = e.error
+      },
+      ctx.signal,
+      { terminal: true },
+    )
+  } finally {
+    calls.close()
+  }
   if (failure) throw new CmdError(`agents: ${failure}`)
   for (const [link, label] of imageLinks) if (!answer.includes(link)) answer += `\n\n${label}: ${link}`
   for (const [link, label] of imageSettingsLinks) if (!answer.includes(link)) answer += `\n${label}: ${link}`

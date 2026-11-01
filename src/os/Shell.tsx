@@ -1,3 +1,4 @@
+import { WidgetVisibility } from '../widgets/platform/visibility'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
 import { dropInTrash, trashOp } from '../data/fileDrop'
@@ -7,6 +8,7 @@ import { filesFor, openWith } from './appDrops'
 import { HOME } from '../terminal/vfs'
 import { whereIs } from '../data/mounts'
 import { widgetDef } from '../widgets/registry'
+import { openWidget } from '../widgets/windows'
 import type { WidgetDef } from '../widgets/types'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
@@ -638,7 +640,7 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
   const style = def.useFrame?.(id)
   const menuItems = def.useMenu?.(id, wm) ?? []
   return (
-    <Window win={w} title={def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
+    <Window win={w} title={def.useTitle?.(id) ?? def.name} chrome="note" className={`widget widget-${def.kind}${style?.['--widget-bare' as keyof typeof style] === '1' ? ' widget-bare' : ''}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
       {APP_META.widget.render(w)}
     </Window>
   )
@@ -699,7 +701,7 @@ export function Shell() {
   // moment the desk behind it shows. Nothing of the desk may peek out from behind it then.
   const covered = wm.windows.some((w) => w.maximized && !w.minimized && !NOTE_APPS.has(w.app) && wm.shown(w))
 
-  // Phones: app windows are full-screen sheets, and the notes (sticky widgets too) go one under
+  // Phones: app windows are full-screen sheets; built-in notes go one under
   // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
   // the front, or just added, scrolls into view.
   const mobile = useIsMobile()
@@ -753,6 +755,16 @@ export function Shell() {
     window.addEventListener('mvlos:open', onOpen)
     return () => window.removeEventListener('mvlos:open', onOpen)
   }, [wm.open])
+
+  // An agent's `widget activate` puts the widget it made on the desktop (focuses it when it is there already).
+  useEffect(() => {
+    const onWidget = (e: Event) => {
+      const d = (e as CustomEvent<{ kind: string; id: string }>).detail
+      if (d && typeof d.kind === 'string' && typeof d.id === 'string') openWidget(wm, d.kind, d.id)
+    }
+    window.addEventListener('mvlos:open-widget', onWidget)
+    return () => window.removeEventListener('mvlos:open-widget', onWidget)
+  }, [wm])
 
   // A reboot (or powering on again) starts from a clean desk, like a real one.
   useEffect(() => {
@@ -846,16 +858,18 @@ export function Shell() {
       <TopBar />
       {/* Icons and windows. On phones this layer scrolls down when windows reach below the
           screen; the top bar, the dock and the wallpaper stay where they are. */}
-      <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
+      <WidgetVisibility value={!hidden && !covered}><div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
         <Desktop />
         <main className="windows">
-          {wm.windows.map((w) => (
+          {/* A phone only draws the widgets whose package says it works there (`phone: true`). */}
+          {wm.windows.filter((w) => !mobile || w.app !== 'widget' || wm.shown(w)).map((w) => (
             <AppWindow key={w.pid} w={w} />
           ))}
           {/* Phones: where a note being moved up or down the column will land. */}
           <NoteStackSlot />
         </main>
       </div>
+      </WidgetVisibility>
       <SnapPreview />
       <Dock />
       {overlay === 'launchpad' && <Launchpad />}

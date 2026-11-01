@@ -1,3 +1,6 @@
+import { checkDownload, downloadJson } from './download'
+import type { Ctx } from './types'
+type Access = Pick<Ctx, 'signal' | 'budget' | 'policy'>
 // Real DNS lookups from the browser via DNS-over-HTTPS JSON APIs (both send CORS headers).
 // The queried name goes to Cloudflare, or to Google if Cloudflare does not answer.
 
@@ -21,14 +24,15 @@ export function resolverFor(server: string): 'cloudflare' | 'google' | null {
   return null
 }
 
-export async function resolve(name: string, type = 'A', signal?: AbortSignal, prefer?: 'cloudflare' | 'google' | null): Promise<DnsResult> {
+export async function resolve(name: string, type = 'A', signal?: AbortSignal, prefer?: 'cloudflare' | 'google' | null, access?: Access): Promise<DnsResult> {
   let lastError: unknown
   for (const url of prefer === 'google' ? [...RESOLVERS].reverse() : RESOLVERS) {
     const t0 = performance.now()
     try {
+      if (access) checkDownload(access)
       const res = await fetch(url(name, type), { headers: { accept: 'application/dns-json' }, signal })
+      const json = access ? await downloadJson(res, access) : await res.json()
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = await res.json()
       return {
         status: STATUS[json.Status] ?? `RCODE${json.Status}`,
         answers: (json.Answer ?? []).map((a: { name: string; type: number; TTL: number; data: string }) => ({
@@ -42,6 +46,7 @@ export async function resolve(name: string, type = 'A', signal?: AbortSignal, pr
       }
     } catch (err) {
       if (signal?.aborted) throw err
+      if (access) checkDownload(access)
       lastError = err
     }
   }
@@ -49,11 +54,11 @@ export async function resolve(name: string, type = 'A', signal?: AbortSignal, pr
 }
 
 /** First IPv4 (or IPv6) address for a name, or null when the name does not exist. */
-export async function lookupAddress(name: string, signal?: AbortSignal): Promise<{ address: string | null; status: string }> {
-  const a = await resolve(name, 'A', signal)
+export async function lookupAddress(name: string, signal?: AbortSignal, access?: Access): Promise<{ address: string | null; status: string }> {
+  const a = await resolve(name, 'A', signal, null, access)
   const v4 = a.answers.find((x) => x.type === 'A')
   if (v4) return { address: v4.data, status: a.status }
   if (a.status === 'NXDOMAIN') return { address: null, status: a.status }
-  const aaaa = await resolve(name, 'AAAA', signal)
+  const aaaa = await resolve(name, 'AAAA', signal, null, access)
   return { address: aaaa.answers.find((x) => x.type === 'AAAA')?.data ?? null, status: aaaa.status }
 }

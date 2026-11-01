@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { cvMode } from './cvMode'
 import { playMode } from './playMode'
 import { loginCookie, setLoginCookie } from './identity'
-import { accountGuard, clearAccountSpace, cookieUid, freezeAccount, TAB_ACCOUNT, TAB_UID } from './accountSpace'
+import { accountGuard, clearAccountSpace, cookieUid, freezeAccount, TAB_ACCOUNT, TAB_UID, waitAccountSpace } from './accountSpace'
 import type { OrgsResponse } from '../data/code'
 
 // Who is signed in (GitHub or Google, see server/auth.ts) and which Gitea/Forgejo instances they linked.
@@ -22,6 +22,8 @@ export type SignInProviders = { github: boolean; google: boolean }
 /** Whether a new GitHub account could sign up now (null: sign-in is off). */
 export type Registration = { open: boolean; full: boolean }
 export type Account = {
+  /** True only after a successful /api/me response; off can also mean offline discovery. */
+  resolved?: boolean
   status: 'loading' | 'off' | 'anon' | 'user'
   user: AccountUser | null
   registration: Registration | null
@@ -49,7 +51,7 @@ const listeners = new Set<() => void>()
 async function forgetBrowserAccount() {
   freezeAccount(false)
   window.dispatchEvent(new Event('mvlos:forget'))
-  clearAccountSpace()
+  await clearAccountSpace().catch(() => { /* blocked storage remains account-scoped; auth revocation still completes */ })
   try {
     const sub = await (await navigator.serviceWorker?.getRegistration())?.pushManager?.getSubscription()
     await sub?.unsubscribe()
@@ -57,7 +59,7 @@ async function forgetBrowserAccount() {
     /* no push here */
   }
   // Anything else that wrote meanwhile goes too.
-  clearAccountSpace()
+  await clearAccountSpace().catch(() => { /* blocked storage remains account-scoped; auth revocation still completes */ })
 }
 
 function set(next: Account) {
@@ -86,8 +88,8 @@ export function useAccount() {
 }
 
 /** JSON request to the site's own API; throws with the server's message on failure. */
-export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
-  const { json, ...rest } = init
+export async function api<T>(path: string, init: RequestInit & { json?: unknown; decode?: (response: Response) => Promise<unknown> } = {}): Promise<T> {
+  const { json, decode, ...rest } = init
   // A tab of another account than the browser's now sends nothing (src/os/accountSpace.ts).
   if (!accountGuard()) throw new Error('Signed in as another account')
   const res = await fetch(path, {
@@ -96,15 +98,16 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
     headers: { ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}), ...rest.headers, 'X-MvL-Account': TAB_ACCOUNT },
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   })
-  const body = await res.json().catch(() => null)
+  const body = (decode ? await decode(res) : await res.json().catch(() => null)) as { error?: string } | null
   if (!res.ok) throw new Error(body?.error ?? `Request failed (${res.status})`)
   return body as T
 }
 
 export async function loadAccount() {
   try {
+    await waitAccountSpace()
     const me = await api<{ authEnabled: boolean; registration?: Registration | null; signIn?: SignInProviders; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null; openai?: boolean }; seafile?: SeafileInfo | null }>('/api/me')
-    const next: Account = { status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, signIn: { github: !!me.signIn?.github, google: !!me.signIn?.google }, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null, openai: !!me.integrations?.openai }, seafile: me.seafile ?? null }
+    const next: Account = { resolved: true, status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, signIn: { github: !!me.signIn?.github, google: !!me.signIn?.google }, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null, openai: !!me.integrations?.openai }, seafile: me.seafile ?? null }
     // This tab took its account from the browser's cookie as it loaded (src/os/accountSpace.ts).
     // The server says otherwise (the session ran out, or the cookie was from before it was kept):
     // its answer has put the cookie right, so start again as that account, keeping this one's
@@ -133,7 +136,7 @@ export async function loadAccount() {
     }
     set(next)
   } catch {
-    set({ status: 'off', user: null, registration: null, signIn: { github: false, google: false }, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+    set({ resolved: false, status: 'off', user: null, registration: null, signIn: { github: false, google: false }, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
   }
 }
 

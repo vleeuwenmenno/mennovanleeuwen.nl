@@ -1,30 +1,20 @@
-import type { Workdir } from '../../data/agents'
-import { seafileAt } from '../../data/agentPlaces'
 import { runCaptured, type Base } from '../msh/interp'
 import { commandWords, parse } from '../msh/parse'
 import type { Ctx } from '../types'
-import { HOME } from '../vfs'
 
-// The agents' terminal tool, run here: a command line goes through msh like `msh -c`, in the work
-// folder, with everything it prints collected for the agent. Programs that take over the screen or
-// the session do not run; a question a command asks (rm's y/N) is answered no.
+// A command the user types after `!` in the agents command: a command line goes through msh like
+// `msh -c`, in the work folder, with everything it prints collected. It is the user's own command, with
+// the user's own rights. (The agents' terminal tool is something else: exec.ts, confined and bounded.)
+// Programs that take over the screen or the session do not run; a question a command asks (rm's y/N) is
+// answered no.
 
 const INTERACTIVE = new Set(['nano', 'vim', 'nvim', 'htop', 'top', 'watch', 'cmatrix', 'sl', 'agents', 'claude', 'exit', 'logout', 'reboot', 'shutdown', 'poweroff', 'halt', 'startx', 'clear', 'sudo', 'su', 'mount', 'umount', 'games', 'tetris', 'pacman', 'snake', 'minesweeper', 'breakout', 'pool'])
 const TIMEOUT = 60_000
 const MAX_OUTPUT = 60_000
 
-/** The work folder as a terminal path, if the mounts here still put it there. */
-export function workdirPath(w: Workdir): string | null {
-  const candidates = [w.label.startsWith('~') ? HOME + w.label.slice(1) : w.label]
-  for (const p of candidates) {
-    if (!p.startsWith('/')) continue
-    const at = seafileAt(p)
-    if (at && at.repo === w.repo && at.path === w.path) return p
-  }
-  return null
-}
+export { workdirPath } from './exec'
 
-/** Runs a terminal tool call; answers what it printed and its exit status. */
+/** Runs a line the user typed after `!`; answers what it printed and its exit status. */
 export async function runCommand(ctx: Ctx, cwd: string, command: string, signal: AbortSignal): Promise<{ output: string; status: number }> {
   let names: string[]
   try {

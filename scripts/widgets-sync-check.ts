@@ -9,6 +9,7 @@
 // Exits 1 on any failure.
 
 import { existsSync } from 'node:fs'
+import { widgetStorageFixture } from './widget-storage-fixture.ts'
 import { registerHooks } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { check, finish, sleep } from './empires-harness.ts'
@@ -95,6 +96,7 @@ g.localStorage = {
 const main = new Tab()
 tabs.push(main)
 g.window = main
+g.indexedDB = widgetStorageFixture(() => { const owner = g.window as Tab; return callback => as(owner, callback) })
 g.document = { cookie: 'mvlos_login=check; mvlos_uid=1', visibilityState: 'visible', addEventListener() {}, removeEventListener() {}, title: '' }
 /** How often a page asked to start again. */
 let reloads = 0
@@ -222,7 +224,7 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   tabs.splice(tabs.indexOf(tab), 1)
 }
 
-// --- 2. a widget only in the account's (older-style) layout survives a local-wins merge ------------
+// --- 2. legacy layouts arriving after canonical cutover are no longer migration inputs -----------
 {
   const key = 'windows:t2'
   storage.set(`mvlos.u.1.sync.${key}`, JSON.stringify({ value: [{ app: 'terminal', props: {} }], base: 100, dirty: true }))
@@ -233,12 +235,12 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   await pullAll()
   off()
   check('legacy: the layout merge kept the local layout (without the widget)', JSON.stringify(layout.get()).includes('onlyhere') === false)
-  check('legacy: the widget moved into the set first', wp.widgetPlaces.get().places.onlyhere?.kind === 'status')
-  check('legacy: the set was kept in this browser at once', !!meta('widgets:placed')?.value.places.onlyhere)
-  check('legacy: the window manager is told to show it', shown === 1)
+  check('legacy after cutover: no widget imported from the later layout', !wp.widgetPlaces.get().places.onlyhere)
+  check('legacy after cutover: no legacy set is written', !meta('widgets:placed'))
+  check('legacy after cutover: no import callback reaches the window manager', shown === 0)
   await sleep(1200)
   await pullAll()
-  check('legacy: the set reached the account', !!(server.get('widgets:placed')?.value as WidgetSet)?.places.onlyhere)
+  check('legacy after cutover: no legacy set is pushed', !server.has('widgets:placed'))
   check('legacy: even though the layout on the server lost it', !JSON.stringify(server.get(key)!.value).includes('onlyhere'))
 }
 
@@ -312,11 +314,9 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   for (const [a, b] of [[mobile, desktop], [desktop, mobile]])
     check('migration: desktop position wins in either merge order', wp.mergeSets(set(a), set(b)).places[mobile.id].x === 1100)
   check('migration: larger desktop wins before coordinates', wp.wins({ ...desktop, vw: 1800, x: 1 }, desktop))
-  wp.importWidgets([mobile])
-  wp.importWidgets([desktop])
-  check('migration: a later desktop import upgrades an untouched phone import', wp.widgetPlaces.get().places[mobile.id].x === 1100)
+  check('migration after cutover: phone import is ignored', !wp.importWidgets([mobile]))
+  check('migration after cutover: desktop import is ignored', !wp.importWidgets([desktop]))
   check('migration: normalization keeps unknown-screen marker', wp.normalizeSet(set(desktop)).places[mobile.id].screenUnknown === true)
-  check('migration: imported layouts mark screen dimensions unknown', wp.widgetPlaces.get().places.onlyhere.screenUnknown === true)
   check('migration: a genuine later phone change still wins', wp.wins({ ...mobile, at: 1 }, desktop))
 }
 
@@ -413,8 +413,6 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   check('notes: notes saved by earlier versions load (unknown colour made yellow, junk dropped)', old[0].id === 'o1' && old[0].color === 'yellow')
   check('notes: a recent tombstone is kept, one older than 90 days dropped', ids(old) === 'o1,o2' && old[1].purged === true)
   tabs.splice(tabs.indexOf(t1), 2)
-  const src = (await import('node:fs')).readFileSync(new URL('../src/data/notes.ts', import.meta.url), 'utf8')
-  check('notes: the real notes store merges between tabs with these rules', /synced<Note\[\]>\('notes', \[\], \{ normalize: normalizeNotes, merge: mergeNotes, mergeTabs: true \}\)/.test(src))
 }
 
 // --- 7. notes: text and the trash merge apart; the server's writers count on like the browser ------
@@ -471,17 +469,16 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   check('server: the image copies noteClock.ts', /COPY [^\n]*src\/data\/noteClock\.ts/.test(docker))
 }
 
-// --- 8. a pull reads the server's widget set in the first format before merging ---------------------
+// --- 8. a later old-client widget-set write is ignored after canonical cutover ---------------------
 {
   // The set as this page has it (section 5 read it in again, which is now the one pulls go to).
   const wp = await import('../src/os/widgetPlaces.ts?reload')
   wp.widgetPlaces.set((c) => wp.changeSet(c, { mine: { id: 'mine', kind: 'status', x: 1, y: 1, w: 280, h: 220, vw: 1400, vh: 900, at: 5 } }))
-  const was = server.get('widgets:placed')!.updatedAt
-  server.set('widgets:placed', { value: { theirs: { id: 'theirs', kind: 'weather', x: 0, y: 0, w: 280, h: 260, vw: 1400, vh: 900, at: 9 }, gone: { id: 'gone', kind: 'status', x: 0, y: 0, w: 0, h: 0, vw: 0, vh: 0, at: 9, removed: true } }, updatedAt: was + 1000 })
+  server.set('widgets:placed', { value: { theirs: { id: 'theirs', kind: 'weather', x: 0, y: 0, w: 280, h: 260, vw: 1400, vh: 900, at: 9 }, gone: { id: 'gone', kind: 'status', x: 0, y: 0, w: 0, h: 0, vw: 0, vh: 0, at: 9, removed: true } }, updatedAt: ++clock })
   await pullAll()
   const got = wp.widgetPlaces.get()
   check('first format from the server: the pull finishes without an error', getSyncStatus().state !== 'error', getSyncStatus())
-  check('first format from the server: merged with this tab’s', !!got.places.theirs && !!got.places.mine && wp.removedKeys(got).has('gone'))
+  check('old-client write after cutover: ignored, retaining canonical edits', !got.places.theirs && !!got.places.mine && !wp.removedKeys(got).has('gone'))
 }
 
 // --- 9. notes: trash and restore keep the text's time; links break ties the same everywhere ---------

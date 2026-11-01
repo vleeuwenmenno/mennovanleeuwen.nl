@@ -67,7 +67,10 @@ const set = (patch: Partial<State>) => {
 
 let inflight: Promise<State> | null = null
 
-export function fetchMinecraft(force = false): Promise<State> {
+export function fetchMinecraft(force = false, signal?: AbortSignal): Promise<State> {
+  // Widget reads have their own cancellation owner. They never borrow an unabortable app request.
+  if (signal) return scopedMinecraft(signal)
+
   if (inflight) return inflight
   if (!force && state.status && Date.now() - state.status.checkedAt < REFRESH_MS / 2) return Promise.resolve(state)
   set({ loading: true })
@@ -89,6 +92,37 @@ export function fetchMinecraft(force = false): Promise<State> {
       inflight = null
     })
   return inflight
+}
+
+async function scopedMinecraft(signal: AbortSignal): Promise<State> {
+  const get = async (url: string) => {
+    const r = await fetch(url, { signal })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return r.json()
+  }
+  let status: McStatus
+  let live = true
+  try {
+    const j = await get('/api/minecraft')
+    if (typeof j?.online !== 'boolean') throw new Error('no status endpoint')
+    status = { ...j, checkedAt: Date.now() }
+  } catch {
+    signal.throwIfAborted()
+    live = false
+    const responses = await Promise.allSettled([get(APIS.mcstatus), get(APIS.mcsrvstat)])
+    signal.throwIfAborted()
+    const a = responses[0].status === 'fulfilled' ? fromMcstatusJson(responses[0].value) : null
+    const b = responses[1].status === 'fulfilled' ? fromMcsrvstatJson(responses[1].value) : null
+    const picked = [a, b].find(value => value?.online) ?? a ?? b
+    if (!picked) return { status: null, loading: false, error: 'Minecraft status unavailable' }
+    const seen = [a, b].filter(value => value?.online).flatMap(value => value!.players.list)
+    status = { ...picked, players: { ...picked.players, list: [...new Set(seen)] } }
+  }
+  signal.throwIfAborted()
+  // The notification domain keeps its existing join/leave semantics; package code gets no hooks.
+  watch(status, live)
+  set({ status, loading: false, error: undefined })
+  return { status, loading: false }
 }
 
 /** Players who switched off "Allow Server Listings" come through as "Anonymous Player": leave them out. */

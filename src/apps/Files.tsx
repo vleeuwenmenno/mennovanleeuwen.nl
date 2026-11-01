@@ -703,7 +703,7 @@ export function Files({ win }: { win: WinState }) {
       ? [
           { label: l.app ? 'Open' : 'Open ↗', shortcut: '↵', onSelect: () => launch(l, wm) },
           ...(l.url ? [{ label: 'Copy link', onSelect: () => void navigator.clipboard?.writeText(l.url).then(() => setToast('Copied the link')).catch(() => {}) }] : []),
-          { label: 'Edit the file in Zed', onSelect: () => openItem(item, 'zed') },
+          { label: 'Edit the file in Xed', onSelect: () => openItem(item, 'zed') },
           { separator: true },
         ]
       : []
@@ -719,7 +719,7 @@ export function Files({ win }: { win: WinState }) {
                 label: 'Open with',
                 submenu: [
                   { label: 'Default app', onSelect: () => openItem(item) },
-                  { label: 'Zed', onSelect: () => openItem(item, 'zed') },
+                  { label: 'Xed', onSelect: () => openItem(item, 'zed') },
                   { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
                   ...(isIcsName(item.name) ? [{ label: 'Calendar', onSelect: () => openItem(item, 'calendar') }] : []),
                   ...(isVcfName(item.name) ? [{ label: 'Contacts', onSelect: () => openItem(item, 'contacts') }] : []),
@@ -772,7 +772,7 @@ export function Files({ win }: { win: WinState }) {
               label: 'Open with',
               submenu: [
                 { label: 'Default app', onSelect: () => openItem(item) },
-                { label: 'Zed', onSelect: () => openItem(item, 'zed') },
+                { label: 'Xed', onSelect: () => openItem(item, 'zed') },
                 { label: 'Viewer', onSelect: () => openItem(item, 'viewer') },
                 ...(isIcsName(item.name) ? [{ label: 'Calendar', onSelect: () => openItem(item, 'calendar') }] : []),
                 ...(isVcfName(item.name) ? [{ label: 'Contacts', onSelect: () => openItem(item, 'contacts') }] : []),

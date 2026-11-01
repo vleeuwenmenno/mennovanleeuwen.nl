@@ -19,6 +19,10 @@ so \`&\` runs in the foreground.
     msh -x script.sh                  print each command before running it (set -x)
     source file  /  . file            run a file in the current shell
 
+\`help --json\` prints what this terminal can do as JSON: the shell and version, every command with the
+options its usage line names (no others exist), the mounts, the execution limits and, for an agent,
+what the call may do. Check it before assuming a Linux flag.
+
 sh and bash are names for msh too. Scripts for python, node and other interpreters do not run.
 
 A script run as a command needs its x bit, as in any shell: without it, ./script.sh prints
@@ -91,6 +95,24 @@ them ("$x") to keep them one word.
     function name { …; }
 
 break [n] and continue [n] work in loops; local x=1 keeps a variable to a function.
+
+Optional named parameters bind local string snapshots:
+
+    deliver(parcel, cost) {
+        printf 'Delivering %s for %s fuel\\n' "$parcel" "$cost"
+    }
+    deliver "Space Potato" 3
+
+Also: function deliver(parcel, cost) { …; }. A nonempty list requires exactly that many
+arguments (empty strings count); a mismatch fails with status 1 before the body runs.
+$1, $2, $# and "$@" remain intact; shift changes positional arguments, not named bindings.
+Names are unique plain identifiers; RANDOM cannot be bound because it is computed by msh.
+Newlines/whitespace are allowed around names and commas. Arguments are expanded once, never
+evaluated again. Parameters share local's dynamic scope and restore on every exit, including
+recursion and cancellation. set -u does not make parameters optional. Legacy name() and
+function name keep accepting any argument count, with missing $1 expanding to an empty string.
+No defaults, rest parameters, destructuring, type annotations or expression-style calls.
+
 
 ## Builtins
 

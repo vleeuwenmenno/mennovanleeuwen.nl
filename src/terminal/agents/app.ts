@@ -1,3 +1,4 @@
+import { ClientCalls } from './lifecycle'
 import { localPref } from '../../os/localPref'
 import { accountGuard, TAB_ACCOUNT } from '../../os/accountSpace'
 import { artMode, artBytes, decodeArt, ART_BYTES } from './imageArt'
@@ -44,6 +45,8 @@ import {
   removeQueued,
   saveQueued,
   sendClientResult,
+  claimClientCall,
+  type ClientGrant,
   sendMessage,
   sendQueuedNow,
   setSkillEnabled,
@@ -90,6 +93,7 @@ import { lookup, prepareFolder, readFileText, writeFile } from '../fs'
 import type { Ctx } from '../types'
 import { HOME, prettyPath, resolvePath } from '../vfs'
 import { runCommand, workdirPath } from './client'
+import { runAgentCall } from './exec'
 import { Editor } from './editor'
 import { markdown } from './markdown'
 import { assistantLines, compactLines, editPreview, filePreview, runningLines, thinkingLines, todoLines, toolLines, userLines } from './render'
@@ -232,6 +236,7 @@ export class Session {
   constructor(ctx: Ctx, o: SessionOptions) {
     this.ctx = ctx
     this.thread = o.thread
+    this.clientCalls.select(this.thread?.id ?? null)
     this.messages = o.messages
     this.workdir = o.workdir
     this.mode = o.mode
@@ -277,6 +282,7 @@ export class Session {
   private exit() {
     if (this.closed) return
     this.closed = true
+    this.clientCalls.close()
     this.resetOutput()
     this.follow?.abort()
     this.watching?.ctl.abort()
@@ -1248,6 +1254,7 @@ export class Session {
     try {
       const r = await overrideTurn(thread.id, text, files)
       this.thread = r.thread
+      this.clientCalls.select(this.thread?.id ?? null)
       if (r.queued) this.say('It was no longer waiting on you, so this is queued for when it is done')
     } catch (e) {
       this.say(`Could not send that: ${(e as Error).message}`, 'red')
@@ -1264,6 +1271,7 @@ export class Session {
     }
     try {
       this.thread = (await queueMessage(this.thread!.id, text, files)).thread
+      this.clientCalls.select(this.thread?.id ?? null)
     } catch (e) {
       this.say(`Could not queue that: ${(e as Error).message}`, 'red')
     }
@@ -1276,6 +1284,7 @@ export class Session {
     try {
       const r = await editQueued(this.thread.id, q.id)
       this.thread = r.thread
+      this.clientCalls.select(this.thread?.id ?? null)
       this.editingQ = { id: q.id, stash: this.editor.text, renewed: Date.now() }
       this.editor.set(r.item.text)
     } catch (e) {
@@ -1303,6 +1312,7 @@ export class Session {
     if (!text) return this.say('Nothing left to send: ctrl+x removes it', 'yellow'), false
     try {
       this.thread = (await saveQueued(this.thread.id, this.editingQ.id, { text })).thread
+      this.clientCalls.select(this.thread?.id ?? null)
       this.endEdit()
       return true
     } catch (e) {
@@ -1318,6 +1328,7 @@ export class Session {
     if (this.editingQ?.id === q.id) this.endEdit()
     try {
       this.thread = (await removeQueued(this.thread.id, q.id)).thread
+      this.clientCalls.select(this.thread?.id ?? null)
       this.notice = 'Removed from the queue'
     } catch (e) {
       this.say(`Could not remove it: ${(e as Error).message}`, 'red')
@@ -1331,6 +1342,7 @@ export class Session {
     if (this.editingQ?.id === q.id && !(await this.saveEdit(this.editor.expanded().trim()))) return
     try {
       this.thread = (await sendQueuedNow(this.thread.id, q.id)).thread
+      this.clientCalls.select(this.thread?.id ?? null)
     } catch (e) {
       return this.say(`Could not send it: ${(e as Error).message}`, 'red')
     }
@@ -1346,6 +1358,7 @@ export class Session {
       (r) => {
         if (this.turn || this.closed || r.thread.id !== this.thread?.id) return
         this.thread = r.thread
+        this.clientCalls.select(this.thread?.id ?? null)
         if (r.thread.running) void this.followTurn()
         else this.draw()
       },
@@ -1382,6 +1395,7 @@ export class Session {
   private async ensureThread(): Promise<Thread> {
     if (this.thread) return this.thread
     this.thread = await createThread({ mode: this.mode, model: this.model ?? undefined, tools: this.tools, projectId: this.projectId, workdir: this.workdir, permission: this.permission })
+    this.clientCalls.select(this.thread?.id ?? null)
     this.loadSkills()
     return this.thread
   }
@@ -1531,6 +1545,7 @@ export class Session {
       }
       const r = await rewindThread(this.thread.id, id)
       this.thread = r.thread
+      this.clientCalls.select(this.thread?.id ?? null)
       this.messages = this.messages.filter((m) => m.id < id)
       // The screen shows the thread as it is now.
       this.resetOutput()
@@ -1556,6 +1571,7 @@ export class Session {
   }
 
   private async interrupt() {
+    this.clientCalls.stop()
     const t = this.turn
     if (!t || !this.thread) return
     t.ctl.abort()
@@ -1596,6 +1612,7 @@ export class Session {
     switch (e.type) {
       case 'snapshot': {
         this.thread = e.thread
+        this.clientCalls.select(this.thread?.id ?? null)
         const known = new Set(this.messages.map((m) => m.id))
         const fresh = e.messages.filter((m) => !known.has(m.id))
         this.messages = e.messages
@@ -1614,7 +1631,7 @@ export class Session {
           const call = this.messages.find((m) => m.id === p.messageId)?.toolCalls?.[p.index] ?? p.call ?? null
           if (p.kind === 'approval' && !this.approvals.some((a) => a.callId === p.callId)) this.approvals.push({ callId: p.callId, messageId: p.messageId, index: p.index, call, summary: p.summary, check: p.check, ...(p.child ? { child: p.child } : {}) })
           else if (p.kind === 'question' && p.form) this.asked.push({ callId: p.callId, messageId: p.messageId, index: p.index, form: p.form })
-          else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call)
+          else if (p.kind === 'client' && call) void this.runClient(p.callId, p.messageId, p.index, call, p.grant)
           this.setCallState(p.messageId, p.index, p.kind === 'image' ? 'running' : p.kind === 'question' ? 'question' : p.kind)
           if (p.kind === 'image') this.imageProgress(p.callId, p.messageId, p.index, p.progress)
         }
@@ -1645,6 +1662,7 @@ export class Session {
       case 'thread': {
         const before = this.thread
         this.thread = e.thread
+        this.clientCalls.select(this.thread?.id ?? null)
         this.permission = e.thread.permission
         this.mode = e.thread.mode
         this.workdir = e.thread.workdir
@@ -1662,6 +1680,7 @@ export class Session {
       case 'approved':
       case 'answered':
       case 'clientDone':
+        if (e.type === 'clientDone') this.clientCalls.done(e.callId)
         this.approvals = this.approvals.filter((a) => a.callId !== e.callId)
         this.asked = this.asked.filter((a) => a.callId !== e.callId)
         if ((this.modal?.kind === 'approval' && this.modal.a.callId === e.callId) || (this.modal?.kind === 'form' && this.modal.q.callId === e.callId)) this.modal = null
@@ -1675,7 +1694,7 @@ export class Session {
         break
       case 'client':
         this.setCallState(e.messageId, e.index, 'client')
-        void this.runClient(e.callId, e.messageId, e.index, e.call)
+        void this.runClient(e.callId, e.messageId, e.index, e.call, e.grant)
         break
       case 'imageGeneration':
         this.imageProgress(e.callId, e.messageId, e.index)
@@ -1751,6 +1770,7 @@ export class Session {
         if (this.thread?.id !== t.id) return
         if (e.type === 'thread') {
           this.thread = e.thread
+          this.clientCalls.select(this.thread?.id ?? null)
           // A turn from its subagents' results: followed like one this terminal asked for.
           if (e.thread.running && !this.turn) void this.followTurn()
           this.draw()
@@ -1816,20 +1836,19 @@ export class Session {
     this.out([...toolLines(call, m.content, w, this.verbose), []], call.name === 'generate_image' ? this.imageArt(m.content) : undefined)
   }
 
-  /** Runs a terminal tool call here and sends back what it printed. */
-  private async runClient(callId: string, messageId: number, index: number, call: ToolCall) {
-    const command = typeof call.arguments?.command === 'string' ? call.arguments.command : ''
-    const dir = this.workdir ? workdirPath(this.workdir) : this.ctx.cwd
-    let result: { output: string; status: number }
-    if (!dir) result = { output: `The work folder ${this.workdir?.label} is not mounted in this terminal (check /etc/fstab).`, status: 1 }
-    else result = await runCommand(this.ctx, dir, command, this.turn?.ctl.signal ?? this.ctx.signal)
-    try {
-      await sendClientResult(this.thread!.id, callId, result.output, result.status)
-    } catch {
-      /* the turn ended meanwhile */
-    }
+  /** Runs a terminal tool call here and sends back what it printed: the same runner the Agents app uses. */
+  private clientCalls = new ClientCalls()
+  private async runClient(callId: string, messageId: number, index: number, call: ToolCall, grant?: ClientGrant) {
+    const id = this.thread?.id
+    if (!id) return
+    const workdir = this.workdir, fallbackDir = this.ctx.cwd
+    this.clientCalls.select(id)
+    await this.clientCalls.run(callId, () => claimClientCall(id, callId), async (signal) => {
+      try { return await runAgentCall({ name: call.name, arguments: call.arguments ?? {}, workdir, fallbackDir, grant, signal }) }
+      catch (e) { return { output: `msh: ${(e as Error).message}`, status: 1 } }
+    }, (a) => sendClientResult(id, callId, a.output, a.status, { result: 'result' in a ? a.result : undefined, capabilities: 'capabilities' in a ? a.capabilities : undefined }), this.turn?.ctl.signal ?? this.ctx.signal).catch(() => {})
     this.setCallState(messageId, index, 'running')
-    this.draw()
+    if (!this.closed) this.draw()
   }
 
   // --- ! and # ----------------------------------------------------------------------------------
@@ -1861,6 +1880,7 @@ export class Session {
     if (!this.thread) return
     try {
       this.thread = await updateThread(this.thread.id, p)
+      this.clientCalls.select(this.thread?.id ?? null)
     } catch (e) {
       this.say(`Could not change that: ${(e as Error).message}`, 'red')
     }
@@ -1897,6 +1917,7 @@ export class Session {
       case '/reset':
         if (busy()) return true
         this.thread = null
+        this.clientCalls.select(null)
         this.messages = []
         this.resetOutput()
         this.ctx.clear()
@@ -2128,6 +2149,7 @@ export class Session {
           try {
             const before = this.thread.title
             this.thread = (await regenerateTitle(this.thread.id)).thread
+            this.clientCalls.select(this.thread?.id ?? null)
             this.say(this.thread.title === before ? `Still “${before}”: no better title came to mind` : `Renamed to “${this.thread.title}”`)
           } catch (e) {
             this.say(`No new title: ${(e as Error).message}`, 'red')
@@ -2138,6 +2160,7 @@ export class Session {
         // Looked up again: a check after the last answer may have changed it since.
         const t = await getThread(this.thread.id).then((r) => r.thread, () => this.thread!)
         this.thread = t
+        this.clientCalls.select(this.thread?.id ?? null)
         const s = agentSettings()
         const row = (k: string, v: string): Line => [seg(`  ${k.padEnd(14)}`, 'muted'), seg(v)]
         this.out([
@@ -2158,6 +2181,7 @@ export class Session {
         await this.patch({ archived: true })
         this.say('Archived; starting a new thread')
         this.thread = null
+        this.clientCalls.select(null)
         this.messages = []
         return true
       case '/delete': {
@@ -2166,6 +2190,7 @@ export class Session {
         if (ok?.[0] !== 'yes') return true
         await deleteThread(this.thread.id).catch((e: Error) => this.say(e.message, 'red'))
         this.thread = null
+        this.clientCalls.select(null)
         this.messages = []
         this.say('Deleted; starting a new thread')
         return true
@@ -2415,6 +2440,7 @@ export class Session {
       const { thread, messages, pending } = await getThread(id)
       if (pastOnly && thread.quick) throw new Error('No such past thread')
       this.thread = thread
+      this.clientCalls.select(this.thread?.id ?? null)
       this.messages = messages
       this.workdir = thread.workdir
       this.permission = thread.permission

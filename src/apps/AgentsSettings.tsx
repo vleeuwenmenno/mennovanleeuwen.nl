@@ -477,17 +477,17 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
             </button>
           ) : (
             <button className="btn btn-small" onClick={() => open('zed', { path: `${HOME}/AGENTS.md` })}>
-              Open in Zed
+              Open in Xed
             </button>
           )}
         </li>
       </ul>
       <p className="muted set-help">
         {inSeafile
-          ? 'Edit it in Zed (Ctrl+S saves it to Seafile), or upload your own AGENTS.md to your home folder in Files or on Seafile. Changes apply from the next message.'
+          ? 'Edit it in Xed (Ctrl+S saves it to Seafile), or upload your own AGENTS.md to your home folder in Files or on Seafile. Changes apply from the next message.'
           : account.seafile
-            ? 'Your home folder is the site’s own, so this file is read-only. Make Seafile your home (Integrations → Seafile) to write your own AGENTS.md there, then edit it in Zed or upload it on Seafile.'
-            : 'This file is read-only here. Link Seafile and make it your home (Integrations) to write your own AGENTS.md, then edit it in Zed or upload it on Seafile.'}{' '}
+            ? 'Your home folder is the site’s own, so this file is read-only. Make Seafile your home (Integrations → Seafile) to write your own AGENTS.md there, then edit it in Xed or upload it on Seafile.'
+            : 'This file is read-only here. Link Seafile and make it your home (Integrations) to write your own AGENTS.md, then edit it in Xed or upload it on Seafile.'}{' '}
         Today’s date, the mode and what the agent remembers are added after it; <code>{'{{user}}'}</code> becomes your name.
       </p>
       {prompt && (
