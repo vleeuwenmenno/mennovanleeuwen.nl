@@ -3,7 +3,9 @@
 # production image itself.
 # .env next to this file can set PORT (default 8080), GITHUB_TOKEN (optional, for `git log` in
 # the terminal) and the sign-in settings: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, ADMIN_GITHUB_IDS, MAX_USERS,
-# PUBLIC_URL, SESSION_SECRET, GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET for Google Calendar and
+# PUBLIC_URL, SESSION_SECRET, GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET for Google Calendar,
+# GOOGLE_SIGNIN (and optionally GOOGLE_SIGNIN_CLIENT_ID / _SECRET) for Google sign-in,
+# TRUSTED_PROXIES, and
 # UPDOWN_API_KEY (updown.io's read-only key) for the Status widget and OLLAMA_API_KEY for the
 # Agents app (see README; both are the admins' own: other users save theirs in Settings).
 services:
@@ -30,6 +32,15 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # "Sign in with Google" (server/googleSignIn.ts), off unless GOOGLE_SIGNIN=on. Uses the
+      # GOOGLE_SIGNIN_CLIENT_* client if set, else the Calendar one above.
+      GOOGLE_SIGNIN: ${GOOGLE_SIGNIN:-}
+      GOOGLE_SIGNIN_CLIENT_ID: ${GOOGLE_SIGNIN_CLIENT_ID:-}
+      GOOGLE_SIGNIN_CLIENT_SECRET: ${GOOGLE_SIGNIN_CLIENT_SECRET:-}
+      # The reverse proxy's address(es), comma-separated: only they may say who the client is
+      # (X-Forwarded-For) for the per-address limits. Unset, any private address is trusted, which
+      # is only right when nothing but the proxy can reach this container.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       UPDOWN_API_KEY: ${UPDOWN_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       # Web Push for Agents answers (server/webpush.ts). Optional: without them the keys are made
