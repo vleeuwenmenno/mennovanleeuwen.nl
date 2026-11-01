@@ -1,10 +1,11 @@
 import { LIMITS, type Descriptor, type Mutation, type Snapshot, type WidgetInput } from './package'
 import { FairScheduler, RuntimeFailure } from './scheduler'
 const scheduler = new FairScheduler()
+// Desktop widgets pause while the tab is hidden; Workshop previews and agent builds are explicit work and keep running.
 let request = 0
 if (typeof window !== 'undefined') {
   for (const event of ['mvlos:account-changed', 'mvlos:forget']) window.addEventListener(event, () => scheduler.cancelAll())
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') scheduler.cancelAll() })
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') scheduler.cancelAll(owner => owner.startsWith('widget:')) })
 }
 export function execute(snapshot: Snapshot, input: WidgetInput, event?: string, signal?: AbortSignal, options: { owner?: string; eligible?: () => boolean } = {}): Promise<Descriptor | Mutation | null> {
   try {
@@ -31,5 +32,5 @@ export function execute(snapshot: Snapshot, input: WidgetInput, event?: string, 
       worker.onmessage = e => e.data.ok ? finish(undefined, e.data.value) : finish(new RuntimeFailure('execution', e.data.error))
       worker.postMessage({ snapshot, input, event })
     } catch { finish(new RuntimeFailure('execution', 'Widget worker could not start')) }
-  }), signal, options.eligible ?? (() => document.visibilityState === 'visible'))
+  }), signal, options.eligible ?? (() => true))
 }

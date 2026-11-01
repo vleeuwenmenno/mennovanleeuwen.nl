@@ -70,6 +70,17 @@ await check('queued/active cancellation clears rate timers without starting extr
   rateQueue.cancelAll(); await Promise.all(rateJobs); await rateClock.advance(2000)
   assert.equal(rateStarts,1); assert.equal(rateClock.timers.size,0)
 })
+await check('cancelAll with a filter cancels only matching owners', async () => {
+  const scheduler = new FairScheduler(new Clock())
+  const outcome: Record<string, string> = {}
+  let finishAgent: () => void = () => {}
+  const jobs = [
+    scheduler.submit('widget:a', () => new Promise(() => {})).catch(error => { outcome.widget = error.code }),
+    scheduler.submit('agent', () => new Promise<void>(resolve => { finishAgent = resolve })).then(() => { outcome.agent = 'done' }),
+  ]
+  await flush(); scheduler.cancelAll(owner => owner.startsWith('widget:')); finishAgent(); await Promise.all(jobs)
+  assert.deepEqual(outcome, { widget: 'cancelled', agent: 'done' })
+})
 await check('hidden queued jobs never start and constructor failures release capacity', async () => {
   const scheduler = new FairScheduler(new Clock(), 1)
   let release: () => void = () => {}, eligible = true, started = false
