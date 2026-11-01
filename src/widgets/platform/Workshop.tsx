@@ -9,7 +9,7 @@ import { ask } from '../../os/Dialogs'
 import { defaultBuild } from './defaults'
 import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, useInstallationPresence, type Revision } from './installations'
 import { CUSTOM_KIND, isInstanceKind, buildPackage, descriptor, supportsCapabilities, type Descriptor } from './package'
-import { cloneDefault, cloneTemplate, readSource, sourceIdentity, WIDGET_HOME } from './sources'
+import { cloneDefault, cloneTemplate, readSource, sourceIdentity, sourcePath, WIDGET_HOME } from './sources'
 import { execute } from './runtime'
 import { Renderer } from './Renderer'
 import { MOCK_INPUT } from './mocks'
@@ -28,6 +28,10 @@ export function Workshop({ win }: { win: WinState }) {
   const records = installations.use()
   const current = instance ? records[instance] : undefined
   const [path, setPath] = useState(win.props.path ?? (custom ? `${WIDGET_HOME}/daily-tally` : `${WIDGET_HOME}/${kind}`))
+  // Editing an installed widget opens the folder it was built from, wherever that is, not the starter location.
+  const installedAt = current && current.active.source.kind !== 'system' ? sourcePath(current.active.source) : null
+  const pathEdited = useRef(!!win.props.path)
+  useEffect(() => { if (installedAt && !pathEdited.current) { pathEdited.current = true; setPath(installedAt) } }, [installedAt])
   const [revision, setRevision] = useState<Revision | null>(null)
   const [view, setView] = useState<Descriptor | null>(null)
   const [message, setMessage] = useState(custom ? 'Write the starter template to a folder, edit it in Xed, build and preview with mocks, then activate it as a new widget.' : 'Clone the source folder, edit in Xed, build and preview with mocks, then activate explicitly.')
@@ -105,7 +109,7 @@ export function Workshop({ win }: { win: WinState }) {
   return <div className="wp-workshop">
     <strong>Widget Workshop · {custom ? (current ? current.active.snapshot.manifest.name : 'new custom widget') : kind}</strong>
     <p>Source is executable JavaScript in a bounded VM. Preview uses sample data. Activation grants only this instance's {access(kind)}.</p>
-    <label>Source folder <input aria-label="Widget source folder" value={path} onChange={e => { setPath(e.target.value); setRevision(null); setView(null); setOptIn(false) }} /></label>
+    <label>Source folder <input aria-label="Widget source folder" value={path} onChange={e => { pathEdited.current = true; setPath(e.target.value); setRevision(null); setView(null); setOptIn(false) }} /></label>
     <div className="wp-controls">
       {custom ? <>
         <button disabled={busy || account.status !== 'user'} onClick={() => void run(async () => { await cloneTemplate(path); setMessage('Template written. Edit src/main.js in Xed, save, then build.'); wm.open('zed', { path: `${path}/src/main.js`, t: String(Date.now()) }) })}>New custom widget template</button>

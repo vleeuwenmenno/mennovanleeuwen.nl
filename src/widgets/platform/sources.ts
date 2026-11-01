@@ -1,5 +1,5 @@
 import { browserFilesReady, browserStoreIdentity, listBrowser, mkdirBrowser, readBrowserText, writeBrowserFile } from '../../data/browserfs'
-import { whereIs } from '../../data/mounts'
+import { browserMountPoint, posixOf, whereIs } from '../../data/mounts'
 import { listDir, mkdir, parseSf, readText, sfPath, writeText } from '../../data/seafile'
 import { getAccount } from '../../os/account'
 import { accountGuard } from '../../os/accountSpace'
@@ -29,6 +29,13 @@ export async function sourceIdentity(path: string): Promise<SourceIdentity> {
     return { kind: 'seafile', account: uid, repo: at.repo, path: at.p }
   }
   throw new Error('Source must be in signed-in browser files or Seafile')
+}
+/** Where a recorded source shows up in the file tree now, or null when it is not mounted anywhere. */
+export function sourcePath(identity: SourceIdentity): string | null {
+  if (identity.kind === 'system') return identity.path
+  if (identity.kind === 'seafile') return posixOf(sfPath(identity.repo, identity.path))
+  const root = browserMountPoint()
+  return root === null ? null : identity.path === '/' ? root : `${root === '/' ? '' : root}${identity.path}`
 }
 export function assertSource(identity: SourceIdentity) {
   sourceIdentityOf(identity)
