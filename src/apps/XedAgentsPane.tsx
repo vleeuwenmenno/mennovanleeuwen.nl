@@ -105,7 +105,7 @@ const ProjectConversations = forwardRef<XedAgentsDockHandle, Props & { account: 
   }, [attach, active])
 
   useEffect(() => {
-    setCloseGuard(pid, async () => {
+    return setCloseGuard(pid, async () => {
       const busy = now.current.filter(x => x.busy || x.thread.running)
       if (!busy.length) return true
       const choice = await choose({
@@ -116,7 +116,6 @@ const ProjectConversations = forwardRef<XedAgentsDockHandle, Props & { account: 
       if (choice === 'stop') { try { await Promise.all(busy.map(x => stopThread(x.thread.id))); return true } catch (e) { setError((e as Error).message); return false } }
       return choice === 'keep'
     })
-    return () => setCloseGuard(pid, null)
   }, [pid])
 
   const change = (id: string, t: Thread | null, busy: boolean) => setSlots(all => all.map(x => x.thread.id === id ? { ...x, thread: t ?? x.thread, busy } : x))

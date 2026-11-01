@@ -771,11 +771,12 @@ on phones; tap the scrim to close it.
 
 The Agents status button opens the real Agents conversation, with its normal model, mode,
 permissions, tools, approvals, queue and subagents. **Ctrl+L** opens its composer with a visible
-selection attachment (the file if nothing is selected). The editor context menu attaches a
-selection, and a tab's context menu attaches its current contents, including unsaved edits.
+selection attachment (the current file buffer, including unsaved edits, if nothing is selected).
+The editor context menu attaches a selection, and a tab's context menu attaches its current contents, including unsaved edits.
 Escape in the composer returns to the editor and closes a narrow sheet. Hide the panel without
 interrupting a run; closing a window with an answering thread asks whether to stop or keep it
-running. A server run kept after closing may wait for an executor when the project is reopened.
+running. Embedded terminal close checks also apply; cancelling either check keeps the window open.
+A server run kept after closing may wait for an executor when the project is reopened.
 
 Each project has ordinary threads, also visible in Agents; the panel offers a thread switch,
 New thread, and Open in Agents for that same thread. Browser-local, account-scoped bindings keep

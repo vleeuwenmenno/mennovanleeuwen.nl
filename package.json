@@ -118,6 +118,7 @@
     "check:calendar-link-race": "node scripts/calendar-link-race-check.ts",
     "check:note-links-race": "node scripts/note-links-race-check.ts",
     "check:note-links": "node scripts/note-links-check.ts",
+    "check:window-close-guards": "node scripts/window-close-guards-check.ts",
     "check:window-props": "node scripts/window-props-check.ts",
     "check:sync-accounts": "node scripts/sync-accounts-check.ts",
     "check:revocation-boundaries": "node scripts/revocation-boundaries-check.ts",

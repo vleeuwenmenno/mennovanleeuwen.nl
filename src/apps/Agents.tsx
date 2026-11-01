@@ -284,7 +284,7 @@ function AgentsApp({ win }: { win: WinState }) {
   // Closing while threads are answering: stop them, or let them go on on the server (they are
   // announced when done, and found again here later).
   useEffect(() => {
-    setCloseGuard(win.pid, async () => {
+    return setCloseGuard(win.pid, async () => {
       const busy = (await listThreads(false).catch(() => [] as Thread[])).filter((t) => t.running)
       if (!busy.length) return true
       const choice = await choose({
@@ -305,7 +305,6 @@ function AgentsApp({ win }: { win: WinState }) {
       void allowNotifications()
       return true
     })
-    return () => setCloseGuard(win.pid, null)
   }, [win.pid])
 
   const refresh = useCallback(() => {

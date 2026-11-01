@@ -1,3 +1,5 @@
+import { closeGuards } from './closeGuards'
+export { setCloseGuard } from './closeGuards'
 import { fitWidget } from './widgetLayout'
 import { widgetRunsOnPhone } from '../widgets/platform/phone'
 import { installations } from '../widgets/platform/installations'
@@ -654,16 +656,7 @@ type WM = {
 
 const Ctx = createContext<WM | null>(null)
 
-/**
- * Windows that want a say before they close (Agents while a thread is answering): the guard
- * answers whether to close after all. Set by the window itself, removed when it unmounts.
- */
-const closeGuards = new Map<number, () => Promise<boolean> | boolean>()
 const asking = new Set<number>()
-export function setCloseGuard(pid: number, guard: (() => Promise<boolean> | boolean) | null) {
-  if (guard) closeGuards.set(pid, guard)
-  else closeGuards.delete(pid)
-}
 /** Files' trash view (see apps/Files.tsx). */
 const TRASH_PATH = 'trash://'
 
@@ -976,13 +969,11 @@ export function WindowManagerProvider({
           if(target?.app==='widget'&&target.props.id)explicitWidgetCloses.current.add(target.props.id)
           dispatch({type:'close',pid})
         }
-        const guard = closeGuards.get(pid)
-        if (!guard) return finish()
+        if (!closeGuards.has(pid)) return finish()
         if (asking.has(pid)) return // its question is already on screen
         asking.add(pid)
         Promise.resolve()
-          .then(guard)
-          .catch(() => true)
+          .then(() => closeGuards.allow(pid))
           .then((ok) => ok && finish())
           .finally(() => asking.delete(pid))
       },

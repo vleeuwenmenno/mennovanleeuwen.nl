@@ -786,7 +786,7 @@ export function Zed({ win }: { win: WinState }) {
     }
     const picked = window.getSelection()
     const inPreview = picked && !picked.isCollapsed && picked.anchorNode && (picked.anchorNode.parentElement?.closest('.zed-preview') ?? null)
-    return inPreview ? { id, path: active, text: picked.toString() } : { id, path: active }
+    return inPreview ? { id, path: active, text: picked.toString() } : { id, path: active, text: buffers[active]?.text }
   }
   const openAgents = (withSelection: boolean) => {
     if (withSelection) setAttach(pickAttachment())
