@@ -116,10 +116,10 @@ export async function runAgentCall(req: { name: string; arguments: Record<string
 }
 
 /** The part of a call that needs the folder as a terminal path (the check script runs it on folders that are not in Seafile). */
-export async function runInFolder(req: { name: string; arguments: Record<string, unknown>; folder: { path: string; label: string; backing?: { repo: string; path: string } } | null; fallbackDir: string; grant?: ClientGrant; signal: AbortSignal }): Promise<CallAnswer> {
+export async function runInFolder(req: { name: string; arguments: Record<string, unknown>; folder: { path: string; label: string; backing?: { repo: string; path: string }; browser?: { account: number; storeUUID: string } } | null; fallbackDir: string; grant?: ClientGrant; signal: AbortSignal }): Promise<CallAnswer> {
   const { arguments: args, folder } = req
   const base = folder ? folder.path : req.fallbackDir
-  const grant: Grant = { ...(req.grant ?? READ_ONLY), root: folder ? base : null, backing: folder?.backing }
+  const grant: Grant = { ...(req.grant ?? READ_ONLY), root: folder ? base : null, backing: folder?.backing, browser: folder?.browser }
 
   if (req.name === 'terminal_capabilities') {
     const budget = new Budget(AGENT_LIMITS)

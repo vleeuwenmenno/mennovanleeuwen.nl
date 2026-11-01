@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 // Drives Xed's side panels in the repository's muted Chromium harness against a caller-owned
 // scratch Vite server: real mouse drags on the splitters (and their cancel), real keys, the
 // Agents panel opened and closed, the window made narrower than the viewport, and the widths kept
@@ -11,17 +12,19 @@ const fail = (what: string, detail: unknown) => { throw new Error(`FAIL ${what}:
 const expect = (ok: boolean, what: string, detail: unknown = '') => (ok ? pass(what) : fail(what, detail))
 const KEY = 'mvlos.xed.layout.v1'
 try {
-  const page = await newPage(browser, 1500, 900, '')
+  const page = await newPage(browser, 1500, 900, readFileSync(new URL('./xed-agent-fixture.js', import.meta.url), 'utf8'))
+  // EventSource/image API requests must not hit the real unauthenticated scratch server.
+  await page.send('Network.enable')
+  await page.send('Network.setBlockedURLs', { urls: ['*/api/*'] })
   const load = async () => {
     await page.send('Page.navigate', { url: `http://127.0.0.1:${port}/` })
-    await page.waitFor(`document.readyState === 'complete'`)
-    const escape = async () => {
-      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-      await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-      await sleep(250)
-    }
-    for (let i = 0; i < 40 && !(await page.eval(`!!document.querySelector('.window')`)); i++) await escape()
-    for (let i = 0; i < 40 && (await page.eval(`!!document.querySelector('.boot')`)); i++) await escape()
+    await page.waitFor(`document.readyState === 'complete' && !!document.querySelector('#root > *')`)
+    await page.eval(`import('/src/os/powerState.ts').then(m => m.bootDone())`)
+    await page.waitFor(`!document.querySelector('.boot')`)
+    await page.waitFor(`!!document.querySelector('.desktop')`)
+    await page.eval(`import('/src/os/account.ts').then(async m => { while (m.getAccount().status === 'loading') await new Promise(r => setTimeout(r, 50)) })`)
+    await sleep(800)
+
   }
   await load()
   await page.eval(`localStorage.removeItem(${JSON.stringify(KEY)})`)
@@ -33,6 +36,7 @@ try {
   const openXed = async () => {
     await page.eval(`window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/layout.txt', root: '/tmp' } } }))`)
     await page.waitFor(`!!document.querySelector('.zed textarea.zed-input')`)
+    await sleep(800)
     for (let i = 0; i < 20 && (await page.eval(`!!document.querySelector('.boot')`)); i++) await sleep(250)
   }
   await openXed()
@@ -78,7 +82,7 @@ try {
   await mouse('mousePressed', c.x, c.y, 1, 1)
   for (let dx = 10; dx <= 60; dx += 10) await mouse('mouseMoved', c.x + dx, c.y, 1)
   await sleep(100)
-  expect((await cssVar('--xed-left')) === '280px' && (await widthOf('.zed-panel')) === 280, 'dragging 60px previews 280px live', await cssVar('--xed-left'))
+  expect((await cssVar('--xed-left')) === '280px' && (await widthOf('.zed-panel')) === 280, 'dragging 60px previews 280px live', await page.eval(`({at:document.elementFromPoint(${c.x},${c.y})?.outerHTML.slice(0,1500),active:document.activeElement?.outerHTML.slice(0,300),boot:!!document.querySelector('.boot')})`))
   expect((await Z(`return Z.querySelector('${LEFT}').getAttribute('aria-valuenow')`)) === '280', 'aria-valuenow follows the drag')
   expect((await writes()) === before && (await stored())?.left !== 280, 'nothing is saved while the pointer is down', await stored())
   await mouse('mouseReleased', c.x + 60, c.y, 0, 1)
@@ -139,8 +143,10 @@ try {
   await page.waitFor(`!!document.querySelector('.zed .xed-agents')`)
   await sleep(150)
   expect((await widthOf('.xed-agents')) === 380 && (await pressed('Toggle Agents panel')) === 'true', 'Ctrl+L opens Agents at 380 and the status button is pressed', await widthOf('.xed-agents'))
-  expect(await Z(`return document.activeElement?.matches('[data-xed-composer]')`), 'Ctrl+L focuses the message box')
-  const chip = await Z<string>(`return Z.querySelector('.xed-pane-chip')?.textContent ?? ''`)
+  await page.waitFor(`!!document.querySelector('[data-xed-composer]')`)
+  await sleep(300)
+  expect(await Z(`return document.activeElement?.matches('[data-xed-composer]')`), 'Ctrl+L focuses the message box', await Z(`return { active:document.activeElement?.outerHTML, hidden: Z.querySelector('.xed-conversation')?.hidden, text:Z.querySelector('.xed-agents')?.innerText }`))
+  const chip = await Z<string>(`return Z.querySelector('.agt-composer')?.textContent ?? ''`)
   expect(chip.includes('/tmp/layout.txt') && chip.includes('(2-3)'), 'Ctrl+L attaches the selected lines', chip)
   const room = await widthOf('.zed-main')
   expect((room ?? 0) >= 320 && (await stored()).showRight === true, 'the editor keeps at least 320 beside both panels', room)
@@ -204,6 +210,19 @@ try {
   await sleep(150)
   expect(await Z(`return Z.querySelector('.xed-agents').hidden && document.activeElement === Z.querySelector('textarea.zed-input')`), 'Escape in the message box closes the sheet and returns to the editor')
   expect((await stored()).showRight === true, 'sheets do not change the docked preference', await stored())
+
+  // Real phone viewport and touch input, not merely a narrow desktop window.
+  await page.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
+  await page.send('Emulation.setTouchEmulationEnabled', { enabled: true })
+  await setWidth(390)
+  const touch = await center('[aria-label="Toggle Agents panel"]')
+  await page.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touch] })
+  await page.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await sleep(250)
+  expect(await Z(`return !Z.querySelector('.xed-agents').hidden && Z.querySelector('.xed-agents').classList.contains('is-sheet')`), 'phone touch opens Agents sheet')
+  expect((await widthOf('.xed-agents'))! <= 390, 'phone sheet fits the viewport')
+  await page.send('Emulation.setTouchEmulationEnabled', { enabled: false })
+  await page.send('Emulation.setDeviceMetricsOverride', { width: 1500, height: 900, deviceScaleFactor: 1, mobile: false })
 
   // --- widths survive a reload; blocked storage still works -------------------------------------
   await setWidth(1100)

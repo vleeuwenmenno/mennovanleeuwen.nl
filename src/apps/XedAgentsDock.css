@@ -19,7 +19,7 @@
   inset: 0 0 0 auto;
   z-index: 5;
   width: min(100%, 420px);
-  box-shadow: -12px 0 30px -12px rgba(0, 0, 0, 0.6);
+  box-shadow: -12px 0 30px -12px color-mix(in srgb, var(--bg-dark) 60%, transparent);
   animation: xed-agents-in 0.16s ease-out;
 }
 @keyframes xed-agents-in {

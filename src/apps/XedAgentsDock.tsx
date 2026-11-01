@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { Select, type SelectOption } from '../os/Select'
 import './XedAgentsDock.css'
 
@@ -47,14 +47,21 @@ const Icon = ({ d }: { d: string }) => (
 
 export const XedAgentsDock = forwardRef<XedAgentsDockHandle, Props>(function XedAgentsDock({ sheet, hidden, onClose, onEscape, title = 'Agents', threads, thread, onThread, onNew, onOpenInAgents, headerExtra, children }, ref) {
   const frame = useRef<HTMLElement>(null)
-  useImperativeHandle(ref, () => ({
-    focus: () => {
-      const el = frame.current
-      if (!el) return
-      const target = el.querySelector<HTMLElement>(COMPOSER) ?? el.querySelector<HTMLElement>('textarea, [contenteditable="true"]') ?? el
-      target.focus({ preventScroll: true })
-    },
-  }))
+  const pendingFocus = useRef(false)
+  const focusComposer = () => {
+    const el = frame.current
+    const target = Array.from(el?.querySelectorAll<HTMLElement>(COMPOSER) ?? []).find(x => !x.closest('[hidden], [inert]'))
+    if (target) { target.focus({ preventScroll: true }); pendingFocus.current = false }
+    else if (el && !el.hidden) el.focus({ preventScroll: true })
+  }
+  useImperativeHandle(ref, () => ({ focus: () => { pendingFocus.current = true; focusComposer() } }))
+  useEffect(() => {
+    const el = frame.current
+    if (!el) return
+    const observer = new MutationObserver(() => { if (pendingFocus.current) focusComposer() })
+    observer.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'inert'] })
+    return () => observer.disconnect()
+  }, [])
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== 'Escape' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return

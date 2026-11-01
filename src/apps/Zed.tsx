@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { reconcileBuffer, type XedBuffer } from '../data/xedBuffers'
+import { getAccount } from '../os/account'
+import { refreshDirs } from '../data/seafile'
 import { useWM, type WinState } from '../os/wm'
 import { fileKind, HOME, KIND_LABEL, kindOfName, lookup as siteLookup, prettyPath, type DirNode, type Node } from '../terminal/vfs'
 import { lookup, makeDir, MAX_TEXT, prepare, readFileText, removePath, touchFile, transfer, walk } from '../terminal/fs'
@@ -14,7 +17,7 @@ import { ask } from '../os/Dialogs'
 import { Terminal } from './Terminal'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
 import { useXedLayout } from './useXedLayout'
-import { XedAgentsDock, type XedAgentsDockHandle } from './XedAgentsDock'
+import { type XedAgentsDockHandle } from './XedAgentsDock'
 import { XedAgentsPane, type XedAttachment } from './XedAgentsPane'
 import { MarkdownPreview } from '../data/markdown/MarkdownPreview'
 import { MshHighlight, isMsh, useXedDebug, XedDebugPanel, XedDebugToolbar } from './XedDebug'
@@ -43,7 +46,7 @@ const PAD = 12 // px above the first line
 const SEARCH = 'search://' // the project search tab
 
 /** loading: a Seafile file on its way in; error: it could not be read (nothing to save over it). */
-type Buffer = { text: string; saved: string; loading?: boolean; error?: string }
+type Buffer = XedBuffer
 type View = 'edit' | 'preview' | 'split'
 type Jump = { path: string; line: number; col: number; len: number }
 /** A name being typed in the project panel: a rename, or a new file or folder in `dir`. */
@@ -168,6 +171,36 @@ export function Zed({ win }: { win: WinState }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeReady])
+  const buffersNow = useRef(buffers); buffersNow.current = buffers
+  const refreshGeneration = useRef(0)
+  const refreshFiles = async () => {
+    const gen = ++refreshGeneration.current, owner = getAccount().user?.id
+    const snapshot = buffersNow.current
+    // Server-side Seafile tools bypass the browser's directory cache.
+    const sf = locate(root).sf
+    if (sf) refreshDirs(sf)
+    const results = await Promise.all(Object.entries(snapshot).filter(([, b]) => !b.loading).map(async ([path, b]) => {
+      try {
+        const place = locate(path)
+        const disk = place.sf ? await readText(place.sf) : (await readFileText(path))?.text ?? null
+        return { path, b, disk }
+      } catch (e) {
+        // Only a confirmed missing file is a deletion; an outage must not discard a buffer.
+        return /not found|404|no such file/i.test((e as Error).message) ? { path, b, disk: null } : null
+      }
+    }))
+    if (gen !== refreshGeneration.current || getAccount().user?.id !== owner) return
+    setBuffers(now => {
+      const next = { ...now } // Also invalidates the source index when closed source files changed.
+      for (const r of results) if (r) {
+        const b = reconcileBuffer(r.b, now[r.path], r.disk)
+        if (b) next[r.path] = b
+      }
+      return next
+    })
+    setTick(n => n + 1)
+  }
+  useEffect(() => () => { refreshGeneration.current++ }, [])
   const [views, setViews] = useState<Record<string, View>>({})
   const [active, setActive] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([root]))
@@ -410,7 +443,7 @@ export function Zed({ win }: { win: WinState }) {
       setStatus(`Saving ${where(path)}…`)
       return writeText(sf, text)
         .then(() => {
-          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
+          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text, external: undefined, deleted: false } } : bs))
           setStatus(`Saved ${where(path)} to Seafile`)
           return true
         })
@@ -425,7 +458,7 @@ export function Zed({ win }: { win: WinState }) {
       const text = buf.text
       return saveText(path, text)
         .then(() => {
-          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
+          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text, external: undefined, deleted: false } } : bs))
           setStatus(`Saved ${prettyPath(path)} in this browser`)
           // Once per device: where it went, and what that means.
           notify({ title: 'Saved in this browser only', body: "Files in ~ are kept in this browser until Seafile is set up: clearing the site's data deletes them.", action: { app: 'settings', props: { section: 'integrations', sub: 'seafile' } }, once: 'browser-files-first-save', transient: true })
@@ -1026,6 +1059,7 @@ export function Zed({ win }: { win: WinState }) {
                     className={`zed-tab ${t === active ? 'is-active' : ''}`}
                     onClick={() => setActive(t)}
                     onAuxClick={(e) => e.button === 1 && close(t)}
+                    onContextMenu={e => t !== SEARCH && openContextMenu(e, [{ label: 'Attach file to Agents', onSelect: () => { setAttach({ id: ++attachId.current, path: t, text: buffers[t]?.text }); openAgents(false) } }])}
                     title={t === SEARCH ? 'Project search' : where(t)}
                   >
                     {t === SEARCH ? <span className="zed-tab-icon">⌕</span> : <FileDot name={t} />}
@@ -1128,9 +1162,14 @@ export function Zed({ win }: { win: WinState }) {
                 </div>
               )}
 
+              {buf.external !== undefined && <div className="xed-external" role="status">
+                <span>{buf.deleted ? 'This file was deleted outside the editor.' : 'This file changed outside the editor. Your edits are kept.'}</span>
+                {!buf.deleted && <button onClick={() => setBuffers(now => { const b = now[active!]; return b?.external != null ? { ...now, [active!]: { text: b.external, saved: b.external } } : now })}>Reload</button>}
+                <button onClick={() => setBuffers(now => { const b = now[active!]; if (!b) return now; const { external: _, ...keep } = b; return { ...now, [active!]: keep } })}>Keep mine</button>
+              </div>}
               <div className={`zed-panes is-${view}`}>
                 {view !== 'preview' && (
-                  <div className="zed-editor" key={active} ref={editor}>
+                  <div className="zed-editor" key={active} ref={editor} onContextMenu={e => openContextMenu(e, [{ label: 'Attach selection to Agents', shortcut: 'Ctrl L', onSelect: () => openAgents(true) }])}>
                     {/* msh files: clicking a line's gutter toggles its breakpoint (F9 and the Breakpoints list do it from the keyboard). */}
                     <div
                       className={`zed-gutter ${points ? 'is-debug' : ''}`}
@@ -1251,9 +1290,7 @@ export function Zed({ win }: { win: WinState }) {
         </section>
         {layout.rightOpen && !layout.rightSheet && <div {...layout.rightSplit.props} />}
         {layout.rightMounted && (
-          <XedAgentsDock ref={dockRef} sheet={layout.rightSheet} hidden={!layout.rightOpen} onClose={toggleAgents} onEscape={() => (layout.rightSheet && layout.closeSheet(), returnToEditor())} onOpenInAgents={() => window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'agents' } }))}>
-            <XedAgentsPane root={root} attach={attach} onFocusEditor={returnToEditor} />
-          </XedAgentsDock>
+          <XedAgentsPane ref={dockRef} pid={win.pid} sheet={layout.rightSheet} hidden={!layout.rightOpen} onClose={toggleAgents} root={root} attach={attach} onFocusEditor={() => { if (layout.rightSheet) layout.closeSheet(); returnToEditor() }} onFilesChanged={() => void refreshFiles()} />
         )}
       </div>
 
