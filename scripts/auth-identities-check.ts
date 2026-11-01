@@ -16,7 +16,8 @@
 //     admin's id; unlinking never removes the last sign-in,
 //   - bans and the registration limits hold for every sign-in,
 //   - removing GitHub from an admin ends admin rights and signs the account out everywhere,
-//   - one address starting many sign-ins only pushes out its own pending ones, never another's.
+//   - one address starting many sign-ins only pushes out its own pending ones, never another's
+//     (addresses: IPv6 by /64, forwarded only from trusted proxies).
 //
 //   node scripts/auth-identities-check.ts
 //
@@ -407,6 +408,18 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
   for (let i = 0; i < 25; i++) await victim.clone().get('/api/auth/google/login')
   r = await googleFinish(victim2, own, { claims: claims('g-victim', own.nonce) })
   check('the same address starting more than its share gives up its own oldest', r === '/?auth=error')
+}
+
+// ---- Client addresses for the per-address cap (server/egress.ts) ----
+
+{
+  const { clientIp } = await import('../server/egress.ts')
+  const ip = (peer: string, xff?: string) => clientIp({ socket: { remoteAddress: peer }, headers: xff ? { 'x-forwarded-for': xff } : {} } as never)
+  check('IPv6 addresses of one /64 share a key however they are written', new Set([ip('2001:db8::1'), ip('2001:db8:0:0::2'), ip('2001:0db8:0000:0000:ffff::3')]).size === 1)
+  check('a forwarded address is used only from a proxy, and only when it is an address', ip('127.0.0.1', '203.0.113.9') === '203.0.113.9' && ip('127.0.0.1', 'not-an-ip') === '127.0.0.1' && ip('8.8.8.8', '1.2.3.4') === '8.8.8.8')
+  process.env.TRUSTED_PROXIES = '10.0.0.1'
+  check('with TRUSTED_PROXIES, other private peers are not trusted', ip('10.0.0.2', '1.1.1.1') === '10.0.0.2' && ip('10.0.0.1', '1.1.1.1') === '1.1.1.1')
+  delete process.env.TRUSTED_PROXIES
 }
 
 await server.dispose()

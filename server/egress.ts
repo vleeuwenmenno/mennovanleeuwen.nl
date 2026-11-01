@@ -112,16 +112,22 @@ export function isPrivate(ip: string): boolean {
 }
 
 /**
- * The address the request came from, as a key for the per-address limits. The last
- * X-Forwarded-For entry is the one our own reverse proxy added, but only when the request came
- * from that proxy (a private address): straight from the internet, the header is the client's to
- * make up. IPv6 by its /64, which is what one home or server gets.
+ * The address the request came from, as a key for the per-address limits (Empires, sign-in round
+ * trips). The last X-Forwarded-For entry is the one our own reverse proxy added, but only when the
+ * request came from that proxy: the peers listed in TRUSTED_PROXIES (comma-separated addresses),
+ * or, without that setting, any private address (a reverse proxy on the same host or network).
+ * Straight from the internet the header is the client's to make up, and an entry that isn't an
+ * address is ignored. IPv6 by its /64 (what one home or server gets), however it is written.
  */
 export function clientIp(req: IncomingMessage) {
-  const peer = (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '')
-  const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-  const ip = (fwd.length && isIP(peer) && isPrivate(peer) ? fwd.at(-1)! : peer).replace(/^::ffff:/, '')
-  return isIP(ip) === 6 ? `${ip.split(':').slice(0, 4).join(':')}::/64` : ip
+  const bare = (ip: string) => ip.trim().replace(/^::ffff:/i, '')
+  const peer = bare(req.socket.remoteAddress ?? '?')
+  const trusted = process.env.TRUSTED_PROXIES ? process.env.TRUSTED_PROXIES.split(',').map(bare).includes(peer) : isIP(peer) !== 0 && isPrivate(peer)
+  const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',').map(bare).filter(Boolean).at(-1)
+  const ip = trusted && fwd && isIP(fwd) ? fwd : peer
+  if (isIP(ip) !== 6) return ip
+  const g = v6Groups(ip)
+  return g ? `${g.slice(0, 4).map((n) => n.toString(16)).join(':')}::/64` : ip
 }
 
 /**

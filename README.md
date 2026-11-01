@@ -64,7 +64,9 @@ The bundled page gets one native plugin, `window.Capacitor.Plugins.MvlosApp`
 Nothing else crosses: no URL opening, storage or tokens. Capacitor's own core plugins that the
 desktop doesn't need (`CapacitorHttp`, `CapacitorCookies`, `WebView`) are replaced by empty
 plugins of the same name (`DisabledCorePlugins.java`), so their native methods are refused and
-their JavaScript interfaces removed; `SystemBars` stays. The WebView never loads a remote page:
+their JavaScript interfaces removed; `SystemBars` stays. Capacitor's local server would also hand
+the page files of the app (`/_capacitor_file_/…`) and content URIs (`/_capacitor_content_/…`); those
+are refused, for the page and for service workers. The WebView never loads a remote page:
 the navigation guard in `MainActivity` sends gesture-initiated `https` links to the browser and
 blocks the rest, and remote documents are also refused at the request level, which covers form
 POSTs (Android doesn't ask the navigation guard about those) and, on WebViews too old for
@@ -1414,7 +1416,10 @@ refused (accounts are never merged), and the last sign-in of an account can't be
 GitHub revokes its token; on an admin account it also ends the admin rights and signs the account
 out everywhere, so no request already authorised as admin can finish afterwards. Pending sign-in
 round trips are capped per client address (20, oldest of that address first), so one address
-starting many can't push out anyone else's. Accounts made with Google have a
+starting many can't push out anyone else's. The client address is the last `X-Forwarded-For`
+entry when the request comes from a trusted proxy: the addresses in `TRUSTED_PROXIES`
+(comma-separated), or any private address when that isn't set. Set it when clients on a private
+network (a LAN, Tailscale) can reach the server directly, not only through the proxy. Accounts made with Google have a
 login like `name_g` (GitHub logins can't contain `_`), no GitHub token, and no GitHub source in
 Spotlight or the Git app until GitHub is linked.
 

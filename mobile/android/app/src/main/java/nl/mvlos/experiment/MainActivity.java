@@ -4,6 +4,8 @@ import android.os.Bundle;
 import android.content.Intent;
 import android.content.ActivityNotFoundException;
 import android.net.Uri;
+import android.webkit.ServiceWorkerClient;
+import android.webkit.ServiceWorkerController;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -23,6 +25,25 @@ public class MainActivity extends BridgeActivity {
         return "https".equals(url.getScheme()) && "localhost".equals(url.getHost()) && url.getPort() == -1;
     }
 
+    /**
+     * Capacitor's local server also serves files of the app (/_capacitor_file_/<path>) and content
+     * URIs (/_capacitor_content_/...) to the page. The bundled desktop uses neither, so they are
+     * refused, for the page and for service workers alike.
+     */
+    private static boolean isNativeFileUrl(Uri url) {
+        for (String p : new String[] { url.getPath(), url.getEncodedPath() }) {
+            if (p == null) continue;
+            String lower = p.toLowerCase(java.util.Locale.ROOT);
+            if (lower.contains("capacitor_file") || lower.contains("capacitor_content")) return true;
+        }
+        return false;
+    }
+
+    private static WebResourceResponse refused() {
+        return new WebResourceResponse("text/plain", "utf-8", 403, "Forbidden",
+            Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
+    }
+
     @Override
     public void onCreate(Bundle state) {
         registerPlugin(MvlosAppPlugin.class);
@@ -39,10 +60,9 @@ public class MainActivity extends BridgeActivity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 // shouldOverrideUrlLoading below is not asked for POST navigations (a submitted
                 // form), so remote documents are refused here as well, whatever the method.
-                if (!isApp(request.getUrl()) && (request.isForMainFrame() || !framesSafe)) {
-                    return new WebResourceResponse("text/plain", "utf-8", 403, "Forbidden",
-                        Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
-                }
+                Uri url = request.getUrl();
+                if (!isApp(url) && (request.isForMainFrame() || !framesSafe)) return refused();
+                if (isApp(url) && isNativeFileUrl(url)) return refused();
                 return super.shouldInterceptRequest(view, request);
             }
 
@@ -60,6 +80,15 @@ public class MainActivity extends BridgeActivity {
                     }
                 }
                 return true;
+            }
+        });
+        // Replaces the service worker client Capacitor set up, with the same file refusal.
+        ServiceWorkerController.getInstance().setServiceWorkerClient(new ServiceWorkerClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
+                Uri url = request.getUrl();
+                if (isApp(url) && isNativeFileUrl(url)) return refused();
+                return getBridge().getLocalServer().shouldInterceptRequest(request);
             }
         });
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
