@@ -51,6 +51,16 @@ public class CloudPolicyTest {
     }
 
     @Test
+    public void ipv6IsSavedAsBrowsersWriteIt() {
+        assertEquals("https://[2001:db8::1]", ServerUrl.normalize("https://[2001:0DB8:0:0:0:0:0:1]").origin);
+        assertEquals("https://[::ffff:102:304]", ServerUrl.normalize("https://[::ffff:1.2.3.4]").origin);
+        assertEquals("https://[::1]:8443", ServerUrl.normalize("https://[0:0:0:0:0:0:0:1]:8443").origin);
+        assertEquals("https://[2001:db8:0:1:0:0:0:1]".replace("0:0:0:1]", ":1]"), ServerUrl.normalize("https://[2001:db8:0:1::1]").origin);
+        assertEquals("https://[1::]", ServerUrl.normalize("https://[1:0:0:0:0:0:0:0]").origin);
+        assertEquals("https://[1:0:1::]", ServerUrl.normalize("https://[1:0:1:0:0:0:0:0]").origin);
+    }
+
+    @Test
     public void chooserLink() {
         assertEquals(Action.CHOOSER, c("mvlosapp://chooser"));
         assertEquals(Action.BLOCK, c("mvlosapp://other"));
@@ -61,5 +71,8 @@ public class CloudPolicyTest {
         assertEquals(Action.STAY, CloudPolicy.classify("https://localhost:8443", "https://localhost:8443/x"));
         assertEquals(Action.EXTERNAL, CloudPolicy.classify("https://localhost:8443", "https://localhost/x"));
         assertEquals(Action.STAY, CloudPolicy.classify("https://[2001:db8::1]", "https://[2001:db8::1]/"));
+        // However an IPv6 address is written, the same server is the same origin.
+        assertEquals(Action.STAY, CloudPolicy.classify("https://[2001:db8::1]", "https://[2001:0db8:0:0:0:0:0:1]/"));
+        assertEquals(Action.STAY, CloudPolicy.classify("https://[::ffff:102:304]", "https://[::ffff:1.2.3.4]/"));
     }
 }

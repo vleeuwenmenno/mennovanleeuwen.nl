@@ -21,6 +21,11 @@ public class CloudResetActivity extends Activity {
     static final String EXTRA_ORIGIN = "origin";
     /** Result extra: whether the server confirmed the sign-out. */
     static final String EXTRA_SIGNED_OUT = "signedOut";
+    /**
+     * Result extra: this WebView can't delete everything itself (no DELETE_BROWSING_DATA), so the
+     * cloud process ends and the launcher deletes the cloud WebView's directories (deleteCloudData).
+     */
+    static final String EXTRA_WIPE_DIRS = "wipeDirs";
     /** Result extra: whether the app had a session with that server. */
     static final String EXTRA_HAD_SESSION = "hadSession";
     private volatile boolean signedOut;
@@ -29,6 +34,7 @@ public class CloudResetActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        setFinishOnTouchOutside(false);
         String raw = getIntent().getStringExtra(EXTRA_ORIGIN);
         ServerUrl.Result checked = raw == null ? null : ServerUrl.normalize(raw);
         String origin = checked != null && checked.ok() ? checked.origin : null;
@@ -75,16 +81,61 @@ public class CloudResetActivity extends Activity {
             // storage (localStorage, IndexedDB, service workers, Cache Storage).
             WebStorageCompat.deleteBrowsingData(WebStorage.getInstance(), this::cookiesThenDone);
         } else {
+            // deleteAllData leaves service workers and Cache Storage: the whole profile goes instead.
             WebStorage.getInstance().deleteAllData();
+            wipeDirs = true;
             cookiesThenDone();
         }
     }
 
+    private boolean wipeDirs;
+
     private void cookiesThenDone() {
         CookieManager.getInstance().removeAllCookies(done -> {
             CookieManager.getInstance().flush();
-            setResult(RESULT_OK, new android.content.Intent().putExtra(EXTRA_SIGNED_OUT, signedOut).putExtra(EXTRA_HAD_SESSION, hadSession));
+            setResult(RESULT_OK, new android.content.Intent().putExtra(EXTRA_SIGNED_OUT, signedOut)
+                .putExtra(EXTRA_HAD_SESSION, hadSession).putExtra(EXTRA_WIPE_DIRS, wipeDirs));
             finish();
+            // The profile's files can only be deleted once nothing in this process holds them.
+            if (wipeDirs) new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 300);
         });
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        // Not cancellable: a half-done reset must never count as done.
+    }
+
+    /**
+     * From the main process, once the cloud process has ended: deletes the cloud WebView's whole
+     * profile (app_webview_cloud and its cache). Returns whether it could.
+     */
+    static boolean deleteCloudData(android.content.Context context) {
+        android.app.ActivityManager am = (android.app.ActivityManager) context.getSystemService(ACTIVITY_SERVICE);
+        String cloud = context.getPackageName() + MvlosApplication.CLOUD_PROCESS_SUFFIX;
+        for (int i = 0; i < 40; i++) {
+            boolean running = false;
+            java.util.List<android.app.ActivityManager.RunningAppProcessInfo> procs = am.getRunningAppProcesses();
+            if (procs != null) for (android.app.ActivityManager.RunningAppProcessInfo p : procs) running |= cloud.equals(p.processName);
+            if (!running) {
+                java.io.File data = new java.io.File(context.getApplicationInfo().dataDir);
+                return delete(new java.io.File(data, "app_webview_cloud")) & delete(new java.io.File(context.getCacheDir(), "webview_cloud"));
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private static boolean delete(java.io.File f) {
+        if (!f.exists()) return true;
+        java.io.File[] children = f.isDirectory() ? f.listFiles() : null;
+        boolean ok = true;
+        if (children != null) for (java.io.File c : children) ok &= delete(c);
+        return f.delete() && ok;
     }
 }

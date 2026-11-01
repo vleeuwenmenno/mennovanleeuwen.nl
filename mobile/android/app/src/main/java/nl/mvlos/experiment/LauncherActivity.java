@@ -26,19 +26,51 @@ public class LauncherActivity extends AppCompatActivity {
     static final String EXTRA_CHOOSE = "nl.mvlos.experiment.extra.CHOOSE";
 
     private EditText urlField;
-    /** What to do once the cloud data of the previous server has been reset (CloudResetActivity). */
-    private Runnable afterReset;
+    /**
+     * What waits for the reset of the previous server's cloud data (CloudResetActivity): forget it
+     * (disconnect), or switch to `pendingServer`. Kept across recreation; done only after a reset
+     * that finished.
+     */
+    private String pendingAction;
+    private String pendingServer;
     private final androidx.activity.result.ActivityResultLauncher<Intent> reset =
         registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), r -> {
+            String action = pendingAction;
+            String server = pendingServer;
+            pendingAction = null;
+            pendingServer = null;
             Intent data = r.getData();
-            if (data != null && data.getBooleanExtra(CloudResetActivity.EXTRA_HAD_SESSION, false)
+            if (r.getResultCode() != RESULT_OK || data == null) {
+                android.widget.Toast.makeText(this, R.string.reset_incomplete, android.widget.Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (data.getBooleanExtra(CloudResetActivity.EXTRA_WIPE_DIRS, false) && !CloudResetActivity.deleteCloudData(this)) {
+                android.widget.Toast.makeText(this, R.string.reset_incomplete, android.widget.Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (data.getBooleanExtra(CloudResetActivity.EXTRA_HAD_SESSION, false)
                 && !data.getBooleanExtra(CloudResetActivity.EXTRA_SIGNED_OUT, false)) {
                 android.widget.Toast.makeText(this, R.string.reset_unconfirmed, android.widget.Toast.LENGTH_LONG).show();
             }
-            Runnable next = afterReset;
-            afterReset = null;
-            if (next != null) next.run();
+            if ("switch".equals(action) && server != null) {
+                AppPrefs.setCloud(this, server);
+                openCloud();
+            } else if ("disconnect".equals(action)) {
+                AppPrefs.forgetServer(this);
+                if (urlField != null) {
+                    urlField.setText("");
+                    urlField.setError(null);
+                }
+                refreshSaved();
+            }
         });
+
+    @Override
+    protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putString("pendingAction", pendingAction);
+        out.putString("pendingServer", pendingServer);
+    }
     private View savedGroup;
     private TextView savedLabel;
 
@@ -52,6 +84,10 @@ public class LauncherActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) {
+            pendingAction = savedInstanceState.getString("pendingAction");
+            pendingServer = savedInstanceState.getString("pendingServer");
+        }
 
         // Auto-open only on a fresh launch from the home screen, never on rotation, from Recents,
         // from the "Choose mode" shortcut or when coming back from the desktop.
@@ -149,10 +185,7 @@ public class LauncherActivity extends AppCompatActivity {
             new AlertDialog.Builder(this)
                 .setTitle(getString(R.string.switch_title, result.origin))
                 .setMessage(getString(R.string.switch_message, previous))
-                .setPositiveButton(R.string.switch_confirm, (d, w) -> resetCloud(previous, () -> {
-                    AppPrefs.setCloud(this, result.origin);
-                    openCloud();
-                }))
+                .setPositiveButton(R.string.switch_confirm, (d, w) -> resetCloud(previous, "switch", result.origin))
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
             return;
@@ -162,9 +195,10 @@ public class LauncherActivity extends AppCompatActivity {
         openCloud();
     }
 
-    /** Signs the app out of `origin` and deletes the cloud WebView's data, then runs `next`. */
-    private void resetCloud(String origin, Runnable next) {
-        afterReset = next;
+    /** Signs the app out of `origin` and deletes the cloud WebView's data, then does `action`. */
+    private void resetCloud(String origin, String action, String next) {
+        pendingAction = action;
+        pendingServer = next;
         reset.launch(new Intent(this, CloudResetActivity.class).putExtra(CloudResetActivity.EXTRA_ORIGIN, origin));
     }
 
@@ -184,12 +218,7 @@ public class LauncherActivity extends AppCompatActivity {
         new AlertDialog.Builder(this)
             .setTitle(getString(R.string.disconnect_title, saved))
             .setMessage(R.string.disconnect_message)
-            .setPositiveButton(R.string.disconnect, (d, w) -> resetCloud(saved, () -> {
-                AppPrefs.forgetServer(this);
-                urlField.setText("");
-                urlField.setError(null);
-                refreshSaved();
-            }))
+            .setPositiveButton(R.string.disconnect, (d, w) -> resetCloud(saved, "disconnect", null))
             .setNegativeButton(android.R.string.cancel, null)
             .show();
     }

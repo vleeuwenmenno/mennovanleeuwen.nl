@@ -111,7 +111,7 @@ public class CloudActivity extends AppCompatActivity {
 
         filePicker = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
             if (fileCallback == null) return;
-            fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.getResultCode(), result.getData()));
+            fileCallback.onReceiveValue(safePicks(WebChromeClient.FileChooserParams.parseResult(result.getResultCode(), result.getData())));
             fileCallback = null;
         });
 
@@ -199,6 +199,9 @@ public class CloudActivity extends AppCompatActivity {
                         break;
                     case PROVIDER_OFF:
                         message(R.string.login_provider_off_title, getString(R.string.login_provider_off_body));
+                        break;
+                    case NOT_CONFIGURED:
+                        message(R.string.login_old_server_title, getString(R.string.login_not_configured, origin));
                         break;
                     case SERVER_ERROR:
                         message(R.string.login_unreachable_title, getString(R.string.login_server_error, origin));
@@ -306,6 +309,24 @@ public class CloudActivity extends AppCompatActivity {
         progress.setVisibility(View.GONE);
     }
 
+    /**
+     * What a file picker returned, keeping only documents of other apps. A picker is another app and
+     * its answer is untrusted: a file:// path, or a content:// address of this app's own providers,
+     * would let it hand the page this app's private files (cookies, the sign-in in progress, the
+     * on-device desktop's data), which the WebView would read with this app's rights.
+     */
+    private Uri[] safePicks(Uri[] picked) {
+        if (picked == null) return null;
+        java.util.List<Uri> ok = new java.util.ArrayList<>();
+        for (Uri u : picked) {
+            if (u == null || !"content".equals(u.getScheme()) || u.getAuthority() == null) continue;
+            android.content.pm.ProviderInfo provider = getPackageManager().resolveContentProvider(u.getAuthority(), 0);
+            if (provider == null || getPackageName().equals(provider.packageName)) continue;
+            ok.add(u);
+        }
+        return ok.isEmpty() ? null : ok.toArray(new Uri[0]);
+    }
+
     private static WebResourceResponse refused() {
         return new WebResourceResponse("text/plain", "utf-8", 403, "Forbidden",
             Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
@@ -314,7 +335,8 @@ public class CloudActivity extends AppCompatActivity {
     private final class Client extends WebViewClient {
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-            if (!request.isForMainFrame()) return false;
+            // Frames may show other sites, but never GitHub's or Google's sign-in, also after a redirect.
+            if (!request.isForMainFrame()) return CloudPolicy.classify(origin, request.getUrl().toString()) == CloudPolicy.Action.PROVIDER_PAGE;
             String url = request.getUrl().toString();
             switch (CloudPolicy.classify(origin, url)) {
                 case STAY:
@@ -405,7 +427,14 @@ public class CloudActivity extends AppCompatActivity {
             if (fileCallback != null) fileCallback.onReceiveValue(null);
             fileCallback = callback;
             try {
-                filePicker.launch(params.createIntent());
+                // The system's document picker (Android's own, not any app that claims to pick files).
+                Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+                String[] types = params.getAcceptTypes();
+                java.util.List<String> mimes = new java.util.ArrayList<>();
+                if (types != null) for (String t : types) if (t != null && t.matches("[a-z]+/[a-z0-9.+*-]+")) mimes.add(t);
+                if (!mimes.isEmpty()) pick.putExtra(Intent.EXTRA_MIME_TYPES, mimes.toArray(new String[0]));
+                pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
+                filePicker.launch(pick);
                 return true;
             } catch (ActivityNotFoundException e) {
                 fileCallback = null;

@@ -31,7 +31,10 @@ final class CloudLogin {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     /** What the server says about signing in the app. */
-    enum Support { SUPPORTED, OLD_SERVER, PROVIDER_OFF, SERVER_ERROR, UNREACHABLE }
+    enum Support { SUPPORTED, OLD_SERVER, NOT_CONFIGURED, PROVIDER_OFF, SERVER_ERROR, UNREACHABLE }
+
+    /** The protocol version this app speaks (server/appLogin.ts APP_LOGIN_VERSION). */
+    static final int PROTOCOL = 2;
 
     /** The only cookies a redeem may set, and which of them must be HttpOnly. */
     private static final java.util.Set<String> COOKIES = new java.util.HashSet<>(java.util.Arrays.asList("mvlos_sid", "mvlos_uid", "mvlos_login"));
@@ -70,9 +73,14 @@ final class CloudLogin {
         return Base64.encodeToString(b, Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
     }
 
-    static String challenge(String verifier) {
+    /**
+     * The challenge for this verifier and server: base64url(SHA-256(verifier + "\n" + origin)). The
+     * server checks it with its own configured address, so a server that relays the code and the
+     * verifier to another server gets nothing there.
+     */
+    static String challenge(String verifier, String origin) {
         try {
-            byte[] hash = MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII));
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest((verifier + "\n" + origin).getBytes(StandardCharsets.UTF_8));
             return Base64.encodeToString(hash, Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
         } catch (Exception e) {
             throw new IllegalStateException(e);
@@ -87,7 +95,7 @@ final class CloudLogin {
             .putString("state", state).putString("verifier", verifier).putString("origin", origin)
             .putString("provider", provider).putLong("created", System.currentTimeMillis())
             .commit();
-        return origin + "/api/auth/app/start?provider=" + provider + "&challenge=" + challenge(verifier) + "&state=" + state;
+        return origin + "/api/auth/app/start?provider=" + provider + "&challenge=" + challenge(verifier, origin) + "&state=" + state;
     }
 
     /** The sign-in in progress, if any and still fresh. */
@@ -133,7 +141,12 @@ final class CloudLogin {
             String type = c.getContentType();
             if (type == null || !type.startsWith("application/json")) return Support.OLD_SERVER;
             JSONObject body = new JSONObject(read(c.getInputStream(), 16 * 1024));
-            if (body.optInt("app", 0) < 1) return Support.OLD_SERVER;
+            int version = body.optInt("app", -1);
+            // 0: a current server without an https PUBLIC_URL; 1: an earlier, unbound protocol.
+            if (version == 0) return Support.NOT_CONFIGURED;
+            if (version < PROTOCOL) return Support.OLD_SERVER;
+            // The server's own idea of its address must be the one the app connects to.
+            if (!origin.equals(body.optString("origin", ""))) return Support.NOT_CONFIGURED;
             JSONObject providers = body.optJSONObject("providers");
             return providers != null && providers.optBoolean(provider, false) ? Support.SUPPORTED : Support.PROVIDER_OFF;
         } catch (Exception e) {
@@ -177,35 +190,45 @@ final class CloudLogin {
         }
     }
 
+    /**
+     * Checks the Set-Cookie headers of a redeem and returns canonical ones to install: only MvL OS's
+     * own cookies, each once; every attribute parsed (names trimmed, case-insensitive), each once;
+     * Secure and Path=/ required, no Domain, the session cookie HttpOnly. The cookies installed are
+     * rebuilt from the checked parts, never the headers as received.
+     */
     static java.util.List<String> validCookies(java.util.List<String> set) {
         if (set == null) return null;
-        java.util.List<String> ok = new java.util.ArrayList<>();
-        boolean sid = false;
-        boolean uid = false;
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
         for (String header : set) {
-            String[] parts = header.split(";");
+            String[] parts = header.split(";", -1);
             int eq = parts[0].indexOf('=');
             if (eq <= 0) return null;
             String name = parts[0].substring(0, eq).trim();
             String value = parts[0].substring(eq + 1).trim();
-            if (!COOKIES.contains(name) || !value.matches("[A-Za-z0-9%._~-]{1,512}")) return null;
-            boolean secure = false;
-            boolean httpOnly = false;
-            boolean rootPath = false;
+            if (!COOKIES.contains(name) || out.containsKey(name) || !value.matches("[A-Za-z0-9%._~-]{1,512}")) return null;
+            java.util.Map<String, String> attrs = new java.util.HashMap<>();
             for (int i = 1; i < parts.length; i++) {
-                String a = parts[i].trim().toLowerCase(java.util.Locale.ROOT);
-                if (a.equals("secure")) secure = true;
-                else if (a.equals("httponly")) httpOnly = true;
-                else if (a.equals("path=/")) rootPath = true;
-                else if (a.startsWith("domain=")) return null;
+                String part = parts[i];
+                int e = part.indexOf('=');
+                String key = (e < 0 ? part : part.substring(0, e)).trim().toLowerCase(java.util.Locale.ROOT);
+                String val = e < 0 ? "" : part.substring(e + 1).trim();
+                if (key.isEmpty() || attrs.containsKey(key)) return null;
+                attrs.put(key, val);
             }
-            if (!secure || !rootPath || (name.equals("mvlos_sid") && !httpOnly)) return null;
-            sid |= name.equals("mvlos_sid");
-            uid |= name.equals("mvlos_uid");
-            ok.add(header);
+            if (attrs.containsKey("domain") || !"/".equals(attrs.get("path")) || !attrs.containsKey("secure")) return null;
+            boolean httpOnly = attrs.containsKey("httponly");
+            if (name.equals("mvlos_sid") && !httpOnly) return null;
+            String maxAge = attrs.get("max-age");
+            if (maxAge != null && !maxAge.matches("[0-9]{1,9}")) return null;
+            for (String k : attrs.keySet()) {
+                if (!k.matches("path|secure|httponly|max-age|samesite|expires")) return null;
+            }
+            out.put(name, name + "=" + value + "; Path=/" + (maxAge != null ? "; Max-Age=" + maxAge : "")
+                + "; Secure" + (httpOnly ? "; HttpOnly" : "") + "; SameSite=Lax");
         }
-        return sid && uid ? ok : null;
+        return out.containsKey("mvlos_sid") && out.containsKey("mvlos_uid") ? new java.util.ArrayList<>(out.values()) : null;
     }
+
 
     static String read(InputStream in, int max) throws java.io.IOException {
         try (InputStream s = in) {

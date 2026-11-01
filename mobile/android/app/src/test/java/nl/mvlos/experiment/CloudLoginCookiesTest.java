@@ -1,5 +1,6 @@
 package nl.mvlos.experiment;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
@@ -26,5 +27,19 @@ public class CloudLoginCookiesTest {
         assertNull(CloudLogin.validCookies(Arrays.asList(SID.replace("Path=/", "Path=/api"), UID)));
         assertNull(CloudLogin.validCookies(Arrays.asList(SID, UID, "other=1; Path=/; Secure")));
         assertNull(CloudLogin.validCookies(Arrays.asList(SID, "mvlos_uid=5 6; Path=/; Secure")));
+        // Attribute names are trimmed and case-insensitive, and each may appear once.
+        assertNull(CloudLogin.validCookies(Arrays.asList(SID + "; Domain =example.com", UID)));
+        assertNull(CloudLogin.validCookies(Arrays.asList(SID + "; DOMAIN=example.com", UID)));
+        assertNull(CloudLogin.validCookies(Arrays.asList(SID + "; Path=/api", UID)));
+        assertNull(CloudLogin.validCookies(Arrays.asList(SID, UID, UID)));
+        assertNull(CloudLogin.validCookies(Arrays.asList(SID + "; Partitioned", UID)));
+    }
+
+    @Test
+    public void installsRebuiltCookiesNotTheHeaders() {
+        assertEquals(Arrays.asList(
+            "mvlos_sid=abcDEF123_-; Path=/; Max-Age=2592000; Secure; HttpOnly; SameSite=Lax",
+            "mvlos_uid=5; Path=/; Max-Age=2592000; Secure; SameSite=Lax"),
+            CloudLogin.validCookies(Arrays.asList(SID, UID)));
     }
 }

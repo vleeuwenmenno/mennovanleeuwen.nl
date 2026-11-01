@@ -52,7 +52,9 @@ The app (**MvL OS**, `nl.mvlos.experiment`) opens on a native chooser
   system bar and keyboard insets and Android Back like the on-device desktop (`CloudActivity`).
 - The saved server has *Open* and *Disconnect*. Disconnect signs the app out of that server (best
   effort: if the server can't be reached the app says the sign-out wasn't confirmed) and deletes
-  everything the app kept for it, then forgets the address. Connecting to another server does the
+  everything the app kept for it (WebView's own complete deletion, or on WebViews without it the
+  cloud process ends and its profile directory is deleted), then forgets the address. Nothing
+  changes unless that cleanup finished. Connecting to another server does the
   same for the previous one first. It doesn't touch the user's browser: a session there stays.
 - *Open my choice automatically* skips the chooser on a fresh launch. The chooser stays reachable:
   Back at the root of either desktop, *Choose mode* in Settings → Account of the cloud desktop, and
@@ -62,7 +64,8 @@ The app (**MvL OS**, `nl.mvlos.experiment`) opens on a native chooser
 with its own WebView data directory (`MvlosApplication`), so its cookies, storage, cache and
 service workers never mix with the on-device desktop's. The page gets no native bridge, no
 JavaScript interface and no file or content access; camera, microphone and location requests are
-denied; downloads aren't supported yet. Only the saved server's exact origin (scheme, host, port)
+denied; downloads aren't supported yet. Uploads use Android's own document picker, and only
+`content://` documents of other apps are passed on, never `file://` paths or this app's own files. Only the saved server's exact origin (scheme, host, port)
 loads in it (`CloudPolicy.java`, unit-tested): other sites open in the browser after a tap,
 anything else is refused, including form POSTs and redirects that would leave the origin. The
 user agent ends in ` MvLOSApp/<version>` so the site can show app hints
@@ -75,9 +78,14 @@ embedded user-agents; Google refuses it too). When the cloud desktop navigates t
 ([`server/appLogin.ts`](server/appLogin.ts)):
 
 1. It asks `GET /api/auth/app`. A server without app sign-in (older versions answer 401 or 404)
-   gets a native message: *Sign-in needs a server update*; the desktop stays usable as a guest.
-2. It keeps a random PKCE verifier and state (cloud process only, ten minutes) and opens the system
-   browser (a Custom Tab) at `/api/auth/app/start?provider=…&challenge=S256(verifier)&state=…`.
+   gets a native message: *Sign-in needs a server update*; the desktop stays usable as a guest. The
+   server must have an https `PUBLIC_URL` equal to the address the app uses, or it answers
+   `app: 0` and the app says the server isn't set up for it.
+2. It keeps a random verifier and state (cloud process only, ten minutes) and opens the system
+   browser (a Custom Tab) at `/api/auth/app/start?provider=…&challenge=…&state=…`. The challenge
+   is `base64url(SHA-256(verifier + "\n" + origin))` with the server's origin, and the server
+   checks it against its own `PUBLIC_URL`, never a request header: a server that relays the code
+   and verifier to another server gets nothing there (protocol version 2).
 3. The normal GitHub or Google round trip runs there, with bans, registration limits and admin
    rules as always, but makes no session in the browser. It ends on a page naming the account and
    the server with an *Open the app* button: the fixed private-use redirect
@@ -90,8 +98,9 @@ embedded user-agents; Google refuses it too). When the cloud desktop navigates t
    `X-MvL-App-Redeem: 1` to `/api/auth/app/redeem` on the same server, without following redirects.
    The server takes the code out first, checks the verifier, that the account and the sign-in
    that made the code are still there and allowed in, ends any session the app's WebView had, and
-   answers with fresh session cookies. The app accepts only MvL OS's own cookies (Secure,
-   `Path=/`, no `Domain`, the session one HttpOnly), puts them into the cloud WebView and opens the
+   answers with fresh session cookies. The app accepts only MvL OS's own cookies, each once, with
+   every attribute parsed once (Secure and `Path=/` required, no `Domain`, the session one
+   HttpOnly), rebuilds them from the checked parts, puts them into the cloud WebView and opens the
    desktop. A web page can't redeem: a form can send neither JSON nor that header, and the server
    grants no CORS preflight. The code and verifier never appear in a WebView URL, in storage the
    page can read, or in the session cookie.

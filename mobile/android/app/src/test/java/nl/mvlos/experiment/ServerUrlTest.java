@@ -142,7 +142,7 @@ public class ServerUrlTest {
         accepts("https://[::1]", "https://[::1]");
         accepts("https://[2001:DB8::1]:8443/x", "https://[2001:db8::1]:8443");
         accepts("[2001:db8::1]", "https://[2001:db8::1]");
-        accepts("https://[::ffff:192.168.0.1]", "https://[::ffff:192.168.0.1]");
+        accepts("https://[::ffff:192.168.0.1]", "https://[::ffff:c0a8:1]");
         accepts("https://[1:2:3:4:5:6:7:8]", "https://[1:2:3:4:5:6:7:8]");
         rejects("https://[::1", ServerUrl.Error.INVALID_HOST);
         rejects("https://[1:2:3]", ServerUrl.Error.INVALID_HOST);

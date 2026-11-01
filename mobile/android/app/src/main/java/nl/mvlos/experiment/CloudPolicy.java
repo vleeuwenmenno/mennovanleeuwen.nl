@@ -68,7 +68,17 @@ public final class CloudPolicy {
     static boolean sameOrigin(URI origin, URI url) {
         if (origin.getHost() == null || url.getHost() == null) return false;
         if (!"https".equalsIgnoreCase(origin.getScheme()) || !"https".equalsIgnoreCase(url.getScheme())) return false;
-        return origin.getHost().equalsIgnoreCase(url.getHost()) && port(origin) == port(url);
+        return host(origin).equals(host(url)) && port(origin) == port(url);
+    }
+
+    /** The host in one form: lower case, an IPv6 literal written as browsers write it. */
+    private static String host(URI u) {
+        String h = u.getHost().toLowerCase(Locale.ROOT);
+        if (h.startsWith("[") && h.endsWith("]")) {
+            String inner = h.substring(1, h.length() - 1);
+            return ServerUrl.isIpv6(inner) ? "[" + ServerUrl.canonicalIpv6(inner) + "]" : h;
+        }
+        return h;
     }
 
     private static int port(URI u) {

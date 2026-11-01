@@ -33,6 +33,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { join } from 'node:path'
 import { Server, check, finish, sleep } from './empires-harness.ts'
 
+/** The server's canonical address for app sign-in (PUBLIC_URL below). */
+const APP_ORIGIN = 'https://mvl-app.example'
+
 // ---- Stand-ins for GitHub and Google ----
 
 const CLIENT_ID = 'client-123.apps.googleusercontent.com'
@@ -91,7 +94,7 @@ const MOCK = `http://127.0.0.1:${(mock.address() as { port: number }).port}`
 const server = new Server({
   GITHUB_CLIENT_ID: 'gh-client', GITHUB_CLIENT_SECRET: 'gh-secret', GITHUB_WEB_URL: MOCK, GITHUB_API_URL: MOCK,
   GOOGLE_SIGNIN: 'on', GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: 'g-secret', GOOGLE_AUTH_URL: `${MOCK}/auth`, GOOGLE_TOKEN_URL: `${MOCK}/token`, GOOGLE_JWKS_URL: `${MOCK}/certs`,
-  ADMIN_GITHUB_IDS: '1001', AUTH_STATE_TTL_MS: '4000', AUTH_APP_CODE_TTL_MS: '3000', NOTIFY_WATCH: 'off',
+  ADMIN_GITHUB_IDS: '1001', PUBLIC_URL: 'https://mvl-app.example', AUTH_STATE_TTL_MS: '4000', AUTH_APP_CODE_TTL_MS: '3000', NOTIFY_WATCH: 'off',
 })
 {
   const old = new DatabaseSync(join(server.data, 'mvlos.db'))
@@ -417,12 +420,13 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
 // ---- Signing in the Android app (server/appLogin.ts) ----
 
 {
-  const info = (await (await fetch(`${ORIGIN}/api/auth/app`)).json()) as { app?: number; providers?: { github: boolean; google: boolean } }
-  check('GET /api/auth/app says the server signs in the app, with both providers', info.app === 1 && !!info.providers?.github && !!info.providers.google)
+  const info = (await (await fetch(`${ORIGIN}/api/auth/app`)).json()) as { app?: number; origin?: string; providers?: { github: boolean; google: boolean } }
+  check('GET /api/auth/app says the server signs in the app (version 2, its PUBLIC_URL origin), with both providers', info.app === 2 && info.origin === APP_ORIGIN && !!info.providers?.github && !!info.providers.google)
   const APP = 'nl.mvlos.experiment:/oauth?'
-  const pkce = () => {
+  /** The app's proof, bound to the server it connected to (version 2). */
+  const pkce = (origin = APP_ORIGIN) => {
     const verifier = randomBytes(32).toString('base64url')
-    return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url'), state: randomBytes(16).toString('base64url') }
+    return { verifier, challenge: createHash('sha256').update(`${verifier}\n${origin}`).digest('base64url'), state: randomBytes(16).toString('base64url') }
   }
   let page = ''
   let pageHeaders = new Headers()
@@ -470,7 +474,7 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
 
   let p = pkce()
   let round = await appRound('github', p, { id: 2002, login: 'bob' })
-  check('app sign-in with GitHub ends on a page naming the account and the server, with an "Open the app" link carrying a code and the app state', round.status === 200 && page.includes('@bob') && page.includes(ORIGIN) && !!round.code && round.appState === p.state)
+  check('app sign-in with GitHub ends on a page naming the account and the server, with an "Open the app" link carrying a code and the app state', round.status === 200 && page.includes('@bob') && page.includes(APP_ORIGIN) && !!round.code && round.appState === p.state)
   check('...that page runs no scripts, is not kept and refers nothing on', /default-src 'none'/.test(pageHeaders.get('content-security-policy') ?? '') && !/<script/i.test(page) && pageHeaders.get('cache-control') === 'no-store' && pageHeaders.get('referrer-policy') === 'no-referrer')
   check('...and makes no session in the system browser', !round.browser.jar.has('mvlos_sid') && !(await round.browser.me()).user)
   check('a code without its verifier is refused', (await redeem({ code: round.code })) === 400)
@@ -484,6 +488,15 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
   p = pkce()
   round = await appRound('github', p, { id: 2002, login: 'bob' })
   check('a wrong verifier: refused', (await redeem({ code: round.code, verifier: pkce().verifier })) === 400 && setCookies.length === 0)
+  // Another server the app was connected to sends the browser here with the app's challenge and
+  // relays code and verifier: the challenge names that server, so this one refuses.
+  p = pkce('https://evil.example')
+  round = await appRound('github', p, { id: 2002, login: 'bob' })
+  check('a proof made for another server (a relay): refused here', !!round.code && (await redeem({ code: round.code, verifier: p.verifier })) === 400 && setCookies.length === 0)
+  p = { ...pkce(), challenge: '' }
+  p.challenge = createHash('sha256').update(p.verifier).digest('base64url')
+  round = await appRound('github', p, { id: 2002, login: 'bob' })
+  check('a plain PKCE challenge without the server (protocol version 1): refused', (await redeem({ code: round.code, verifier: p.verifier })) === 400)
 
   p = pkce()
   round = await appRound('github', p, { id: 2002, login: 'bob' })

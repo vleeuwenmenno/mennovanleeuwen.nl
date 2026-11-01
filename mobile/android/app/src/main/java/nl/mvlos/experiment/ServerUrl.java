@@ -110,7 +110,8 @@ public final class ServerUrl {
             if (close < 0) return Result.fail(Error.INVALID_HOST);
             String literal = authority.substring(1, close).toLowerCase(Locale.ROOT);
             if (!isIpv6(literal)) return Result.fail(Error.INVALID_HOST);
-            host = "[" + literal + "]";
+            // As browsers write it (WHATWG URL), so the saved origin matches the WebView's URLs.
+            host = "[" + canonicalIpv6(literal) + "]";
             String after = authority.substring(close + 1);
             if (!after.isEmpty()) {
                 if (!after.startsWith(":")) return Result.fail(Error.INVALID_HOST);
@@ -186,6 +187,68 @@ public final class ServerUrl {
             if (Integer.parseInt(part) > 255) return false;
         }
         return true;
+    }
+
+    /**
+     * A valid IPv6 literal (see isIpv6) in the form the WHATWG URL serializer gives: eight 16-bit
+     * pieces in lower-case hex without leading zeros, an embedded IPv4 tail turned into two pieces,
+     * and the first longest run of two or more zero pieces written as "::".
+     */
+    static String canonicalIpv6(String literal) {
+        String s = literal.toLowerCase(Locale.ROOT);
+        int[] pieces = new int[8];
+        String head = s;
+        String tail = "";
+        int dc = s.indexOf("::");
+        if (dc >= 0) {
+            head = s.substring(0, dc);
+            tail = s.substring(dc + 2);
+        }
+        java.util.List<Integer> h = groups(head);
+        java.util.List<Integer> t = groups(tail);
+        for (int i = 0; i < h.size(); i++) pieces[i] = h.get(i);
+        for (int i = 0; i < t.size(); i++) pieces[8 - t.size() + i] = t.get(i);
+        int bestStart = -1;
+        int bestLen = 1;
+        for (int i = 0; i < 8; ) {
+            if (pieces[i] != 0) {
+                i++;
+                continue;
+            }
+            int j = i;
+            while (j < 8 && pieces[j] == 0) j++;
+            if (j - i > bestLen) {
+                bestStart = i;
+                bestLen = j - i;
+            }
+            i = j;
+        }
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < 8; i++) {
+            if (i == bestStart) {
+                out.append(i == 0 ? "::" : ":");
+                i += bestLen - 1;
+                continue;
+            }
+            out.append(Integer.toHexString(pieces[i]));
+            if (i < 7) out.append(':');
+        }
+        return out.toString();
+    }
+
+    private static java.util.List<Integer> groups(String part) {
+        java.util.List<Integer> out = new java.util.ArrayList<>();
+        if (part.isEmpty()) return out;
+        for (String g : part.split(":", -1)) {
+            if (g.indexOf('.') >= 0) {
+                String[] q = g.split("\\.");
+                out.add((Integer.parseInt(q[0]) << 8) | Integer.parseInt(q[1]));
+                out.add((Integer.parseInt(q[2]) << 8) | Integer.parseInt(q[3]));
+            } else {
+                out.add(Integer.parseInt(g, 16));
+            }
+        }
+        return out;
     }
 
     /** Lower-case IPv6 literal without brackets or zone id; embedded IPv4 tail allowed. */
