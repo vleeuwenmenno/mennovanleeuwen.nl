@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Opens the chooser without auto-opening the remembered mode. -->
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="choose_mode"
+        android:shortcutLongLabel="@string/shortcut_choose_long"
+        android:shortcutShortLabel="@string/shortcut_choose_short">
+        <intent
+            android:action="nl.mvlos.experiment.action.CHOOSE_MODE"
+            android:targetClass="nl.mvlos.experiment.LauncherActivity"
+            android:targetPackage="nl.mvlos.experiment" />
+    </shortcut>
+</shortcuts>

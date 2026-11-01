@@ -29,6 +29,169 @@ Dev servers reached through `pnpm dev:proxy` in its cookie mode (the Tailscale n
 origin, so their browser storage is shared too: the same account id on two scratch `DATA_DIR`s
 uses the same `mvlos.u.<id>.` space (src/os/accountSpace.ts). That only matters in development.
 
+## Android app (experiment): on this device or a cloud server
+
+`mobile/` is an isolated Capacitor 8.6 package. It packages the real Vite frontend. The
+on-device mode needs no server; signing in to a cloud server from the app needs a server with
+*app sign-in* (below). This is an experiment, not a release-ready mobile client. Android 9/API 28
+or newer is required (the cloud desktop's separate WebView data needs it), with a current Android
+System WebView. iOS is not generated or tested yet; the shared
+frontend and Capacitor configuration can be reused on a Mac with Xcode.
+
+The app (**MvL OS**, `nl.mvlos.experiment`) opens on a native chooser
+(`LauncherActivity`):
+
+- **On this device**: the bundled desktop at `https://localhost` inside the app's WebView, as a
+  guest. Relative `/api` requests have no backend there, so sign-in, sync, Mail, Agents and other
+  server features don't work; notes and settings stay on the phone and are never uploaded.
+  Settings → Account says so and has *Use a cloud server…*.
+- **Cloud server**: an `https://` address the user types. It is checked natively
+  (`ServerUrl.java`): HTTPS only (`http://` is refused, not upgraded), no user name or password, a
+  valid host (IDN converted to ASCII, IPv4 only as a plain dotted quad, bracketed IPv6) and port;
+  only the origin is kept. The server's desktop then runs **inside the app**, full screen, with the
+  system bar and keyboard insets and Android Back like the on-device desktop (`CloudActivity`).
+- The saved server has *Open* and *Disconnect*. Disconnect signs the app out of that server (best
+  effort: if the server can't be reached the app says the sign-out wasn't confirmed) and deletes
+  everything the app kept for it (WebView's own complete deletion, or on WebViews without it the
+  cloud process ends and its profile directory is deleted), then forgets the address. Nothing
+  changes unless that cleanup finished. Connecting to another server does the
+  same for the previous one first. It doesn't touch the user's browser: a session there stays.
+- **Full screen** everywhere (`Immersive.java`): the status and navigation bars are hidden and
+  come back for a moment with a swipe from the screen edge; Back and gesture navigation keep
+  working, and full screen returns after dialogs, the keyboard or the sign-in browser. The content
+  draws edge to edge. Both desktops pad only for the keyboard and hand a display cutout to the
+  page as `env(safe-area-inset-*)`, which MvL OS already uses (`viewport-fit=cover`), so its top
+  bar stays clear of a camera notch; WebViews before version 140, which don't pass insets on,
+  get the cutout as padding instead (a black strip). The on-device desktop gets this from
+  Capacitor's SystemBars (`insetsHandling: "native"`), the cloud desktop from the same rule in
+  `Immersive.webViewInsets`; the chooser pads for the cutout and the keyboard.
+- *Open my choice automatically* skips the chooser on a fresh launch. The chooser stays reachable:
+  Back at the root of either desktop, *Choose mode* in Settings → Account of the cloud desktop, and
+  the launcher icon's long-press shortcut *Choose mode*.
+
+**The cloud desktop** is a plain Android WebView, not Capacitor, in a process of its own (`:cloud`)
+with its own WebView data directory (`MvlosApplication`), so its cookies, storage, cache and
+service workers never mix with the on-device desktop's. The page gets no native bridge, no
+JavaScript interface and no file or content access; camera, microphone and location requests are
+denied; downloads aren't supported yet. Uploads use Android's own document picker, and only
+`content://` documents of other apps are passed on, never `file://` paths or this app's own files. Only the saved server's exact origin (scheme, host, port)
+loads in it (`CloudPolicy.java`, unit-tested): other sites open in the browser after a tap,
+anything else is refused, including form POSTs and redirects that would leave the origin. The
+user agent ends in ` MvLOSApp/<version>` so the site can show app hints
+(`src/os/nativeApp.ts inCloudApp`); it grants nothing. `mvlosapp://chooser`, followed from a tap,
+opens the chooser and does nothing else.
+
+**Signing in from the app** never shows GitHub's or Google's pages inside the app (RFC 8252: no
+embedded user-agents; Google refuses it too). When the cloud desktop navigates to
+`/api/auth/github/login` or `/api/auth/google/login`, the app takes over
+([`server/appLogin.ts`](server/appLogin.ts)):
+
+1. It asks `GET /api/auth/app`. A server without app sign-in (older versions answer 401 or 404)
+   gets a native message: *Sign-in needs a server update*; the desktop stays usable as a guest. The
+   server must have an https `PUBLIC_URL` equal to the address the app uses, or it answers
+   `app: 0` and the app says the server isn't set up for it.
+2. It keeps a random verifier and state (cloud process only, ten minutes) and opens the system
+   browser (a Custom Tab) at `/api/auth/app/start?provider=…&challenge=…&state=…`. The challenge
+   is `base64url(SHA-256(verifier + "\n" + origin))` with the server's origin, and the server
+   checks it against its own `PUBLIC_URL`, never a request header: a server that relays the code
+   and verifier to another server gets nothing there (protocol version 2).
+3. The normal GitHub or Google round trip runs there, with bans, registration limits and admin
+   rules as always, but makes no session in the browser. It ends on a page naming the account and
+   the server with an *Open the app* button: the fixed private-use redirect
+   `nl.mvlos.experiment:/oauth?code=…&state=…` (never taken from a request). The code works once,
+   for two minutes, and is forgotten when the account is signed out everywhere, banned, deleted
+   or a sign-in is removed. Refusals (closed, full, banned) go back to the app too.
+4. `AuthReturnActivity` (the only exported cloud component) accepts exactly that URI with a state
+   matching the sign-in this app started; anything else is ignored.
+5. The app itself, not its WebView, POSTs the code and the verifier as JSON with the header
+   `X-MvL-App-Redeem: 1` to `/api/auth/app/redeem` on the same server, without following redirects.
+   The server takes the code out first, checks the verifier, that the account and the sign-in
+   that made the code are still there and allowed in, ends any session the app's WebView had, and
+   answers with fresh session cookies. The app accepts only MvL OS's own cookies, each once, with
+   every attribute parsed once (Secure and `Path=/` required, no `Domain`, the session one
+   HttpOnly), rebuilds them from the checked parts, puts them into the cloud WebView and opens the
+   desktop. A web page can't redeem: a form can send neither JSON nor that header, and the server
+   grants no CORS preflight. The code and verifier never appear in a WebView URL, in storage the
+   page can read, or in the session cookie.
+
+Linking another sign-in, connecting Google Calendar and allowing private repositories need
+GitHub's or Google's pages, so in the app they are done from the site in a browser: Settings
+hides the link and repository buttons there, and Connect Google Calendar (from any app) says to use
+a browser instead (`browserOnly` in `src/os/account.ts`); the app's own dialog backs this up. The redirect scheme is a private-use one: a malicious
+app installed on the same phone could register it too, but can't redeem a code without the
+verifier, and the browser page names the account before anything is handed over. Verified App
+Links would need every self-hosted server to vouch for the app, so they aren't used. Known gap: an
+iframe of another site that redirects to GitHub's or Google's sign-in isn't caught by the app
+(WebView doesn't report subframe redirects), but both send `X-Frame-Options: DENY` on those pages,
+so they don't render in a frame.
+
+The bundled page gets one native plugin, `window.Capacitor.Plugins.MvlosApp`
+(`src/os/nativeApp.ts`): `info()` (`{mode: "local", savedServer, version}`) and `openChooser()`.
+Nothing else crosses: no URL opening, storage or tokens. Capacitor's own core plugins that the
+desktop doesn't need (`CapacitorHttp`, `CapacitorCookies`, `WebView`) are replaced by empty
+plugins of the same name (`DisabledCorePlugins.java`), so their native methods are refused and
+their JavaScript interfaces removed; `SystemBars` stays. Capacitor's local server would also hand
+the page files of the app (`/_capacitor_file_/…`) and content URIs (`/_capacitor_content_/…`); those
+are refused, for the page and for service workers. The WebView never loads a remote page:
+the navigation guard in `MainActivity` sends gesture-initiated `https` links to the browser and
+blocks the rest, and remote documents are also refused at the request level, which covers form
+POSTs (Android doesn't ask the navigation guard about those) and, on WebViews too old for
+origin-restricted bridge messages, remote frames. No origin is allowlisted for the bridge, `server.url` is never set, and cleartext
+traffic stays off. Do not change API URLs or cookie/CORS policy to put accounts into the on-device
+mode: the account guard relies on the same-origin readable account cookie, and a bundled
+authenticated client would need its own reviewed authentication and storage design.
+
+### Build and try
+
+Use Node 22+, JDK 21, Android SDK platform 36 and build-tools 35.0.0. Install the SDK
+with Android Studio or Google's command-line tools (`sdkmanager 'platforms;android-36'
+'build-tools;35.0.0'`, accepting its licenses). Set `JAVA_HOME`, `ANDROID_HOME` and
+optionally `GRADLE_USER_HOME` in your shell to task-local installations; no system
+configuration or sudo is needed. In a worktree, first symlink the main checkout's
+`node_modules` as described in AGENTS.md. Mobile dependencies are separate:
+
+```sh
+pnpm typecheck
+pnpm build
+cd mobile
+npm ci
+npm run sync
+cd android
+./gradlew --no-daemon assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n nl.mvlos.experiment/.LauncherActivity
+```
+
+Alternatively transfer the debug APK to your phone and open it, allowing installation
+from that file app when Android asks. It appears as **MvL OS** (version 1.3), separately
+from the website/PWA. On this device needs no server: try local notes, Terminal and games.
+Uninstalling clears its local guest data; Android backup is disabled. Debug APKs are signed with
+the building machine's debug key (`~/.android/debug.keystore`): an APK built with another key
+can't update an installed one, so uninstall the old one first (that clears its guest data).
+`./gradlew testDebugUnitTest` runs the server address, navigation and cookie checks
+(`ServerUrlTest`, `CloudPolicyTest`, `CloudLoginCookiesTest`). `-PmvlosTest` builds an emulator
+test variant (version `1.3-test`) that also trusts user-installed CAs in the debuggable build and
+lets Chrome DevTools inspect the cloud WebView, for testing against a local HTTPS server with a
+test CA; never hand that build to users. Without the flag the APK trusts system CAs only.
+
+`npm run sync` stages `dist` without the server's `.gz`/`.br` sidecars (Android's asset
+merger otherwise reports duplicate resources). Rebuild and sync after frontend edits.
+Generated web assets, SDK paths, dependencies and APKs are ignored by git. The wrapper
+is pinned to Gradle 8.14.3. If its initial download times out, retry on a working
+connection or raise `networkTimeout` in `gradle-wrapper.properties` locally.
+
+Capacitor SystemBars handles the on-device desktop's insets natively (see Full screen above);
+`adjustResize` supports keyboard resizing. Android Back first follows WebView
+history and otherwise returns to the chooser. It does not yet close desktop windows or
+OS dialogs. The debug APK was smoke-tested on an Android 16 emulator (chooser, address checks,
+on-device desktop, Custom Tab, Disconnect, the plugin). Physical-device keyboard, rotation,
+cutout, Back/history and accessibility testing, and Android versions before 16, remain to be done.
+
+Official references: [Capacitor setup](https://capacitorjs.com/docs/getting-started/environment-setup),
+[workflow](https://capacitorjs.com/docs/basics/workflow) and
+[configuration](https://capacitorjs.com/docs/config). The normal web frontend and
+its deployment are unchanged.
+
 ## Look and themes
 
 The design follows Omarchy: square windows with a 2px accent border on the active one, a solid
@@ -1879,7 +2042,49 @@ Setup:
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
-**Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Integrations → Calendars) for the
+**Sign in with Google** is a second way in, off unless `GOOGLE_SIGNIN=on`
+([`server/googleSignIn.ts`](server/googleSignIn.ts), [`server/oidc.ts`](server/oidc.ts)). It is
+OpenID Connect's authorization code flow with PKCE (S256), asking for `openid email profile` only;
+it keeps no Google token and is separate from connecting Google Calendar (its own consent, scopes,
+callback and cookie). The ID token is verified on the server: RS256 signature against Google's
+published keys, issuer `https://accounts.google.com`, audience equal to the client id, expiry, and
+the nonce this sign-in sent. The round trip's state, PKCE verifier and nonce are sealed into an
+HttpOnly ten-minute cookie and registered once in the server's memory, so a replayed or copied
+callback is refused before any token is requested. It uses `GOOGLE_SIGNIN_CLIENT_ID` and
+`GOOGLE_SIGNIN_CLIENT_SECRET` if set, else the Calendar client (`GOOGLE_CLIENT_ID`/`_SECRET`). Add the
+redirect URI `https://<your site>/api/auth/google/callback` (and
+`http://localhost:5173/api/auth/google/callback` for development) to that client. `openid email
+profile` are not sensitive scopes, so the consent screen needs no verification for sign-in alone.
+
+Accounts are found by the provider's stable id, never by email: GitHub's numeric id, Google's
+`sub` (the `identities` table, one of each per account). A Google account without an account here
+signs up as a new one, within the same registration limits (closed, full) and bans as GitHub. It is
+never an admin: admin rights stay tied to GitHub ids in `ADMIN_GITHUB_IDS`. A Google address that
+matches a GitHub account's, or a connected calendar's, links nothing. Settings → Account → Sign-in
+links the other provider to the signed-in account: a same-origin POST from that account's page
+(`/api/auth/<github|google>/link`) starts the round trip, which only finishes for the same account
+and the same session. A GitHub or Google account that already has an account of its own here is
+refused (accounts are never merged), and the last sign-in of an account can't be removed. Removing
+GitHub revokes its token; on an admin account it also ends the admin rights and signs the account
+out everywhere, so no request already authorised as admin can finish afterwards. Pending sign-in
+round trips are capped per client address (20, oldest of that address first), so one address
+starting many can't push out anyone else's. The client address is the last `X-Forwarded-For`
+entry when the request comes from a trusted proxy: the addresses in `TRUSTED_PROXIES`
+(comma-separated), or any private address when that isn't set. Set it when clients on a private
+network (a LAN, Tailscale) can reach the server directly, not only through the proxy. Accounts made with Google have a
+login like `name_g` (GitHub logins can't contain `_`), no GitHub token, and no GitHub source in
+Spotlight or the Git app until GitHub is linked.
+
+Accounts from before Google sign-in are migrated in place on first start: `users.github_id` loses
+its `NOT NULL` through SQLite's documented table rebuild (foreign keys off for the copy, in one
+transaction, row count and references checked), and every GitHub id is copied into `identities`.
+Account ids, sessions, admin rights and everything stored stay as they were. `pnpm
+check:auth-identities` checks the migration, the token checks, replays, link conflicts, bans and limits
+against stand-ins for GitHub and Google, including the Android app's sign-in through the system
+browser (`/api/auth/app`, see "Android app" above): a server needs this version for the app to
+sign in; older ones are told apart and stay guest-only in the app.
+
+**Google Calendar** attaches to the signed-in account (system menu or Settings → Integrations → Calendars) for the
 Calendar app, the Agenda widget and the clock: your calendars, shared ones included, with Google's
 refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). Each link has a generation that moves on connect, disconnect and account removal: a refresh or consent still waiting on Google when that happens, or when the session that started the consent is signed out, stores nothing and returns no token. A calendar read (one call, or a list of events across calendars) carries the generation it started under and is checked after every answer, including the body, and again before its result is returned: if the link changed, all of it is dropped, never a partial result from the old account. The combined answers of Google and CalDAV (the calendar list and the events, `server/calendars.ts`) do the same: if a Google link was connected when the answer began and it was replaced, disconnected or deleted before the answer went out, the whole answer fails with a 409, CalDAV's part included; a CalDAV-only answer is never failed for it. Whether Google takes part is decided once, before the read's first await: a read that began without a Google link never consults one that is connected while it runs (the next read does), and one that began with a link makes every Google call under exactly that link. Reads made of several lookups (the Agents app's `events_for_note`, finding a linked event) hold one such snapshot for all their lookups and check it before their answer is written. A stored token is only replaced where its refresh token is still the one the refresh began with. It
 needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web

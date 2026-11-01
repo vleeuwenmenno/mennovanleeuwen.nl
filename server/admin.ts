@@ -25,7 +25,7 @@ export type AdminUser = {
   threads: number
 }
 
-type Row = { id: number; github_id: number; login: string; name: string | null; avatar: string | null; created_at: number; last_seen_at: number | null; banned_at: number | null; ban_reason: string | null }
+type Row = { id: number; github_id: number | null; login: string; name: string | null; avatar: string | null; created_at: number; last_seen_at: number | null; banned_at: number | null; ban_reason: string | null }
 
 function describe(r: Row): AdminUser {
   const db = database()
@@ -93,7 +93,7 @@ export function updateSettings(body: { registration?: unknown; maxUsers?: unknow
 /** An account the admin may act on: not themselves, not another admin. */
 function target(admin: User, raw: string): number {
   const id = Number(raw)
-  const row = database().prepare('SELECT github_id FROM users WHERE id = ?').get(id) as { github_id: number } | undefined
+  const row = database().prepare('SELECT github_id FROM users WHERE id = ?').get(id) as { github_id: number | null } | undefined
   if (!row) throw new HttpError(404, 'No such user')
   if (id === admin.id) throw new HttpError(400, 'Not on your own account (Settings → Account can delete it)')
   if (isAdmin(row.github_id)) throw new HttpError(400, 'Admins are set in ADMIN_GITHUB_IDS on the server, not here')

@@ -1,12 +1,11 @@
 import { randomBytes, randomInt } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
-import { isIP } from 'node:net'
 import { dirname, join as joinPath, resolve } from 'node:path'
 import type { Duplex } from 'node:stream'
 import { bindConnection, currentUser } from './auth.ts'
 import { database } from './db.ts'
-import { isPrivate } from './egress.ts'
+import { clientIp } from './egress.ts'
 import { sameOrigin } from './http.ts'
 import { onShutdown } from './shutdown.ts'
 import { acceptWebSocket, refuse, type WsConnection } from './ws.ts'
@@ -141,19 +140,6 @@ type Match = {
 
 const send = (p: Player, m: ServerMsg) => p.ws?.send(JSON.stringify(m))
 const newId = () => randomBytes(9).toString('base64url')
-
-/**
- * The address the request came from, as a key for the per-address limits. The last
- * X-Forwarded-For entry is the one our own reverse proxy added, but only when the request came
- * from that proxy (a private address): straight from the internet, the header is the client's to
- * make up. IPv6 by its /64, which is what one home or server gets.
- */
-function clientIp(req: IncomingMessage) {
-  const peer = (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '')
-  const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-  const ip = (fwd.length && isIP(peer) && isPrivate(peer) ? fwd.at(-1)! : peer).replace(/^::ffff:/, '')
-  return isIP(ip) === 6 ? `${ip.split(':').slice(0, 4).join(':')}::/64` : ip
-}
 
 // --- Names ------------------------------------------------------------------------------------------
 

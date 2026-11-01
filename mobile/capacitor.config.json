@@ -1,0 +1,10 @@
+{
+  "appId": "nl.mvlos.experiment",
+  "appName": "MvL OS",
+  "webDir": "www",
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "native"
+    }
+  }
+}

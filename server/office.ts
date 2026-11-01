@@ -154,7 +154,7 @@ type Callback = { key?: string; status?: number; url?: string; users?: string[];
 export async function officeCallback(req: IncomingMessage, sealed: string | null, body: Callback & { token?: string }): Promise<{ error: number }> {
   if (!sealed) throw new HttpError(403, 'No ticket')
   const ticket = unseal(sealed)
-  const row = database().prepare('SELECT id, github_id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(ticket.u) as { id: number; github_id: number; login: string; name: string | null; avatar: string | null } | undefined
+  const row = database().prepare('SELECT id, github_id, login, name, avatar FROM users WHERE id = ? AND banned_at IS NULL').get(ticket.u) as { id: number; github_id: number | null; login: string; name: string | null; avatar: string | null } | undefined
   if (!row) throw new HttpError(403, 'No such user')
   const user: User = { id: row.id, githubId: row.github_id, login: row.login, name: row.name, avatar: row.avatar, githubToken: '', githubScopes: [], admin: isAdmin(row.github_id) }
   return await withOfficeIdentity(user, ticket, async () => {

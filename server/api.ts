@@ -22,7 +22,7 @@ import { handleAgentTasksApi } from './agentTasks.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, claimClientCall, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread, listSubagents, messageSubagentAsUser, stopSubagentAsUser, watchSubagents } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
-import { accountMismatch, bindResponse, requireStillSignedIn, chooseRepoScope, authEnabled, currentUser, finishLogin, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
+import { accountMismatch, bindResponse, requireStillSignedIn, chooseRepoScope, authEnabled, currentUser, finishLogin, identitiesOf, signInProviders, startGithubLink, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
 import { githubCommits } from './github.ts'
 import { handleGitApi } from './git.ts'
@@ -48,7 +48,9 @@ import { minecraftAdmin, minecraftOverview, minecraftStatus, rconConfigured } fr
 import { search, clearSearchCache, orgAccess } from './search.ts'
 import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
-import { deleteUser } from './users.ts'
+import { deleteUser, unlinkIdentity } from './users.ts'
+import { finishGoogleSignIn, startGoogleLink, startGoogleSignIn } from './googleSignIn.ts'
+import { appLoginInfo, redeemAppLogin, startAppLogin } from './appLogin.ts'
 import { createShare, deleteShare, isShareToken, listShares, serveShare } from './shares.ts'
 import { handleMailApi } from './jmap.ts'
 
@@ -106,6 +108,13 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     // Sign-in.
     if (read && path === '/api/auth/github/login') return startLogin(req, res, url), true
     if (read && path === '/api/auth/github/callback') return await finishLogin(req, res, url), true
+    if (read && path === '/api/auth/google/login') return startGoogleSignIn(req, res, url), true
+    // Signing in from the Android app's cloud desktop (server/appLogin.ts): the redeem is
+    // authenticated by its one-time code and PKCE verifier, sent by the app in a way no web page can.
+    if (read && path === '/api/auth/app') return appLoginInfo(res), true
+    if (read && path === '/api/auth/app/start') return startAppLogin(req, res, url), true
+    if (method === 'POST' && path === '/api/auth/app/redeem') return await redeemAppLogin(req, res), true
+    if (read && path === '/api/auth/google/callback') return await finishGoogleSignIn(req, res, url), true
     if (read && path === '/api/me') {
       const user = currentUser(req)
       const fix = uidCookieFix(req, user)
@@ -113,7 +122,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         authEnabled: authEnabled(),
         // Whether a new account could sign up now (the sign-in button says so before GitHub does).
         registration: authEnabled() ? (({ open, full }) => ({ open, full }))(registration()) : null,
-        user: user && { id: user.id, login: user.login, name: user.name, avatar: user.avatar, admin: user.admin, githubScopes: user.githubScopes },
+        // Which sign-ins this server offers (GitHub, Google), and which the account has linked.
+        signIn: signInProviders(),
+        user: user && { id: user.id, login: user.login, name: user.name, avatar: user.avatar, admin: user.admin, githubScopes: user.githubScopes, github: user.githubId !== null, identities: identitiesOf(user) },
         forges: user ? listForges(user) : [],
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
@@ -151,9 +162,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (refused) return json(res, 409, { error: refused, accountChanged: true, reload: true }, { 'Set-Cookie': uidCookieFix(req, currentUser(req)) }), true
     }
     // Private by default. Public reads and OAuth/signed callbacks finish above this boundary.
-    // Session lifecycle endpoints finish their own logout/removal; guest rejoin and sealed Mail
+    // Session lifecycle endpoints finish their own logout/removal (removing a sign-in may end every session); guest rejoin and sealed Mail
     // pictures authenticate by their own capability (inline pictures restore the sealed session).
-    const independent = path === '/api/auth/logout' || (path === '/api/me' && method === 'DELETE') || path === '/api/empires/away' || path.startsWith('/api/mail/inline/')
+    const independent = path === '/api/auth/logout' || (path === '/api/me' && method === 'DELETE') || (path.startsWith('/api/auth/identities/') && method === 'DELETE') || path === '/api/empires/away' || path.startsWith('/api/mail/inline/')
     if (!independent && !privateRequestActive(req)) {
       const user = requireUser(req)
       return await runPrivateRequest(req, res, user, () => {
@@ -171,6 +182,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (method === 'POST' && path === '/api/auth/logout') return logout(req, res), true
     // Settings → Code hosts: whether the next sign-in asks for private repositories (server/auth.ts).
     if (method === 'POST' && path === '/api/auth/github/scope') return chooseRepoScope(req, res, await readJson(req, 256)), true
+    // Settings → Account: link another sign-in to this account (answered with where to go), or remove one (server/auth.ts, server/users.ts).
+    if (method === 'POST' && path === '/api/auth/github/link') return startGithubLink(req, res), true
+    if (method === 'POST' && path === '/api/auth/google/link') return startGoogleLink(req, res), true
+    const unlink = /^\/api\/auth\/identities\/([a-z]+)$/.exec(path)
+    if (unlink && method === 'DELETE') return json(res, 200, { ok: true, ...(await unlinkIdentity(requireUser(req), unlink[1])) }), true
     // Deleting your own account (Settings → Account): everything it stored goes (server/users.ts).
     if (method === 'DELETE' && path === '/api/me') {
       await deleteUser(requireUser(req).id)

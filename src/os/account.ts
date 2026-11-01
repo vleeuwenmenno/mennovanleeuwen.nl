@@ -4,8 +4,9 @@ import { playMode } from './playMode'
 import { loginCookie, setLoginCookie } from './identity'
 import { accountGuard, clearAccountSpace, cookieUid, freezeAccount, TAB_ACCOUNT, TAB_UID, waitAccountSpace } from './accountSpace'
 import type { OrgsResponse } from '../data/code'
+import { inCloudApp } from './nativeApp'
 
-// Who is signed in (GitHub, see server/auth.ts) and which Gitea/Forgejo instances they linked.
+// Who is signed in (GitHub or Google, see server/auth.ts) and which Gitea/Forgejo instances they linked.
 // Visitors are "anon"; "off" means this server has no sign-in configured (or no server at all,
 // on a static host).
 
@@ -13,7 +14,12 @@ export type ForgeInfo = { id: number; label: string; baseUrl: string; username: 
 export type CaldavInfo = { id: number; label: string; url: string; username: string }
 /** The linked Seafile account (one), and the OnlyOffice server it uses if added. Never the token or secret. */
 export type SeafileInfo = { url: string; username: string; name: string | null; version: string | null; office: { url: string } | null }
-export type AccountUser = { id: number; login: string; name: string | null; avatar: string | null; admin: boolean; githubScopes: string[] }
+/** A sign-in linked to the account (Settings → Account): GitHub by its login, Google by its address. */
+export type Identity = { provider: 'github' | 'google'; label: string; linkedAt: number }
+/** `github`: whether GitHub is linked (an account made with Google may not have it). */
+export type AccountUser = { id: number; login: string; name: string | null; avatar: string | null; admin: boolean; githubScopes: string[]; github?: boolean; identities?: Identity[] }
+/** Which sign-ins this server offers. */
+export type SignInProviders = { github: boolean; google: boolean }
 /** Whether a new GitHub account could sign up now (null: sign-in is off). */
 export type Registration = { open: boolean; full: boolean }
 export type Account = {
@@ -22,6 +28,7 @@ export type Account = {
   status: 'loading' | 'off' | 'anon' | 'user'
   user: AccountUser | null
   registration: Registration | null
+  signIn: SignInProviders
   forges: ForgeInfo[]
   /** Whether this server can link Google Calendar, and the linked account if any */
   googleEnabled: boolean
@@ -34,7 +41,7 @@ export type Account = {
   seafile: SeafileInfo | null
 }
 
-let account: Account = { status: 'loading', user: null, registration: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null }
+let account: Account = { status: 'loading', user: null, registration: null, signIn: { github: false, google: false }, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null }
 const listeners = new Set<() => void>()
 
 /**
@@ -100,8 +107,8 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown;
 export async function loadAccount() {
   try {
     await waitAccountSpace()
-    const me = await api<{ authEnabled: boolean; registration?: Registration | null; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null; openai?: boolean }; seafile?: SeafileInfo | null }>('/api/me')
-    const next: Account = { resolved: true, status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null, openai: !!me.integrations?.openai }, seafile: me.seafile ?? null }
+    const me = await api<{ authEnabled: boolean; registration?: Registration | null; signIn?: SignInProviders; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null; openai?: boolean }; seafile?: SeafileInfo | null }>('/api/me')
+    const next: Account = { resolved: true, status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, signIn: { github: !!me.signIn?.github, google: !!me.signIn?.google }, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null, openai: !!me.integrations?.openai }, seafile: me.seafile ?? null }
     // This tab took its account from the browser's cookie as it loaded (src/os/accountSpace.ts).
     // The server says otherwise (the session ran out, or the cookie was from before it was kept):
     // its answer has put the cookie right, so start again as that account, keeping this one's
@@ -130,21 +137,47 @@ export async function loadAccount() {
     }
     set(next)
   } catch {
-    set({ resolved: false, status: 'off', user: null, registration: null, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+    set({ resolved: false, status: 'off', user: null, registration: null, signIn: { github: false, google: false }, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
   }
 }
 
 /** Where sign-in comes back to: this page when it's the CV or a game's direct link, else the desktop (server/auth.ts). */
 const back = () => (cvMode() ? '/cv' : playMode() ? location.pathname.replace(/(.)\/$/, '$1') : null)
 
-/** Off to GitHub, and back to this page (the CV page, a game's direct link, or the desktop). */
-export const signIn = () => {
+const signInWith = (provider: 'github' | 'google') => {
   const to = back()
-  location.assign(`/api/auth/github/login${to ? `?back=${encodeURIComponent(to)}` : ''}`)
+  location.assign(`/api/auth/${provider}/login${to ? `?back=${encodeURIComponent(to)}` : ''}`)
 }
+
+/** Off to GitHub, and back to this page (the CV page, a game's direct link, or the desktop). */
+export const signIn = () => signInWith('github')
+
+/** Off to Google (sign-in only, not Calendar), and back to this page. */
+export const signInWithGoogle = () => signInWith('google')
+
+/** Settings → Account: link GitHub or Google to this account. The server answers with where to go (back to /?auth=linked-…). */
+export async function linkSignIn(provider: 'github' | 'google') {
+  if (browserOnly(`Linking ${provider === 'github' ? 'GitHub' : 'Google'}`)) return
+  const { url } = await api<{ url: string }>(`/api/auth/${provider}/link`, { method: 'POST' })
+  location.assign(url)
+}
+
+/** Settings → Account: remove a linked sign-in (never the last one; the server refuses that). */
+export async function unlinkSignIn(provider: 'github' | 'google') {
+  const { signedOut } = await api<{ signedOut?: boolean }>(`/api/auth/identities/${provider}`, { method: 'DELETE' })
+  if (!signedOut) return void (await loadAccount())
+  // Removing GitHub from an admin account signs it out everywhere (server/users.ts): this browser too.
+  await forgetBrowserAccount()
+  setLoginCookie(null)
+  location.reload()
+}
+
+/** Whether the account has GitHub linked (accounts from before Google sign-in always do). */
+export const hasGithub = (u: AccountUser | null) => !!u && u.github !== false
 
 /** Signs in again, asking GitHub for private repositories too (once, for this sign-in), or only the profile. */
 export const signInWithRepos = async (repo: boolean) => {
+  if (browserOnly('Changing repository access')) return
   await api('/api/auth/github/scope', { method: 'POST', json: { repo } })
   signIn()
 }
@@ -162,7 +195,7 @@ export async function signOut() {
   await api('/api/auth/logout', { method: 'POST' }).catch(() => {})
   await forgetBrowserAccount()
   setLoginCookie(null)
-  set({ status: 'anon', user: null, registration: account.registration, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+  set({ status: 'anon', user: null, registration: account.registration, signIn: account.signIn, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
   // The terminal, home folder and boot screen were that account's (src/os/identity.ts): start again as a guest.
   location.reload()
 }
@@ -172,7 +205,7 @@ export async function deleteAccount() {
   await api('/api/me', { method: 'DELETE' })
   await forgetBrowserAccount()
   setLoginCookie(null)
-  set({ status: 'anon', user: null, registration: account.registration, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
+  set({ status: 'anon', user: null, registration: account.registration, signIn: account.signIn, forges: [], googleEnabled: account.googleEnabled, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null })
   // The terminal, home folder and boot screen were that account's (src/os/identity.ts): start again as a guest.
   location.reload()
 }
@@ -214,7 +247,21 @@ export async function removeCaldav(id: number) {
 }
 
 /** Google Calendar, attached to the signed-in user: off to Google's consent page and back. */
-export const connectGoogle = () => location.assign('/api/google/connect')
+/**
+ * In the Android app's cloud desktop GitHub's and Google's pages never open (src/os/nativeApp.ts):
+ * connecting Calendar, linking a sign-in and changing repository access are done in a browser.
+ * True when it said so instead.
+ */
+function browserOnly(what: string): boolean {
+  if (!inCloudApp()) return false
+  void import('./notify').then(({ notify }) => notify({ title: 'Use a browser for this', body: `${what} needs GitHub's or Google's own page, which doesn't open inside the app. Open this site in your browser, sign in there and do it there; it then works here too.` }))
+  return true
+}
+
+export const connectGoogle = () => {
+  if (browserOnly('Connecting Google Calendar')) return
+  location.assign('/api/google/connect')
+}
 
 export async function disconnectGoogle() {
   await api('/api/google', { method: 'DELETE' })
