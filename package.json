@@ -102,6 +102,7 @@
     "check:launchers": "node scripts/launchers-check.ts",
     "check:pim-links": "node scripts/pim-check.ts",
     "check:google-oauth": "node scripts/google-oauth-check.ts",
+    "check:auth-identities": "node scripts/auth-identities-check.ts",
     "check:google-refresh": "node scripts/google-refresh-check.ts",
     "check:calendar-link-race": "node scripts/calendar-link-race-check.ts",
     "check:note-links-race": "node scripts/note-links-race-check.ts",

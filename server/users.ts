@@ -11,7 +11,7 @@ import { unlinkSeafile } from './seafile.ts'
 // What happens to a whole account: signed out everywhere, banned (and let back in), deleted.
 // Used by Settings → Account (deleting your own) and the admin's Settings → Users (server/admin.ts).
 
-type Row = { id: number; github_id: number; login: string; name: string | null; avatar: string | null; github_token: string }
+type Row = { id: number; github_id: number | null; login: string; name: string | null; avatar: string | null; github_token: string }
 
 function userById(id: number): User {
   const row = database().prepare('SELECT id, github_id, login, name, avatar, github_token FROM users WHERE id = ?').get(id) as Row | undefined
@@ -70,4 +70,29 @@ export async function deleteUser(id: number) {
   requirePrivateRequest()
   database().prepare('DELETE FROM users WHERE id = ?').run(id)
   withPrivateTarget(user, () => userGone(id))
+}
+
+/**
+ * Settings → Account: removes one sign-in (GitHub or Google) from the account, which keeps
+ * everything else. The last sign-in can't go: the account would have no way in (delete it
+ * instead). Without GitHub the account is no admin and loses the GitHub token, which is revoked;
+ * Google sign-in keeps no token, so there is nothing to revoke. Its sessions stay signed in.
+ */
+export async function unlinkIdentity(user: User, provider: string) {
+  if (provider !== 'github' && provider !== 'google') throw new HttpError(404, 'No such sign-in')
+  const db = database()
+  const has = db.prepare('SELECT provider FROM identities WHERE user_id = ?').all(user.id) as { provider: string }[]
+  if (!has.some((r) => r.provider === provider)) throw new HttpError(404, 'That sign-in is not linked')
+  if (has.length < 2) throw new HttpError(409, 'This is the only way to sign in to this account. Link another one first, or delete the account.')
+  requirePrivateRequest()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    db.prepare('DELETE FROM identities WHERE user_id = ? AND provider = ?').run(user.id, provider)
+    if (provider === 'github') db.prepare("UPDATE users SET github_id = NULL, github_token = '', github_scopes = '', updated_at = ? WHERE id = ?").run(Date.now(), user.id)
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+  if (provider === 'github') await withPrivateTarget(user, () => revokeGithub(user.githubToken))
 }
