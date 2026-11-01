@@ -1,6 +1,5 @@
 package nl.mvlos.experiment;
 
-import android.app.Activity;
 import android.os.Bundle;
 import android.webkit.CookieManager;
 import android.webkit.WebStorage;
@@ -17,7 +16,7 @@ import java.net.URL;
  * (localStorage, IndexedDB, service workers, caches), the HTTP cache, and any sign-in in progress.
  * The on-device desktop's data and the user's browser are not touched. Not exported.
  */
-public class CloudResetActivity extends Activity {
+public class CloudResetActivity extends androidx.activity.ComponentActivity {
     static final String EXTRA_ORIGIN = "origin";
     /** Result extra: whether the server confirmed the sign-out. */
     static final String EXTRA_SIGNED_OUT = "signedOut";
@@ -35,6 +34,14 @@ public class CloudResetActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         setFinishOnTouchOutside(false);
+        // Not cancellable: a half-done reset must never count as done. Through the dispatcher, so
+        // it holds with predictive Back too (Android 16 no longer calls onBackPressed).
+        getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                // Ignored until the reset finishes.
+            }
+        });
         String raw = getIntent().getStringExtra(EXTRA_ORIGIN);
         ServerUrl.Result checked = raw == null ? null : ServerUrl.normalize(raw);
         String origin = checked != null && checked.ok() ? checked.origin : null;
@@ -99,12 +106,6 @@ public class CloudResetActivity extends Activity {
             // The profile's files can only be deleted once nothing in this process holds them.
             if (wipeDirs) new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 300);
         });
-    }
-
-    @Override
-    @SuppressWarnings("deprecation")
-    public void onBackPressed() {
-        // Not cancellable: a half-done reset must never count as done.
     }
 
     /**

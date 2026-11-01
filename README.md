@@ -110,7 +110,10 @@ GitHub's or Google's pages, so in the app they are done from the site in a brows
 so; Settings hides those buttons there). The redirect scheme is a private-use one: a malicious
 app installed on the same phone could register it too, but can't redeem a code without the
 verifier, and the browser page names the account before anything is handed over. Verified App
-Links would need every self-hosted server to vouch for the app, so they aren't used.
+Links would need every self-hosted server to vouch for the app, so they aren't used. Known gap: an
+iframe of another site that redirects to GitHub's or Google's sign-in isn't caught by the app
+(WebView doesn't report subframe redirects), but both send `X-Frame-Options: DENY` on those pages,
+so they don't render in a frame.
 
 The bundled page gets one native plugin, `window.Capacitor.Plugins.MvlosApp`
 (`src/os/nativeApp.ts`): `info()` (`{mode: "local", savedServer, version}`) and `openChooser()`.
