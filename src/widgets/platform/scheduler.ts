@@ -60,10 +60,10 @@ export class FairScheduler {
       this.pump()
     })
   }
-  cancelAll() {
+  cancelAll(match: (owner: string) => boolean = () => true) {
     this.suspended = true
     if (this.timer !== undefined) { this.clock.clear(this.timer); this.timer = undefined }
-    for (const job of [...this.running, ...[...this.queues.values()].flat()]) job.cancel()
+    for (const job of [...this.running, ...[...this.queues.values()].flat()]) if (match(job.owner)) job.cancel()
     this.suspended = false
   }
   private pump() {
