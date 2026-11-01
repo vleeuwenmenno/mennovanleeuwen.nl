@@ -25,6 +25,8 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    // The test-only network config (user CAs in debug) exists only in -PmvlosTest builds.
+    if (mvlosTest) sourceSets.main.res.srcDirs += 'src/mvlosTest/res'
     buildTypes {
         release {
             minifyEnabled false
