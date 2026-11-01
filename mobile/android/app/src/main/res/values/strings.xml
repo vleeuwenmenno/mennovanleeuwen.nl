@@ -1,7 +1,40 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">MvL OS Experiment</string>
-    <string name="title_activity_main">MvL OS Experiment</string>
+    <string name="app_name">MvL OS</string>
+    <string name="title_activity_main">MvL OS</string>
     <string name="package_name">nl.mvlos.experiment</string>
     <string name="custom_url_scheme">nl.mvlos.experiment</string>
+
+    <!-- Chooser -->
+    <string name="chooser_intro">Choose where to open your desktop.</string>
+    <string name="local_title">On this device</string>
+    <string name="local_body">The desktop bundled in this app, as a guest. Sign-in, sync, mail and Agents are not available. Your data stays on this phone and is never uploaded.</string>
+    <string name="open_local">Open on this device</string>
+    <string name="cloud_title">Cloud server</string>
+    <string name="cloud_body">Opens your MvL OS server in a secure browser tab. It is browser-hosted: sign in there with GitHub or Google, as on the web. Native app features are not available there. Data on this device is separate and is not uploaded or merged.</string>
+    <string name="server_label">Server address</string>
+    <string name="server_hint">https://example.com</string>
+    <string name="connect">Connect</string>
+    <string name="saved_server">Saved server: %1$s</string>
+    <string name="open_saved">Open</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="disconnect_title">Disconnect from %1$s?</string>
+    <string name="disconnect_message">The app forgets this server address. This does NOT sign you out of the site in your browser. To sign out, use Sign out on the site, or clear that browser\'s data.</string>
+    <string name="auto_open">Open my choice automatically when the app starts</string>
+    <string name="auto_open_hint">To come back here, close the browser tab, press Back on the desktop, or long-press the app icon and pick \"Choose mode\".</string>
+    <string name="no_browser_title">No browser found</string>
+    <string name="no_browser_message">Install or enable a web browser to open a cloud server.</string>
+
+    <!-- Server address errors -->
+    <string name="error_empty">Enter your server\'s address, for example https://example.com.</string>
+    <string name="error_not_https">Only https:// addresses are supported. http:// is not upgraded automatically: enter the https:// address.</string>
+    <string name="error_characters">The address contains spaces or characters that are not allowed.</string>
+    <string name="error_userinfo">Remove the user name or password from the address. Sign in on the site instead.</string>
+    <string name="error_host">That is not a valid server name.</string>
+    <string name="error_port">The port number is not valid.</string>
+    <string name="error_invalid">That is not a valid https:// address.</string>
+
+    <!-- Launcher shortcut -->
+    <string name="shortcut_choose_short">Choose mode</string>
+    <string name="shortcut_choose_long">Choose device or cloud</string>
 </resources>

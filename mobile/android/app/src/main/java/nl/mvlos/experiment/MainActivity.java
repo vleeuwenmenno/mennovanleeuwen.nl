@@ -9,15 +9,16 @@ import com.getcapacitor.BridgeWebViewClient;
 import androidx.activity.OnBackPressedCallback;
 import com.getcapacitor.BridgeActivity;
 
-/** Bundled guest prototype. No remote server or native plugins. */
+/**
+ * Local mode: the bundled guest desktop at https://localhost. The native bridge never loads a
+ * remote origin. Started by LauncherActivity (not exported); Back at the root returns there.
+ */
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle state) {
+        registerPlugin(MvlosAppPlugin.class);
         super.onCreate(state);
         if (getBridge() == null) return;
-        android.widget.Toast.makeText(this,
-            "Bundled guest experiment: sign-in, sync, mail and Agents are unavailable.",
-            android.widget.Toast.LENGTH_LONG).show();
         getBridge().getWebView().setWebViewClient(new BridgeWebViewClient(getBridge()) {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -44,7 +45,7 @@ public class MainActivity extends BridgeActivity {
                 if (getBridge().getWebView().canGoBack()) {
                     getBridge().getWebView().goBack();
                 } else {
-                    moveTaskToBack(true);
+                    LauncherActivity.showChooser(MainActivity.this);
                 }
             }
         });
