@@ -29,6 +29,70 @@ Dev servers reached through `pnpm dev:proxy` in its cookie mode (the Tailscale n
 origin, so their browser storage is shared too: the same account id on two scratch `DATA_DIR`s
 uses the same `mvlos.u.<id>.` space (src/os/accountSpace.ts). That only matters in development.
 
+## Android experiment (bundled guest desktop)
+
+`mobile/` is an isolated Capacitor 8.6 package. It packages the real Vite frontend;
+no server deployment or server security changes are needed. This is an experiment,
+not a release-ready mobile client. Android 7/API 24 or newer is required, with a
+current Android System WebView. iOS is not generated or tested yet; the shared
+frontend and Capacitor configuration can be reused on a Mac with Xcode.
+
+**Account limitation:** the APK runs at `https://localhost`, not the existing server
+origin. Relative `/api` requests have no backend here. Sign-in, account sync, mail,
+Agents and other server features do not work. Local guest apps are the experiment.
+Do not change API URLs or cookie/CORS policy to bypass this: the account guard also
+relies on the same-origin readable account cookie. A future authenticated bundled
+client needs an explicit, reviewed authentication/storage design. No live-server
+mode is provided, and no successful native account login is claimed.
+
+### Build and try
+
+Use Node 22+, JDK 21, Android SDK platform 36 and build-tools 35.0.0. Install the SDK
+with Android Studio or Google's command-line tools (`sdkmanager 'platforms;android-36'
+'build-tools;35.0.0'`, accepting its licenses). Set `JAVA_HOME`, `ANDROID_HOME` and
+optionally `GRADLE_USER_HOME` in your shell to task-local installations; no system
+configuration or sudo is needed. In a worktree, first symlink the main checkout's
+`node_modules` as described in AGENTS.md. Mobile dependencies are separate:
+
+```sh
+pnpm typecheck
+pnpm build
+cd mobile
+npm ci
+npm run sync
+cd android
+./gradlew --no-daemon assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n nl.mvlos.experiment/.MainActivity
+```
+
+Alternatively transfer the debug APK to your phone and open it, allowing installation
+from that file app when Android asks. It appears as **MvL OS Experiment**, separately
+from the website/PWA. No server is required. Try local notes, Terminal and games.
+Uninstalling clears its local guest data; Android backup is disabled.
+
+`npm run sync` stages `dist` without the server's `.gz`/`.br` sidecars (Android's asset
+merger otherwise reports duplicate resources). Rebuild and sync after frontend edits.
+Generated web assets, SDK paths, dependencies and APKs are ignored by git. The wrapper
+is pinned to Gradle 8.14.3. If its initial download times out, retry on a working
+connection or raise `networkTimeout` in `gradle-wrapper.properties` locally.
+
+Capacitor SystemBars uses native insets to keep the WebView clear of system bars and
+cutouts; `adjustResize` supports keyboard resizing. Android Back first follows WebView
+history and otherwise backgrounds the app. It does not yet close desktop windows or
+OS dialogs. External HTTPS navigation requires a user gesture and opens in the browser;
+other external navigation is blocked. No remote origin is allowlisted for the native
+bridge, no extra native plugins are installed, and cleartext traffic is not enabled.
+The debug APK was smoke-tested on an Android 16 emulator: the bundled desktop
+and Terminal rendered, and opening the software keyboard resized the terminal above
+it. Physical-device keyboard, rotation, cutout, Back/history and accessibility testing
+remains necessary.
+
+Official references: [Capacitor setup](https://capacitorjs.com/docs/getting-started/environment-setup),
+[workflow](https://capacitorjs.com/docs/basics/workflow) and
+[configuration](https://capacitorjs.com/docs/config). The normal web frontend and
+its deployment are unchanged.
+
 ## Look and themes
 
 The design follows Omarchy: square windows with a 2px accent border on the active one, a solid
