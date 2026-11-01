@@ -739,6 +739,7 @@ try {
   await page.eval(`window.dispatchEvent(new CustomEvent('mvlos:open', { detail: { app: 'zed', props: { path: '/tmp/xed-main.msh', root: '/tmp', t: '3' } } }))`)
   await page.waitFor(`!!document.querySelector('.zed .xed-dbg-bar') && matchMedia('(pointer: coarse)').matches`)
   await page.eval(`document.querySelector('.zed').closest('.window').dataset.test = 'p'`)
+  await sleep(600) // the window's opening animation settles before anything is measured or tapped
   const P = <T = any>(js: string) => inWin<T>('p', js)
   await P(`const b = W.querySelector('[aria-label="Toggle debug panel"]'); if (b.getAttribute('aria-pressed') !== 'true') b.click()`)
   const tap = async (x: number, y: number) => {

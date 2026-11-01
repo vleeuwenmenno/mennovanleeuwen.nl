@@ -7250,14 +7250,16 @@ button.fm-dd-row:hover {
   min-height: 0;
   display: flex;
 }
-/* Phones: the project panel is a drawer over the editor (the button at the bottom left, or a swipe). */
+/* Where Xed is too narrow to dock a panel (a phone, or a small window): the project panel is a sheet
+   over the editor (the status bar button, or a swipe from the left), and so is Agents (XedAgentsDock.css).
+   One sheet at a time, with this scrim behind it and no splitter. */
 .zed-scrim {
   position: absolute;
   inset: 0;
   z-index: 4;
   background: rgba(0, 0, 0, 0.35);
 }
-.zed-body.has-drawer .zed-panel {
+.zed-panel.is-sheet {
   position: absolute;
   inset: 0 auto 0 0;
   z-index: 5;
@@ -7328,7 +7330,7 @@ button.fm-dd-row:hover {
 }
 .zed-panel {
   flex: none;
-  width: 220px;
+  width: var(--xed-left, 220px);
   overflow: auto;
   padding: 4px 0;
   background: var(--bg-dark);

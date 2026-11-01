@@ -761,6 +761,36 @@ this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src
 The editor is named **Xed**. Its existing `zed` app ID, launch links, file associations,
 component/module names and saved-window keys remain compatible.
 
+**Project and Agents panels.** The left project tree and right Agents panel have draggable
+resize handles. Focus a handle to use Left/Right (10 px), Shift+Left/Right (50 px), Home/End
+(minimum/maximum), or Enter to reset; double-click also resets. Escape or a cancelled touch
+restores the width without saving it. Widths and docked visibility stay in this browser
+(`mvlos.xed.layout.v1`); blocked storage still works for the current session. The editor keeps
+at least 320 px beside docked panels. Narrow windows use one panel sheet at a time, including
+on phones; tap the scrim to close it.
+
+The Agents status button opens the real Agents conversation, with its normal model, mode,
+permissions, tools, approvals, queue and subagents. **Ctrl+L** opens its composer with a visible
+selection attachment (the current file buffer, including unsaved edits, if nothing is selected).
+The editor context menu attaches a selection, and a tab's context menu attaches its current contents, including unsaved edits.
+Escape in the composer returns to the editor and closes a narrow sheet. Hide the panel without
+interrupting a run; closing a window with an answering thread asks whether to stop or keep it
+running. Embedded terminal close checks also apply; cancelling either check keeps the window open.
+A server run kept after closing may wait for an executor when the project is reopened.
+
+Each project has ordinary threads, also visible in Agents; the panel offers a thread switch,
+New thread, and Open in Agents for that same thread. Browser-local, account-scoped bindings keep
+up to 50 thread IDs and their project identities. Seafile projects use their real work folder.
+Browser-kept projects use the same bounded msh executor, confined to that project and browser
+store; server permission grants still decide what each call may do. Remounting or replacing a
+store never silently redirects an existing conversation to another folder. Browser-only files
+remain available only on this browser. Folder context and selected text are visible attachments.
+
+After tools finish, Xed refreshes the tree and rereads clean open files. Unsaved buffers are
+never replaced: an external-change banner offers Reload or Keep mine. Deleted files retain
+their contents with an explicit deletion notice. In-flight reads cannot overwrite newer edits,
+saves, or reopened tabs.
+
 Files ending in `.msh` or `.sh`, and files with an msh shebang, use the shell's actual lexer
 and parser for highlighting and syntax diagnostics. Diagnostics show filename, line, column
 and the offending expression. Analysis is limited to 512 KB; larger files remain editable.

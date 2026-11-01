@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
+import { reconcileBuffer, type XedBuffer } from '../data/xedBuffers'
+import { getAccount } from '../os/account'
+import { refreshDirs } from '../data/seafile'
 import { useWM, type WinState } from '../os/wm'
 import { fileKind, HOME, KIND_LABEL, kindOfName, lookup as siteLookup, prettyPath, type DirNode, type Node } from '../terminal/vfs'
 import { lookup, makeDir, MAX_TEXT, prepare, readFileText, removePath, touchFile, transfer, walk } from '../terminal/fs'
@@ -13,7 +16,9 @@ import { openLink } from '../data/links'
 import { ask } from '../os/Dialogs'
 import { Terminal } from './Terminal'
 import { useEdgeSwipe } from '../os/useEdgeSwipe'
-import { useMediaQuery } from '../os/useMediaQuery'
+import { useXedLayout } from './useXedLayout'
+import { type XedAgentsDockHandle } from './XedAgentsDock'
+import { XedAgentsPane, type XedAttachment } from './XedAgentsPane'
 import { MarkdownPreview } from '../data/markdown/MarkdownPreview'
 import { MshHighlight, isMsh, useXedDebug, XedDebugPanel, XedDebugToolbar } from './XedDebug'
 import { breakpointsIn, editorBreakpoints, moveBreakpoints, removeBreakpoints, shiftBreakpoints, subscribeDebug, debugRevision } from '../terminal/msh/debug'
@@ -41,7 +46,7 @@ const PAD = 12 // px above the first line
 const SEARCH = 'search://' // the project search tab
 
 /** loading: a Seafile file on its way in; error: it could not be read (nothing to save over it). */
-type Buffer = { text: string; saved: string; loading?: boolean; error?: string }
+type Buffer = XedBuffer
 type View = 'edit' | 'preview' | 'split'
 type Jump = { path: string; line: number; col: number; len: number }
 /** A name being typed in the project panel: a rename, or a new file or folder in `dir`. */
@@ -166,18 +171,52 @@ export function Zed({ win }: { win: WinState }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeReady])
+  const buffersNow = useRef(buffers); buffersNow.current = buffers
+  const refreshGeneration = useRef(0)
+  const refreshFiles = async () => {
+    const gen = ++refreshGeneration.current, owner = getAccount().user?.id
+    const snapshot = buffersNow.current
+    // Server-side Seafile tools bypass the browser's directory cache.
+    const sf = locate(root).sf
+    if (sf) refreshDirs(sf)
+    const results = await Promise.all(Object.entries(snapshot).filter(([, b]) => !b.loading).map(async ([path, b]) => {
+      try {
+        const place = locate(path)
+        const disk = place.sf ? await readText(place.sf) : (await readFileText(path))?.text ?? null
+        return { path, b, disk }
+      } catch (e) {
+        // Only a confirmed missing file is a deletion; an outage must not discard a buffer.
+        return /not found|404|no such file/i.test((e as Error).message) ? { path, b, disk: null } : null
+      }
+    }))
+    if (gen !== refreshGeneration.current || getAccount().user?.id !== owner) return
+    setBuffers(now => {
+      const next = { ...now } // Also invalidates the source index when closed source files changed.
+      for (const r of results) if (r) {
+        const b = reconcileBuffer(r.b, now[r.path], r.disk)
+        if (b) next[r.path] = b
+      }
+      return next
+    })
+    setTick(n => n + 1)
+  }
+  useEffect(() => () => { refreshGeneration.current++ }, [])
   const [views, setViews] = useState<Record<string, View>>({})
   const [active, setActive] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([root]))
   const [cursor, setCursor] = useState({ line: 0, col: 0 })
   const [status, setStatus] = useState<string | null>(null)
-  const [panel, setPanel] = useState(true)
-  // On a phone the project panel is a drawer over the editor: the button at the bottom left, or a
-  // swipe in from the left edge (and away again).
-  const narrow = useMediaQuery('(max-width: 719px)')
-  const [drawer, setDrawer] = useState(false)
-  const showPanel = narrow ? drawer : panel
-  const togglePanel = () => (narrow ? setDrawer((d) => !d) : setPanel((p) => !p))
+  // The side panels (src/apps/useXedLayout.ts): the project panel at the left, Agents at the right.
+  // Where Xed is too narrow to dock one, it is a sheet over the editor: the status bar button, or
+  // for the project panel a swipe in from the left edge (and away again).
+  const layout = useXedLayout()
+  const { fit } = layout
+  const showPanel = layout.leftOpen
+  const togglePanel = () => layout.setOpen('left', !layout.leftOpen)
+  const dockRef = useRef<XedAgentsDockHandle>(null)
+  const [attach, setAttach] = useState<XedAttachment | null>(null)
+  const attachId = useRef(0)
+  const [focusAgents, setFocusAgents] = useState(0)
 
   // The terminal panel under the editor, as in Zed: terminals in tabs, each starting in the project.
   // Hidden ones keep running (and their scrollback); closing a tab ends it.
@@ -229,7 +268,7 @@ export function Zed({ win }: { win: WinState }) {
   const editor = useRef<HTMLDivElement>(null)
   const selectionRevision = useRef(0)
   const rootEl = useRef<HTMLDivElement>(null)
-  useEdgeSwipe(rootEl, { enabled: narrow, open: drawer, onOpen: () => setDrawer(true), onClose: () => setDrawer(false) })
+  useEdgeSwipe(rootEl, { enabled: fit.left.as === 'sheet', open: layout.leftSheet, onOpen: () => layout.setOpen('left', true), onClose: () => layout.setOpen('left', false) })
   const findInput = useRef<HTMLInputElement>(null)
 
   const reveal = (path: string) =>
@@ -284,7 +323,7 @@ export function Zed({ win }: { win: WinState }) {
     const node = lookup(path)
     if (sf && node?.type === 'file' && (node.size ?? 0) > MAX_TEXT) return setStatus(`${base(path)} is too big to edit here`)
     openFile(path)
-    setDrawer(false)
+    if (layout.leftSheet) layout.closeSheet()
   }
 
   const openSearch = () => {
@@ -404,7 +443,7 @@ export function Zed({ win }: { win: WinState }) {
       setStatus(`Saving ${where(path)}…`)
       return writeText(sf, text)
         .then(() => {
-          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
+          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text, external: undefined, deleted: false } } : bs))
           setStatus(`Saved ${where(path)} to Seafile`)
           return true
         })
@@ -419,7 +458,7 @@ export function Zed({ win }: { win: WinState }) {
       const text = buf.text
       return saveText(path, text)
         .then(() => {
-          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text } } : bs))
+          setBuffers((bs) => (bs[path] ? { ...bs, [path]: { ...bs[path], saved: text, external: undefined, deleted: false } } : bs))
           setStatus(`Saved ${prettyPath(path)} in this browser`)
           // Once per device: where it went, and what that means.
           notify({ title: 'Saved in this browser only', body: "Files in ~ are kept in this browser until Seafile is set up: clearing the site's data deletes them.", action: { app: 'settings', props: { section: 'integrations', sub: 'seafile' } }, once: 'browser-files-first-save', transient: true })
@@ -732,6 +771,37 @@ export function Zed({ win }: { win: WinState }) {
     scrollToLine(line)
   }
 
+  // The Agents panel (src/apps/XedAgentsDock.tsx). Ctrl+L opens it, focuses its message box and
+  // hands it what is selected in the editor (or the file, when nothing is) as an attachment.
+  const returnToEditor = () => requestAnimationFrame(() => (text.current ?? rootEl.current)?.focus({ preventScroll: true }))
+  const pickAttachment = (): XedAttachment | null => {
+    if (!active || active === SEARCH) return null
+    const id = ++attachId.current
+    const el = text.current
+    if (el && view !== 'preview' && el.selectionStart !== el.selectionEnd) {
+      const { selectionStart: s, selectionEnd: e, value } = el
+      const startLine = value.slice(0, s).split('\n').length
+      const endLine = Math.max(startLine, value.slice(0, e).split('\n').length - (value[e - 1] === '\n' ? 1 : 0))
+      return { id, path: active, text: value.slice(s, e), startLine, endLine }
+    }
+    const picked = window.getSelection()
+    const inPreview = picked && !picked.isCollapsed && picked.anchorNode && (picked.anchorNode.parentElement?.closest('.zed-preview') ?? null)
+    return inPreview ? { id, path: active, text: picked.toString() } : { id, path: active, text: buffers[active]?.text }
+  }
+  const openAgents = (withSelection: boolean) => {
+    if (withSelection) setAttach(pickAttachment())
+    layout.setOpen('right', true)
+    setFocusAgents((n) => n + 1)
+  }
+  const toggleAgents = () => {
+    if (!layout.rightOpen) return openAgents(false)
+    layout.setOpen('right', false)
+    returnToEditor()
+  }
+  useEffect(() => {
+    if (focusAgents) dockRef.current?.focus()
+  }, [focusAgents])
+
   const togglePreview = (split = false) => {
     if (!active || !markdown) return
     setViews((v) => ({ ...v, [active]: (v[active] ?? 'edit') === 'edit' ? (split ? 'split' : 'preview') : 'edit' }))
@@ -853,6 +923,9 @@ export function Zed({ win }: { win: WinState }) {
     } else if (mod && key === 'o') {
       handled()
       setPicker('project')
+    } else if (mod && !e.shiftKey && key === 'l') {
+      handled()
+      openAgents(true)
     } else if (mod && key === 'b') {
       handled()
       togglePanel()
@@ -862,6 +935,10 @@ export function Zed({ win }: { win: WinState }) {
     } else if (e.altKey && key === 'w' && active) {
       handled()
       close(active)
+    } else if (e.key === 'Escape' && !e.defaultPrevented && (layout.leftSheet || layout.rightSheet)) {
+      handled()
+      layout.closeSheet()
+      returnToEditor()
     }
   }
 
@@ -951,11 +1028,11 @@ export function Zed({ win }: { win: WinState }) {
         />
       )}
 
-      <div className={`zed-body ${narrow && drawer ? 'has-drawer' : ''}`}>
-        {narrow && drawer && <div className="zed-scrim" onPointerDown={() => setDrawer(false)} aria-hidden />}
+      <div className="zed-body" ref={layout.body} style={layout.bodyStyle}>
+        {(layout.leftSheet || layout.rightSheet) && <div className="zed-scrim" onPointerDown={() => layout.closeSheet()} aria-hidden />}
         {showPanel && (
           <nav
-            className={`zed-panel ${dropOn === root ? 'is-drop' : ''}`}
+            className={`zed-panel ${layout.leftSheet ? 'is-sheet' : ''} ${dropOn === root ? 'is-drop' : ''}`}
             aria-label="Project"
             onKeyDown={onPanelKey}
             onContextMenu={(e) => openContextMenu(e, entryMenu(root, true, true))}
@@ -967,6 +1044,7 @@ export function Zed({ win }: { win: WinState }) {
             <Tree dir={root} depth={0} ctx={tree} />
           </nav>
         )}
+        {showPanel && !layout.leftSheet && <div {...layout.leftSplit.props} />}
 
         <section className="zed-main">
           {tabs.length > 0 && (
@@ -981,6 +1059,7 @@ export function Zed({ win }: { win: WinState }) {
                     className={`zed-tab ${t === active ? 'is-active' : ''}`}
                     onClick={() => setActive(t)}
                     onAuxClick={(e) => e.button === 1 && close(t)}
+                    onContextMenu={e => t !== SEARCH && openContextMenu(e, [{ label: 'Attach file to Agents', onSelect: () => { setAttach({ id: ++attachId.current, path: t, text: buffers[t]?.text }); openAgents(false) } }])}
                     title={t === SEARCH ? 'Project search' : where(t)}
                   >
                     {t === SEARCH ? <span className="zed-tab-icon">⌕</span> : <FileDot name={t} />}
@@ -1083,9 +1162,14 @@ export function Zed({ win }: { win: WinState }) {
                 </div>
               )}
 
+              {buf.external !== undefined && <div className="xed-external" role="status">
+                <span>{buf.deleted ? 'This file was deleted outside the editor.' : 'This file changed outside the editor. Your edits are kept.'}</span>
+                {!buf.deleted && <button onClick={() => setBuffers(now => { const b = now[active!]; return b?.external != null ? { ...now, [active!]: { text: b.external, saved: b.external } } : now })}>Reload</button>}
+                <button onClick={() => setBuffers(now => { const b = now[active!]; if (!b) return now; const { external: _, ...keep } = b; return { ...now, [active!]: keep } })}>Keep mine</button>
+              </div>}
               <div className={`zed-panes is-${view}`}>
                 {view !== 'preview' && (
-                  <div className="zed-editor" key={active} ref={editor}>
+                  <div className="zed-editor" key={active} ref={editor} onContextMenu={e => openContextMenu(e, [{ label: 'Attach selection to Agents', shortcut: 'Ctrl L', onSelect: () => openAgents(true) }])}>
                     {/* msh files: clicking a line's gutter toggles its breakpoint (F9 and the Breakpoints list do it from the keyboard). */}
                     <div
                       className={`zed-gutter ${points ? 'is-debug' : ''}`}
@@ -1204,10 +1288,14 @@ export function Zed({ win }: { win: WinState }) {
             </div>
           )}
         </section>
+        {layout.rightOpen && !layout.rightSheet && <div {...layout.rightSplit.props} />}
+        {layout.rightMounted && (
+          <XedAgentsPane ref={dockRef} pid={win.pid} sheet={layout.rightSheet} hidden={!layout.rightOpen} onClose={toggleAgents} root={root} attach={attach} onFocusEditor={() => { if (layout.rightSheet) layout.closeSheet(); returnToEditor() }} onFilesChanged={() => void refreshFiles()} />
+        )}
       </div>
 
       <footer className="zed-status">
-        <button className={`zed-status-btn zed-status-icon ${showPanel ? 'is-on' : ''}`} onClick={togglePanel} title={`${showPanel ? 'Hide' : 'Show'} the project panel (Ctrl+B${narrow ? ', or swipe in from the left' : ''})`} aria-label="Toggle project panel" aria-pressed={showPanel}>
+        <button className={`zed-status-btn zed-status-icon ${showPanel ? 'is-on' : ''}`} onClick={togglePanel} title={`${showPanel ? 'Hide' : 'Show'} the project panel (Ctrl+B${fit.left.as === 'sheet' ? ', or swipe in from the left' : ''})`} aria-label="Toggle project panel" aria-pressed={showPanel}>
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
             <rect x="3" y="4" width="18" height="16" />
             <path d="M9 4v16" />
@@ -1247,6 +1335,12 @@ export function Zed({ win }: { win: WinState }) {
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <rect x="3" y="4" width="18" height="16" />
             <path d="M7 9l3 3-3 3M12 15h5" />
+          </svg>
+        </button>
+        <button className={`zed-status-btn zed-status-icon ${layout.rightOpen ? 'is-on' : ''}`} onClick={toggleAgents} title={`${layout.rightOpen ? 'Hide' : 'Show'} the Agents panel (Ctrl+L attaches the selection)`} aria-label="Toggle Agents panel" aria-pressed={layout.rightOpen}>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" />
+            <path d="M15 4v16" />
           </svg>
         </button>
       </footer>

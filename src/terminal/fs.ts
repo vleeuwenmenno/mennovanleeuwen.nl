@@ -347,8 +347,12 @@ export async function readFileText(abs: string, root = false, actor: Actor = fal
   // A mode set with chmod can forbid the read; the callers that show it say so (DeniedError).
   if (!allows(abs, node, 'r', root)) throw new DeniedError('Permission denied')
   if (node.browser) {
-    if (typeof actor !== 'boolean' && actor.policy) throw err('msh: browser-backed file reads are unavailable to agents; use a Seafile work folder')
-    return { text: await readBrowserText(node.browser), ro: false }
+    if (typeof actor !== 'boolean' && actor.policy && !actor.policy.grant.browser) throw err('msh: browser-backed file reads are unavailable to agents; use a Seafile work folder')
+    reserve(boundActor(actor), (node.size ?? 0) * 4 + 1)
+    const text = await readBrowserText(node.browser)
+    checkActor(actor)
+    textWork(boundActor(actor), text.length)
+    return { text, ro: false }
   }
   // The site's own files under the browser mount: readable, and saving makes the browser's copy.
   if (!node.sf) {
@@ -376,8 +380,9 @@ export function cachedText(abs: string, node: FileNode, actor: Actor): string {
   if (typeof actor !== 'boolean' && actor.policy) {
     const outside = actor.policy.read(abs)
     if (outside) throw err(outside)
-    if (node.browser) throw err('msh: browser-backed file reads are unavailable to agents; use a Seafile work folder')
-    if (!node.sf && !node.dev && !abs.startsWith('/tmp/')) throw err('msh: dynamic site files are unavailable to agents; use a work-folder file')
+    if (node.browser && !actor.policy.grant.browser) throw err('msh: browser-backed file reads are unavailable to agents; use a Seafile work folder')
+    if (node.browser && browserText(node.browser) === null) throw err('msh: this browser file is too large for synchronous command reads')
+    if (!node.sf && !node.browser && !node.dev && !abs.startsWith('/tmp/')) throw err('msh: dynamic site files are unavailable to agents; use a work-folder file')
   }
   // Device content generators allocate up to 64 KiB when called.
   if (node.dev) textWork(boundActor(actor), node.dev.major === 1 && node.dev.minor === 3 ? 0 : 65536)
@@ -414,6 +419,7 @@ function mayWrite(a: Actor, abs: string, op: 'write' | 'delete' = 'write') {
 /** The actor a command's context stands for. */
 export const actorOf = (ctx: { root?: boolean; policy?: Policy; signal?: AbortSignal; budget?: Budget }): Actor => ({ root: !!ctx.root, policy: ctx.policy, signal: ctx.signal, budget: ctx.budget })
 
+const browserGuard = (actor: Actor, abs: string, op: 'write' | 'delete' = 'write') => typeof actor !== 'boolean' && actor.policy ? { check: () => mayWrite(actor, abs, op), signal: actor.signal } : undefined
 const guarded = <A extends unknown[], R>(actor: Actor, fn: (...args: A) => R) => (...args: A): R => {
   checkActor(actor)
   return fn(...args)
@@ -500,7 +506,7 @@ export async function writeFile(cwd: string, target: string, content: string, ap
       const prev = node.browser ? await readBrowserText(node.browser) : node.content()
       text = prev && !prev.endsWith('\n') ? `${prev}\n${body}` : prev + body
     }
-    await guarded(actor, writeBrowserFile)(w.path, text).catch(asCmdError(who))
+    await guarded(actor, writeBrowserFile)(w.path, text, browserGuard(actor, abs)).catch(asCmdError(who))
     return
   }
   if (w.ro || w.sf === SF) throw err(`${who}: read-only file system: ${target}`)
@@ -571,7 +577,7 @@ export async function makeDir(cwd: string, arg: string, parents: boolean, actor:
       await makeDir('/', parentOf(abs), true, actor)
     }
     await browserFolder(parentOf(abs), 'mkdir', arg, actor)
-    await guarded(actor, mkdirBrowser)(where.path, true).catch(asCmdError('mkdir'))
+    await guarded(actor, mkdirBrowser)(where.path, true, browserGuard(actor, abs)).catch(asCmdError('mkdir'))
     return
   }
   const sf = writable(abs, arg, 'mkdir: cannot create directory')
@@ -598,7 +604,7 @@ export async function touchFile(cwd: string, arg: string, actor: Actor = false) 
   if (where.kind === 'browser') {
     if (!lookup(parentOf(abs))) throw err(`touch: cannot touch '${arg}': No such file or directory`)
     await browserFolder(parentOf(abs), 'touch', arg, actor)
-    await guarded(actor, writeBrowserFile)(where.path, '').catch(asCmdError('touch'))
+    await guarded(actor, writeBrowserFile)(where.path, '', browserGuard(actor, abs)).catch(asCmdError('touch'))
     return
   }
   const sf = writable(abs, arg, 'touch: cannot touch')
@@ -635,7 +641,7 @@ export async function removePath(cwd: string, arg: string, opts: { recursive: bo
     if (w.path === '/') throw err(`rm: cannot remove '${arg}': Device or resource busy`)
     if (!node.browser) throw err(`rm: cannot remove '${arg}': Read-only file system`)
     if (opts.ask && !opts.force && node.type === 'dir' && !(await opts.ask(`rm: remove '${arg}' and everything in it for good? Files in this browser have no trash [y/N]`))) return
-    await guarded(opts.root ?? false, removeBrowser)(node.browser)
+    await guarded(opts.root ?? false, removeBrowser)(node.browser, browserGuard(opts.root ?? false, abs, 'delete'))
     return
   }
   const sf = writable(abs, arg, 'rm: cannot remove')

@@ -1,3 +1,4 @@
+import { browserStoreIdentity } from '../data/browserfs'
 import { useClientCalls } from '../terminal/agents/useClientCalls'
 import { toUi } from '../os/uiScale'
 import { Icon, NEW_TITLE, regenerateHint, RenameBox, Scramble, titlePending } from './agentsSidebar/bits'
@@ -139,7 +140,9 @@ import { WebFetchRecovery, READ_FAILED, askPageText, type PastePage } from './Ag
 import { failedWebRead, appendToDraft, pageTextParts } from '../data/agentWebRecovery'
 import { ObservationLine, ObservationsDialog } from './AgentsObservations'
 import { readObservation } from '../data/imageObservations'
-import { MarkdownPreview } from './Zed'
+import { MarkdownPreview } from '../data/markdown/MarkdownPreview'
+import { xedThreads } from '../data/xedThreads'
+import { seafileAt } from '../data/agentPlaces'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
 import { TaskEditDialog, TasksView, type TasksFocus } from './AgentsTasks'
@@ -281,7 +284,7 @@ function AgentsApp({ win }: { win: WinState }) {
   // Closing while threads are answering: stop them, or let them go on on the server (they are
   // announced when done, and found again here later).
   useEffect(() => {
-    setCloseGuard(win.pid, async () => {
+    return setCloseGuard(win.pid, async () => {
       const busy = (await listThreads(false).catch(() => [] as Thread[])).filter((t) => t.running)
       if (!busy.length) return true
       const choice = await choose({
@@ -302,7 +305,6 @@ function AgentsApp({ win }: { win: WinState }) {
       void allowNotifications()
       return true
     })
-    return () => setCloseGuard(win.pid, null)
   }, [win.pid])
 
   const refresh = useCallback(() => {
@@ -1068,7 +1070,15 @@ function QueueList({ queue, answering, editing, onEdit, onSend, onRemove }: { qu
   )
 }
 
+export type EmbeddedConversation = {
+  folder: { path: string; label: string; browser: ReturnType<typeof browserStoreIdentity> }
+  workdir: Workdir | null
+  attachment?: { id: number; file: Attachment }
+  onCallDone: () => void
+  onState: (thread: Thread | null, answering: boolean) => void
+}
 type ConversationProps = {
+  embedded?: EmbeddedConversation
   id: string | null
   /** The project a new thread goes into */
   draftProject: number | null
@@ -1089,7 +1099,7 @@ type ConversationProps = {
   onOpenThread: (id: string) => void
 }
 
-function Conversation({ id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete, onOpenRun, onOpenThread }: ConversationProps) {
+export function Conversation({ embedded, id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete, onOpenRun, onOpenThread }: ConversationProps) {
   const [thread, setThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([])
   // The currencies the answers mention, offered when you open an amount in one (src/os/MoneyAmount.tsx).
@@ -1099,7 +1109,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
   // The message box starts from what was left there last time (src/data/agentDrafts.ts).
   const [photoPicker, setPhotoPicker] = useState(false)
-  const [files, setFiles] = useState<Attachment[]>(() => getDraft(id ?? 'new')?.files ?? [])
+  const [files, setFiles] = useState<Attachment[]>(() => getDraft(id ?? 'new')?.files ?? (embedded ? [textAttachment(`Xed work folder: ${embedded.folder.label}. Terminal calls are confined to this folder. Use terminal and terminal_capabilities for browser-kept files.`, 'Xed work folder.txt')] : []))
   const latestFiles = useRef(files)
   latestFiles.current = files
   const [reading, setReading] = useState(0)
@@ -1114,7 +1124,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [picking, setPicking] = useState(false)
   const modelPill = useRef<HTMLButtonElement>(null)
   const boxBar = useRef<HTMLDivElement>(null)
-  const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
+  const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(embedded?.workdir ?? null)
   // New threads start in Auto: like Ask first, but web addresses it builds are checked for you.
   const [draftPermission, setDraftPermission] = useState<Permission>('auto')
   // Always-on skills switched off with their chips before the thread exists.
@@ -1150,6 +1160,17 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const pinned = useRef(true)
   const input = useRef<HTMLTextAreaElement>(null)
   const emoji = useEmojiTyping(input, text)
+  const attachedRequest = useRef<number | null>(null)
+  useEffect(() => {
+    const a = embedded?.attachment
+    if (!a || attachedRequest.current === a.id) return
+    attachedRequest.current = a.id
+    setFiles(current => {
+      if (current.length >= 10) { setError('Remove an attachment first (10 maximum).'); return current }
+      return [...current, a.file]
+    })
+    input.current?.focus()
+  }, [embedded?.attachment])
 
   // A thread created by the first message keeps streaming into this view: don't reload it then.
   const streamed = useRef<string | null>(null)
@@ -1208,19 +1229,29 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     calls.select(id)
     await calls.run(e.callId, () => claimClientCall(id, e.callId), async (signal) => {
       try {
-        const { runAgentCall } = await import('../terminal/agents/exec')
+        const { runAgentCall, runInFolder } = await import('../terminal/agents/exec')
         const { HOME } = await import('../terminal/vfs')
         signal.throwIfAborted()
+        const binding = xedThreads.get().find(x => x.id === id && x.account === account.user?.id)
+        const folder = embedded?.folder ?? (binding ? { path: binding.root, label: binding.root, browser: binding.browser ?? null } : null)
+        if (folder) {
+          const at = seafileAt(folder.path)
+          const expected = embedded ? (embedded.workdir ? JSON.stringify({ repo: embedded.workdir.repo, path: embedded.workdir.path }) : null) : binding!.backing
+          if (at === undefined || (at ? JSON.stringify(at) : null) !== expected || (workdir ? JSON.stringify({ repo: workdir.repo, path: workdir.path }) : null) !== expected) throw new Error('The project work folder changed. Reopen this project before running tools.')
+          if (!workdir && JSON.stringify(folder.browser) !== JSON.stringify(browserStoreIdentity())) throw new Error('The browser project store changed. Reopen this project before running tools.')
+          if (!workdir) return await runInFolder({ name: e.call.name, arguments: e.call.arguments ?? {}, folder: { ...folder, browser: folder.browser ?? undefined }, fallbackDir: folder.path, grant: e.grant, signal })
+        }
         return await runAgentCall({ name: e.call.name, arguments: e.call.arguments ?? {}, workdir, fallbackDir: HOME, grant: e.grant, signal })
       } catch (err) { return { output: `msh: ${(err as Error).message}`, status: 1 } }
-    }, (a) => sendClientResult(id, e.callId, a.output, a.status, { result: 'result' in a ? a.result : undefined, capabilities: 'capabilities' in a ? a.capabilities : undefined })).catch(() => {})
+    }, async (a) => { try { await sendClientResult(id, e.callId, a.output, a.status, { result: 'result' in a ? a.result : undefined, capabilities: 'capabilities' in a ? a.capabilities : undefined }) } finally { embedded?.onCallDone() } }).catch(() => {})
   }
   // What a turn streams, whether this window started it or joined it later.
   const onEvent = (e: TurnEvent) => {
     if (e.type === 'snapshot' || e.type === 'thread') execThread.current = e.thread
     if (e.type === 'snapshot') for (const p of e.pending) if (p.kind === 'client' && p.call) void runClientCall({ type: 'client', callId: p.callId, messageId: p.messageId, index: p.index, call: p.call, grant: p.grant })
     if (e.type === 'client') void runClientCall(e)
-    if (e.type === 'clientDone') execCalls.done(e.callId)
+    if (e.type === 'clientDone') { execCalls.done(e.callId); embedded?.onCallDone() }
+    if (e.type === 'message' && e.message.role === 'tool') embedded?.onCallDone()
     if (e.type === 'snapshot') {
       setThread(e.thread)
       setMessages(e.messages)
@@ -1983,6 +2014,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [text])
 
   const answering = busy || !!thread?.running
+  useEffect(() => { embedded?.onState(thread, answering) }, [thread, answering])
   // Messages left in the queue after a stop: another window (or the terminal) may send, edit or
   // drop them, and nothing streams while the thread is at rest, so look now and then.
   useEffect(() => {
@@ -2202,7 +2234,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       }} />}
       <div className="agt-bar">
       <div className="nb-toolbar agt-toolbar" onContextMenu={(e) => thread && !e.shiftKey && !isField(e.target as Element) && openContextMenu(e, tidyMenu(threadItems()))}>
-        <button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
+        {!embedded && <><button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
           ‹
         </button>
         {projectName && <span className="agt-crumb" title={`In the project ${projectName}`}>{projectName}</span>}
@@ -2213,15 +2245,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             {thread ? <Scramble text={thread.title} pending={titlePending(thread) || (busy && thread.title === NEW_TITLE)} /> : 'New thread'}
           </button>
         )}
-        <span className="nb-spacer" />
+        </>}<span className="nb-spacer" />
         <div className="agt-bar-chips">
-        {(account.seafile || workdir) && (
+        {!embedded && (account.seafile || workdir) && (
           <button className={`agt-chip ${workdir ? 'is-on' : ''}`} onClick={folderMenu} disabled={answering} title={workdir ? `Work folder: ${workdir.label}` : 'Give it a folder to work in'}>
             <Icon name="folder" size={13} /> <span className="agt-chip-label">{workdir ? workdir.label : 'No folder'}</span>
           </button>
         )}
-        <button type="button" className="agt-chip" disabled={answering || openingImages} onClick={() => void sessionImages()} title="Image models and generation defaults for this session">Images</button>
-        {thread && <MailReadsChip thread={thread} onChange={setThread} onError={setError} />}
+        {!embedded && <button type="button" className="agt-chip" disabled={answering || openingImages} onClick={() => void sessionImages()} title="Image models and generation defaults for this session">Images</button>}
+        {!embedded && thread && <MailReadsChip thread={thread} onChange={setThread} onError={setError} />}
         <button className={`agt-chip is-${permission}`} onClick={permissionMenu} title={PERMISSION_HELP[permission]}>
           {PERMISSION_LABEL[permission]}
         </button>
@@ -2378,6 +2410,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           )}
           <textarea
             ref={input}
+            data-xed-composer={embedded ? '' : undefined}
             value={text}
             onChange={(e) => emoji.change(e, (v, c) => { setText(v); setCaret(c) })}
             onSelect={(e) => { setCaret(e.currentTarget.selectionStart); emoji.select(e.currentTarget) }}

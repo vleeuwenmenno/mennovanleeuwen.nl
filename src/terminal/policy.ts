@@ -1,3 +1,5 @@
+import { accountGuard } from '../os/accountSpace'
+import { browserStoreIdentity } from '../data/browserfs'
 import { appDataDenial } from './appData'
 import type { TerminalResource } from '../data/terminalResources'
 import { agentGrepRefusal, parseGrepArgs } from './grepArgs'
@@ -26,6 +28,7 @@ export type Grant = {
   root: string | null
   /** Immutable backing identity from the server's work folder. */
   backing?: { repo: string; path: string }
+  browser?: { account: number; storeUUID: string }
   /** May write inside the work folder */
   write: boolean
   /** May delete inside the work folder (rm, rmdir) */
@@ -94,6 +97,7 @@ export function makePolicy(grant: Grant): Policy {
   const identity = (abs: string) => {
     if (!root || HARMLESS_DEVICES.has(abs)) return null
     const at = whereIs(abs)
+    if (grant.browser && (!accountGuard() || JSON.stringify(browserStoreIdentity()) !== JSON.stringify(grant.browser))) return `${abs}: browser work folder is no longer available`
     const expected = grant.backing ? { kind: 'sf', sf: sfPath(grant.backing.repo, grant.backing.path) } : original
     // Compare backing paths, not mount labels. A nested bind can escape even in the same repo.
     const key = (w: typeof original | typeof expected) => w?.kind === 'sf' ? w.sf : w && 'path' in w ? w.path : null
@@ -102,7 +106,7 @@ export function makePolicy(grant: Grant): Policy {
   }
   const where = root ? `the work folder (${root})` : 'a work folder'
   const read = (abs: string): string | null => {
-    if (whereIs(abs).kind === 'browser') return `${abs}: browser-backed agent reads are unavailable; use a Seafile work folder`
+    if (whereIs(abs).kind === 'browser' && !grant.browser) return `${abs}: browser-backed agent reads are unavailable; use a Seafile work folder`
     if (identity(abs)) return identity(abs)
     if (!root || inside(root, abs) || HARMLESS_DEVICES.has(abs)) return null
     return `${abs}: outside ${where}`
@@ -110,7 +114,7 @@ export function makePolicy(grant: Grant): Policy {
   const write = (abs: string, op: 'write' | 'delete' = 'write'): string | null => {
     if (abs === '/dev/null') return null
     if (identity(abs)) return identity(abs)
-    if (whereIs(abs).kind === 'browser') return `${abs}: agent writes to browser storage are unavailable; use a Seafile work folder`
+    if (whereIs(abs).kind === 'browser' && !grant.browser) return `${abs}: agent writes to browser storage are unavailable; use a Seafile work folder`
     if (!root) return `${abs}: this thread has no work folder, so nothing can be written`
     if (!grant.write) return `${abs}: this call may not change files (${grant.mode} mode)`
     if (!inside(root, abs)) return `${abs}: outside ${where}, the only place an agent writes`

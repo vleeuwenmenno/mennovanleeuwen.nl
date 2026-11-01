@@ -103,6 +103,8 @@
     "check:terminal-cmds": "node scripts/terminal-cmds.ts",
     "check:app-data": "node scripts/app-data-check.ts",
     "check:xed-debug-ui": "node scripts/xed-debug-ui.ts",
+    "check:xed-layout": "node scripts/xed-layout-check.ts",
+    "check:xed-layout-ui": "node scripts/xed-layout-ui.ts",
     "check:msh-debug": "node scripts/msh-debug.ts",
     "check:msh-rc": "node scripts/msh-rc.ts",
     "check:contacts": "node scripts/contacts-check.ts",
@@ -116,6 +118,7 @@
     "check:calendar-link-race": "node scripts/calendar-link-race-check.ts",
     "check:note-links-race": "node scripts/note-links-race-check.ts",
     "check:note-links": "node scripts/note-links-check.ts",
+    "check:window-close-guards": "node scripts/window-close-guards-check.ts",
     "check:window-props": "node scripts/window-props-check.ts",
     "check:sync-accounts": "node scripts/sync-accounts-check.ts",
     "check:revocation-boundaries": "node scripts/revocation-boundaries-check.ts",
@@ -160,7 +163,9 @@
     "check:widget-review13-ui": "node scripts/widget-review13-e2e.ts",
     "check:widget-review14-ui": "node scripts/widget-review14-e2e.ts",
     "check:widget-parity-ui": "node scripts/widget-parity-e2e.ts",
-    "check:widget-design": "node scripts/widget-design-check.ts"
+    "check:widget-design": "node scripts/widget-design-check.ts",
+    "check:xed-buffers": "node scripts/xed-buffers-check.ts",
+    "check:xed-agents-ui": "node scripts/xed-agents-ui.ts"
   },
   "dependencies": {
     "figlet": "^1.12.0",
