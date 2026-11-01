@@ -4,6 +4,7 @@ import { playMode } from './playMode'
 import { loginCookie, setLoginCookie } from './identity'
 import { accountGuard, clearAccountSpace, cookieUid, freezeAccount, TAB_ACCOUNT, TAB_UID, waitAccountSpace } from './accountSpace'
 import type { OrgsResponse } from '../data/code'
+import { inCloudApp } from './nativeApp'
 
 // Who is signed in (GitHub or Google, see server/auth.ts) and which Gitea/Forgejo instances they linked.
 // Visitors are "anon"; "off" means this server has no sign-in configured (or no server at all,
@@ -156,6 +157,7 @@ export const signInWithGoogle = () => signInWith('google')
 
 /** Settings → Account: link GitHub or Google to this account. The server answers with where to go (back to /?auth=linked-…). */
 export async function linkSignIn(provider: 'github' | 'google') {
+  if (browserOnly(`Linking ${provider === 'github' ? 'GitHub' : 'Google'}`)) return
   const { url } = await api<{ url: string }>(`/api/auth/${provider}/link`, { method: 'POST' })
   location.assign(url)
 }
@@ -175,6 +177,7 @@ export const hasGithub = (u: AccountUser | null) => !!u && u.github !== false
 
 /** Signs in again, asking GitHub for private repositories too (once, for this sign-in), or only the profile. */
 export const signInWithRepos = async (repo: boolean) => {
+  if (browserOnly('Changing repository access')) return
   await api('/api/auth/github/scope', { method: 'POST', json: { repo } })
   signIn()
 }
@@ -244,7 +247,21 @@ export async function removeCaldav(id: number) {
 }
 
 /** Google Calendar, attached to the signed-in user: off to Google's consent page and back. */
-export const connectGoogle = () => location.assign('/api/google/connect')
+/**
+ * In the Android app's cloud desktop GitHub's and Google's pages never open (src/os/nativeApp.ts):
+ * connecting Calendar, linking a sign-in and changing repository access are done in a browser.
+ * True when it said so instead.
+ */
+function browserOnly(what: string): boolean {
+  if (!inCloudApp()) return false
+  void import('./notify').then(({ notify }) => notify({ title: 'Use a browser for this', body: `${what} needs GitHub's or Google's own page, which doesn't open inside the app. Open this site in your browser, sign in there and do it there; it then works here too.` }))
+  return true
+}
+
+export const connectGoogle = () => {
+  if (browserOnly('Connecting Google Calendar')) return
+  location.assign('/api/google/connect')
+}
 
 export async function disconnectGoogle() {
   await api('/api/google', { method: 'DELETE' })

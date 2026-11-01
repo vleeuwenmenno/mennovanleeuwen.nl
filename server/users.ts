@@ -1,7 +1,7 @@
 import { requirePrivateRequest, withPrivateTarget } from './privateRequest.ts'
 import { privateFetch as fetch } from './privateRequest.ts'
 import { stopTurnsOf } from './agents.ts'
-import { forgetAppCodes, isAdmin, type User } from './auth.ts'
+import { forgetAppCodes, isAdmin, signInProviders, type User } from './auth.ts'
 import { database, decrypt, userGone } from './db.ts'
 import { disconnectGoogle } from './google.ts'
 import { HttpError } from './http.ts'
@@ -87,7 +87,10 @@ export async function unlinkIdentity(user: User, provider: string): Promise<{ si
   const db = database()
   const has = db.prepare('SELECT provider FROM identities WHERE user_id = ?').all(user.id) as { provider: string }[]
   if (!has.some((r) => r.provider === provider)) throw new HttpError(404, 'That sign-in is not linked')
-  if (has.length < 2) throw new HttpError(409, 'This is the only way to sign in to this account. Link another one first, or delete the account.')
+  // At least one other sign-in must remain that this server offers now (a linked Google account is
+  // no way in while Google sign-in is switched off).
+  const offered = signInProviders()
+  if (!has.some((r) => r.provider !== provider && offered[r.provider as keyof typeof offered])) throw new HttpError(409, 'This is the only way to sign in to this account right now. Link another one first, or delete the account.')
   requirePrivateRequest()
   db.exec('BEGIN IMMEDIATE')
   try {

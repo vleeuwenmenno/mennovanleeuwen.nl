@@ -115,8 +115,9 @@ embedded user-agents; Google refuses it too). When the cloud desktop navigates t
    page can read, or in the session cookie.
 
 Linking another sign-in, connecting Google Calendar and allowing private repositories need
-GitHub's or Google's pages, so in the app they are done from the site in a browser (the app says
-so; Settings hides those buttons there). The redirect scheme is a private-use one: a malicious
+GitHub's or Google's pages, so in the app they are done from the site in a browser: Settings
+hides the link and repository buttons there, and Connect Google Calendar (from any app) says to use
+a browser instead (`browserOnly` in `src/os/account.ts`); the app's own dialog backs this up. The redirect scheme is a private-use one: a malicious
 app installed on the same phone could register it too, but can't redeem a code without the
 verifier, and the browser page names the account before anything is handed over. Verified App
 Links would need every self-hosted server to vouch for the app, so they aren't used. Known gap: an

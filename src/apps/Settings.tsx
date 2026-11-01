@@ -239,7 +239,7 @@ function SignInMethods({ setError }: { setError: (e: string | null) => void }) {
                 <span className="muted">{id ? id.label : `Not linked. Link it to sign in with ${PROVIDERS[p]} too.`}</span>
               </span>
               {id ? (
-                ids.length > 1 && (
+                ids.some((other) => other.provider !== p && account.signIn[other.provider]) && (
                   <button className="btn btn-small" onClick={() => void unlink(p)}>
                     Remove
                   </button>
@@ -756,7 +756,7 @@ function Instances() {
                 <strong>GitHub</strong>
                 <span className="muted">Not linked. Link your GitHub account to search its repositories.</span>
               </span>
-              {account.signIn.github && (
+              {account.signIn.github && !inCloudApp() && (
                 <button className="btn btn-small" onClick={() => void linkSignIn('github').catch((e: Error) => setError(e.message))}>
                   Link GitHub
                 </button>
@@ -1642,7 +1642,7 @@ function CalendarAccounts() {
             <p className="muted">{account.google.canWrite ? 'Can add and change events, stored encrypted on this server' : 'Read-only so far, stored encrypted on this server'}</p>
           </div>
           <span className="nb-spacer" />
-          {!account.google.canWrite && (
+          {!account.google.canWrite && !inCloudApp() && (
             <button className="btn btn-small btn-primary" onClick={connectGoogle} title="Connect again, allowing the Calendar app to add and change events">
               Allow editing
             </button>
@@ -1653,7 +1653,7 @@ function CalendarAccounts() {
         </div>
       ) : (
         <>
-          <p className="muted">Your Google calendars, shared ones included, to see and (in the Calendar app) add and change events. It attaches to your GitHub sign-in; it is not a way to sign in.</p>
+          <p className="muted">Your Google calendars, shared ones included, to see and (in the Calendar app) add and change events. It attaches to your MvL OS account; it is not a way to sign in.</p>
           <button className="btn btn-small" onClick={connectGoogle}>
             Connect Google Calendar
           </button>

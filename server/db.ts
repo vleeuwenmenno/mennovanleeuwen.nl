@@ -675,39 +675,44 @@ export function database(): DatabaseSync {
  * so nothing that refers to users is cascaded away; ids, rows and columns stay as they were).
  */
 function migrateIdentities(db: DatabaseSync) {
-  const githubCol = (db.prepare('PRAGMA table_info(users)').all() as { name: string; notnull: number }[]).find((c) => c.name === 'github_id')
-  if (githubCol?.notnull) {
-    const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get() as { sql: string }
-    const relaxed = sql.replace(/github_id\s+INTEGER\s+NOT\s+NULL\s+UNIQUE/i, 'github_id INTEGER UNIQUE')
-    const renamed = relaxed.replace(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?users["`]?/i, 'CREATE TABLE users_rebuilt')
-    if (relaxed === sql || renamed === relaxed) {
-      console.error('users table: unexpected schema, accounts without GitHub stay unavailable')
-    } else {
-      const before = (db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n
-      // References to users that were already broken (none are expected) don't stop the rebuild; new ones do.
-      const orphans = () => (db.prepare('PRAGMA foreign_key_check').all() as { parent: string }[]).filter((r) => r.parent === 'users').length
-      const orphansBefore = orphans()
-      db.exec('PRAGMA foreign_keys = OFF')
+  const needed = () => !!(db.prepare('PRAGMA table_info(users)').all() as { name: string; notnull: number }[]).find((c) => c.name === 'github_id')?.notnull
+  if (needed()) {
+    // Another process starting at the same time (it shouldn't: one instance) waits rather than fails.
+    db.exec('PRAGMA busy_timeout = 10000')
+    db.exec('PRAGMA foreign_keys = OFF')
+    try {
+      // The write lock first, then everything is read and checked again inside it.
+      db.exec('BEGIN IMMEDIATE')
       try {
-        db.exec('BEGIN IMMEDIATE')
-        try {
-          db.exec('DROP TABLE IF EXISTS users_rebuilt')
-          db.exec(renamed)
-          db.exec('INSERT INTO users_rebuilt SELECT * FROM users')
-          const copied = (db.prepare('SELECT COUNT(*) AS n FROM users_rebuilt').get() as { n: number }).n
-          if (copied !== before) throw new Error(`users rebuild copied ${copied} of ${before} rows`)
-          db.exec('DROP TABLE users')
-          db.exec('ALTER TABLE users_rebuilt RENAME TO users')
-          const broken = orphans()
-          if (broken > orphansBefore) throw new Error(`users rebuild left ${broken - orphansBefore} broken references`)
-          db.exec('COMMIT')
-        } catch (e) {
-          db.exec('ROLLBACK')
-          throw e
+        if (needed()) {
+          const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get() as { sql: string }
+          const relaxed = sql.replace(/github_id\s+INTEGER\s+NOT\s+NULL\s+UNIQUE/i, 'github_id INTEGER UNIQUE')
+          const renamed = relaxed.replace(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?users["`]?/i, 'CREATE TABLE users_rebuilt')
+          if (relaxed === sql || renamed === relaxed) {
+            console.error('users table: unexpected schema, accounts without GitHub stay unavailable')
+          } else {
+            const before = (db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n
+            // References to users that were already broken (none are expected) don't stop the rebuild; new ones do.
+            const orphans = () => (db.prepare('PRAGMA foreign_key_check').all() as { parent: string }[]).filter((r) => r.parent === 'users').length
+            const orphansBefore = orphans()
+            db.exec('DROP TABLE IF EXISTS users_rebuilt')
+            db.exec(renamed)
+            db.exec('INSERT INTO users_rebuilt SELECT * FROM users')
+            const copied = (db.prepare('SELECT COUNT(*) AS n FROM users_rebuilt').get() as { n: number }).n
+            if (copied !== before) throw new Error(`users rebuild copied ${copied} of ${before} rows`)
+            db.exec('DROP TABLE users')
+            db.exec('ALTER TABLE users_rebuilt RENAME TO users')
+            const broken = orphans()
+            if (broken > orphansBefore) throw new Error(`users rebuild left ${broken - orphansBefore} broken references`)
+          }
         }
-      } finally {
-        db.exec('PRAGMA foreign_keys = ON')
+        db.exec('COMMIT')
+      } catch (e) {
+        db.exec('ROLLBACK')
+        throw e
       }
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON')
     }
   }
   db.exec(`CREATE TABLE IF NOT EXISTS identities (

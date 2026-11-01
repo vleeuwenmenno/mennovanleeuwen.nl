@@ -16,6 +16,7 @@
 //     admin's id; unlinking never removes the last sign-in,
 //   - bans and the registration limits hold for every sign-in,
 //   - removing GitHub from an admin ends admin rights and signs the account out everywhere,
+//   - a sign-in can't be removed when the only other one is switched off on the server,
 //   - one address starting many sign-ins only pushes out its own pending ones, never another's
 //     (addresses: IPv6 by /64, forwarded only from trusted proxies),
 //   - signing in the Android app: the round trip in the system browser makes no browser session
@@ -545,6 +546,24 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
   round = await appRound('google', p, 'g-app-closed')
   check('registration closed: a new account from the app is turned away, and the app is told', round.error === 'closed' && !round.code)
   db.prepare("UPDATE app_settings SET value = 'open' WHERE key = 'registration'").run()
+}
+
+// ---- Removing a sign-in when the other one is switched off ----
+
+{
+  // An account with GitHub and Google; then the server stops offering Google sign-in.
+  const both = new Browser()
+  await githubSignIn(both, { id: 6006, login: 'both' })
+  const l = await googleStart(both, true)
+  check('(an account links Google next to GitHub)', (await googleFinish(both, l, { claims: claims('g-both', l.nonce) })) === '/?auth=linked-google')
+  const env = (server as unknown as { env: Record<string, string> }).env
+  env.GOOGLE_SIGNIN = ''
+  await server.stop()
+  await server.start()
+  check('with Google sign-in switched off, GitHub (the only way in left) can not be removed', (await both.send('DELETE', '/api/auth/identities/github')).status === 409 && (await both.me()).user?.github === true)
+  env.GOOGLE_SIGNIN = 'on'
+  await server.stop()
+  await server.start()
 }
 
 // ---- Client addresses for the per-address cap (server/egress.ts) ----
