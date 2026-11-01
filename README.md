@@ -31,10 +31,11 @@ uses the same `mvlos.u.<id>.` space (src/os/accountSpace.ts). That only matters 
 
 ## Android app (experiment): on this device or a cloud server
 
-`mobile/` is an isolated Capacitor 8.6 package. It packages the real Vite frontend;
-no server deployment or server security changes are needed. This is an experiment,
-not a release-ready mobile client. Android 7/API 24 or newer is required, with a
-current Android System WebView. iOS is not generated or tested yet; the shared
+`mobile/` is an isolated Capacitor 8.6 package. It packages the real Vite frontend. The
+on-device mode needs no server; signing in to a cloud server from the app needs a server with
+*app sign-in* (below). This is an experiment, not a release-ready mobile client. Android 9/API 28
+or newer is required (the cloud desktop's separate WebView data needs it), with a current Android
+System WebView. iOS is not generated or tested yet; the shared
 frontend and Capacitor configuration can be reused on a Mac with Xcode.
 
 The app (**MvL OS**, `nl.mvlos.experiment`) opens on a native chooser
@@ -47,17 +48,60 @@ The app (**MvL OS**, `nl.mvlos.experiment`) opens on a native chooser
 - **Cloud server**: an `https://` address the user types. It is checked natively
   (`ServerUrl.java`): HTTPS only (`http://` is refused, not upgraded), no user name or password, a
   valid host (IDN converted to ASCII, IPv4 only as a plain dotted quad, bracketed IPv6) and port;
-  only the origin is kept. It opens in an Android **Custom Tab** (or the default browser when none
-  supports them), so the site is *browser-hosted*: it runs in that browser with the browser's own
-  cookies and the normal same-origin session, and GitHub or Google sign-in work as on the web.
-  No WebView, native bridge, token or cookie passes through the app, and native app features are
-  not available there. On-device data stays separate: nothing is uploaded or merged.
-- The saved server has *Open* and *Disconnect*. Disconnect only forgets the address in the app; it
-  does **not** sign you out of the site in the browser. Use *Sign out* on the site, or clear that
-  browser's data, for that.
+  only the origin is kept. The server's desktop then runs **inside the app**, full screen, with the
+  system bar and keyboard insets and Android Back like the on-device desktop (`CloudActivity`).
+- The saved server has *Open* and *Disconnect*. Disconnect signs the app out of that server (best
+  effort: if the server can't be reached the app says the sign-out wasn't confirmed) and deletes
+  everything the app kept for it, then forgets the address. Connecting to another server does the
+  same for the previous one first. It doesn't touch the user's browser: a session there stays.
 - *Open my choice automatically* skips the chooser on a fresh launch. The chooser stays reachable:
-  closing the Custom Tab returns to it, Back at the root of the on-device desktop returns to it,
-  and so does the launcher icon's long-press shortcut *Choose mode*.
+  Back at the root of either desktop, *Choose mode* in Settings → Account of the cloud desktop, and
+  the launcher icon's long-press shortcut *Choose mode*.
+
+**The cloud desktop** is a plain Android WebView, not Capacitor, in a process of its own (`:cloud`)
+with its own WebView data directory (`MvlosApplication`), so its cookies, storage, cache and
+service workers never mix with the on-device desktop's. The page gets no native bridge, no
+JavaScript interface and no file or content access; camera, microphone and location requests are
+denied; downloads aren't supported yet. Only the saved server's exact origin (scheme, host, port)
+loads in it (`CloudPolicy.java`, unit-tested): other sites open in the browser after a tap,
+anything else is refused, including form POSTs and redirects that would leave the origin. The
+user agent ends in ` MvLOSApp/<version>` so the site can show app hints
+(`src/os/nativeApp.ts inCloudApp`); it grants nothing. `mvlosapp://chooser`, followed from a tap,
+opens the chooser and does nothing else.
+
+**Signing in from the app** never shows GitHub's or Google's pages inside the app (RFC 8252: no
+embedded user-agents; Google refuses it too). When the cloud desktop navigates to
+`/api/auth/github/login` or `/api/auth/google/login`, the app takes over
+([`server/appLogin.ts`](server/appLogin.ts)):
+
+1. It asks `GET /api/auth/app`. A server without app sign-in (older versions answer 401 or 404)
+   gets a native message: *Sign-in needs a server update*; the desktop stays usable as a guest.
+2. It keeps a random PKCE verifier and state (cloud process only, ten minutes) and opens the system
+   browser (a Custom Tab) at `/api/auth/app/start?provider=…&challenge=S256(verifier)&state=…`.
+3. The normal GitHub or Google round trip runs there, with bans, registration limits and admin
+   rules as always, but makes no session in the browser. It ends on a page naming the account and
+   the server with an *Open the app* button: the fixed private-use redirect
+   `nl.mvlos.experiment:/oauth?code=…&state=…` (never taken from a request). The code works once,
+   for two minutes, and is forgotten when the account is signed out everywhere, banned, deleted
+   or a sign-in is removed. Refusals (closed, full, banned) go back to the app too.
+4. `AuthReturnActivity` (the only exported cloud component) accepts exactly that URI with a state
+   matching the sign-in this app started; anything else is ignored.
+5. The app itself, not its WebView, POSTs the code and the verifier as JSON with the header
+   `X-MvL-App-Redeem: 1` to `/api/auth/app/redeem` on the same server, without following redirects.
+   The server takes the code out first, checks the verifier, that the account and the sign-in
+   that made the code are still there and allowed in, ends any session the app's WebView had, and
+   answers with fresh session cookies. The app accepts only MvL OS's own cookies (Secure,
+   `Path=/`, no `Domain`, the session one HttpOnly), puts them into the cloud WebView and opens the
+   desktop. A web page can't redeem: a form can send neither JSON nor that header, and the server
+   grants no CORS preflight. The code and verifier never appear in a WebView URL, in storage the
+   page can read, or in the session cookie.
+
+Linking another sign-in, connecting Google Calendar and allowing private repositories need
+GitHub's or Google's pages, so in the app they are done from the site in a browser (the app says
+so; Settings hides those buttons there). The redirect scheme is a private-use one: a malicious
+app installed on the same phone could register it too, but can't redeem a code without the
+verifier, and the browser page names the account before anything is handed over. Verified App
+Links would need every self-hosted server to vouch for the app, so they aren't used.
 
 The bundled page gets one native plugin, `window.Capacitor.Plugins.MvlosApp`
 (`src/os/nativeApp.ts`): `info()` (`{mode: "local", savedServer, version}`) and `openChooser()`.
@@ -97,12 +141,16 @@ adb shell am start -n nl.mvlos.experiment/.LauncherActivity
 ```
 
 Alternatively transfer the debug APK to your phone and open it, allowing installation
-from that file app when Android asks. It appears as **MvL OS** (version 1.1), separately
+from that file app when Android asks. It appears as **MvL OS** (version 1.2), separately
 from the website/PWA. On this device needs no server: try local notes, Terminal and games.
 Uninstalling clears its local guest data; Android backup is disabled. Debug APKs are signed with
 the building machine's debug key (`~/.android/debug.keystore`): an APK built with another key
 can't update an installed one, so uninstall the old one first (that clears its guest data).
-`./gradlew testDebugUnitTest` runs the server address checks (`ServerUrlTest`).
+`./gradlew testDebugUnitTest` runs the server address, navigation and cookie checks
+(`ServerUrlTest`, `CloudPolicyTest`, `CloudLoginCookiesTest`). `-PmvlosTest` builds an emulator
+test variant (version `1.2-test`) that also trusts user-installed CAs in the debuggable build and
+lets Chrome DevTools inspect the cloud WebView, for testing against a local HTTPS server with a
+test CA; never hand that build to users. Without the flag the APK trusts system CAs only.
 
 `npm run sync` stages `dist` without the server's `.gz`/`.br` sidecars (Android's asset
 merger otherwise reports duplicate resources). Rebuild and sync after frontend edits.
@@ -1428,7 +1476,9 @@ its `NOT NULL` through SQLite's documented table rebuild (foreign keys off for t
 transaction, row count and references checked), and every GitHub id is copied into `identities`.
 Account ids, sessions, admin rights and everything stored stay as they were. `pnpm
 check:auth-identities` checks the migration, the token checks, replays, link conflicts, bans and limits
-against stand-ins for GitHub and Google.
+against stand-ins for GitHub and Google, including the Android app's sign-in through the system
+browser (`/api/auth/app`, see "Android app" above): a server needs this version for the app to
+sign in; older ones are told apart and stay guest-only in the app.
 
 **Google Calendar** attaches to the signed-in account (system menu or Settings → Integrations → Calendars) for the
 Calendar app, the Agenda widget and the clock: your calendars, shared ones included, with Google's

@@ -16,7 +16,7 @@ import { addLauncher, cleanUrl, faviconOf, launcherImage, launchersAreFiles, mov
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
-import { inNativeApp, openAppChooser } from '../os/nativeApp'
+import { CLOUD_APP_CHOOSER, inCloudApp, inNativeApp, openAppChooser } from '../os/nativeApp'
 import { SignInButtons } from '../os/SignInButtons'
 import { UsersSettings } from './UsersSettings'
 import { openAlert, useAlerts } from '../os/alerts'
@@ -123,6 +123,11 @@ function Account() {
           <p className="muted">Sign in for your own desktop: notes, layouts and integrations that follow you between devices.</p>
         )}
         <SignInButtons />
+        {inCloudApp() && (
+          <a className="btn" href={CLOUD_APP_CHOOSER}>
+            Choose mode (Android app)
+          </a>
+        )}
       </div>
     )
   const u = account.user!
@@ -165,6 +170,7 @@ function Account() {
           </button>
         </li>
         <BrowserFilesRow />
+        {inCloudApp() && <CloudAppRow />}
         <li className="set-row">
           <span className="set-row-text">
             <strong>Delete account</strong>
@@ -182,6 +188,19 @@ function Account() {
     </>
   )
 }
+
+/** Settings → Account in the Android app's cloud mode: the way back to its chooser (nativeApp.ts). */
+const CloudAppRow = () => (
+  <li className="set-row">
+    <span className="set-row-text">
+      <strong>Android app</strong>
+      <span className="muted">This server's desktop runs inside the app. Switch to the desktop on this device, or to another server.</span>
+    </span>
+    <a className="btn btn-small" href={CLOUD_APP_CHOOSER}>
+      Choose mode
+    </a>
+  </li>
+)
 
 const PROVIDERS = { github: 'GitHub', google: 'Google' } as const
 
@@ -227,7 +246,9 @@ function SignInMethods({ setError }: { setError: (e: string | null) => void }) {
                   </button>
                 )
               ) : (
-                account.signIn[p] && (
+                account.signIn[p] &&
+                // In the Android app, GitHub's and Google's pages never open inside it: link from a browser.
+                !inCloudApp() && (
                   <button className="btn btn-small" onClick={() => void linkSignIn(p).catch((e: Error) => setError(e.message))}>
                     Link {PROVIDERS[p]}
                   </button>
@@ -237,6 +258,7 @@ function SignInMethods({ setError }: { setError: (e: string | null) => void }) {
           )
         })}
       </ul>
+      {inCloudApp() && <p className="muted set-help">In the Android app, link another sign-in from this site in your browser; it then works here too.</p>}
       <p className="muted set-help">Linking lets you sign in to this same account with either one. A GitHub or Google account that already has its own account here can't be linked; accounts are never merged.</p>
     </>
   )
@@ -728,10 +750,13 @@ function Instances() {
                   @{account.user!.login} · {hasRepoScope(account.user) ? 'public and private repositories' : 'public repositories only'}
                 </span>
               </span>
-              {/* Sign-in only asks GitHub for the profile; private repositories take the broad `repo` scope. */}
-              <button className="btn btn-small" onClick={() => signInWithRepos(!hasRepoScope(account.user))}>
-                {hasRepoScope(account.user) ? 'Public only' : 'Allow private'}
-              </button>
+              {/* Sign-in only asks GitHub for the profile; private repositories take the broad `repo` scope.
+                  In the Android app GitHub's consent page can't open inside it: changed from a browser. */}
+              {!inCloudApp() && (
+                <button className="btn btn-small" onClick={() => signInWithRepos(!hasRepoScope(account.user))}>
+                  {hasRepoScope(account.user) ? 'Public only' : 'Allow private'}
+                </button>
+              )}
             </>
           ) : (
             <>

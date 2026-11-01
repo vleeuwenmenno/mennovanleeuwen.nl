@@ -2,7 +2,12 @@
 // https://localhost inside the app, without a server. The app exposes one small native plugin,
 // MvlosApp, to that bundled page only: `info()` and `openChooser()` (back to the app's
 // on-device / cloud server screen). Nothing else crosses: no tokens, no URLs, no storage.
-// In a browser, the PWA or the app's cloud mode (a browser tab) none of this exists.
+// In a browser or the PWA none of this exists.
+//
+// The app's cloud mode is different: there the server's own desktop runs in a plain WebView with no
+// native plugin at all (mobile/, CloudActivity). It only adds " MvLOSApp/<version>" to the user
+// agent, so the page can show hints (`inCloudApp`) and link to `mvlosapp://chooser`, which the app
+// turns into its mode chooser. Neither grants anything: a page can claim the user agent too.
 
 type MvlosAppPlugin = { info(): Promise<{ mode: 'local'; savedServer: string | null; version: string }>; openChooser(): Promise<void> }
 type CapacitorGlobal = { isNativePlatform?: () => boolean; Plugins?: { MvlosApp?: MvlosAppPlugin } }
@@ -17,3 +22,9 @@ export const inNativeApp = () => plugin() !== null
 
 /** Back to the app's screen for choosing on-device or a cloud server. */
 export const openAppChooser = () => plugin()?.openChooser().catch(() => {})
+
+/** Whether this page is a server's desktop inside the Android app's cloud mode (hints only, see above). */
+export const inCloudApp = () => typeof navigator !== 'undefined' && / MvLOSApp\/[\w.-]+$/.test(navigator.userAgent)
+
+/** In the app's cloud mode: back to its on-device / cloud chooser. */
+export const CLOUD_APP_CHOOSER = 'mvlosapp://chooser'

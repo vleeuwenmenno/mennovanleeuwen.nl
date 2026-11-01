@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
+        android:name=".MvlosApplication"
+        android:networkSecurityConfig="${networkSecurityConfig}"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -33,6 +35,42 @@
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
+            android:exported="false" />
+
+        <!-- Cloud mode: the server's desktop in a plain WebView, in its own process and WebView data
+             directory (MvlosApplication). Started only by the app. -->
+        <activity
+            android:name=".CloudActivity"
+            android:process=":cloud"
+            android:theme="@style/AppTheme.Chooser"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false" />
+
+        <!-- Signing in the cloud desktop ends here: the system browser opens
+             nl.mvlos.experiment:/oauth. Checks the state before anything else (CloudLogin). -->
+        <activity
+            android:name=".AuthReturnActivity"
+            android:process=":cloud"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="nl.mvlos.experiment" android:path="/oauth" />
+            </intent-filter>
+        </activity>
+
+        <!-- Disconnect / switch server: signs the app out and deletes the cloud WebView's data. -->
+        <activity
+            android:name=".CloudResetActivity"
+            android:process=":cloud"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
             android:exported="false" />
 
         <provider

@@ -17,7 +17,11 @@
 //   - bans and the registration limits hold for every sign-in,
 //   - removing GitHub from an admin ends admin rights and signs the account out everywhere,
 //   - one address starting many sign-ins only pushes out its own pending ones, never another's
-//     (addresses: IPv6 by /64, forwarded only from trusted proxies).
+//     (addresses: IPv6 by /64, forwarded only from trusted proxies),
+//   - signing in the Android app: the round trip in the system browser makes no browser session
+//     and ends on the app's fixed redirect with a one-time code; the code only turns into a
+//     session with its PKCE verifier, in headers (never the URL), once, before it expires, for an
+//     account still allowed in; bans and limits are reported back to the app.
 //
 //   node scripts/auth-identities-check.ts
 //
@@ -87,7 +91,7 @@ const MOCK = `http://127.0.0.1:${(mock.address() as { port: number }).port}`
 const server = new Server({
   GITHUB_CLIENT_ID: 'gh-client', GITHUB_CLIENT_SECRET: 'gh-secret', GITHUB_WEB_URL: MOCK, GITHUB_API_URL: MOCK,
   GOOGLE_SIGNIN: 'on', GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: 'g-secret', GOOGLE_AUTH_URL: `${MOCK}/auth`, GOOGLE_TOKEN_URL: `${MOCK}/token`, GOOGLE_JWKS_URL: `${MOCK}/certs`,
-  ADMIN_GITHUB_IDS: '1001', AUTH_STATE_TTL_MS: '4000', NOTIFY_WATCH: 'off',
+  ADMIN_GITHUB_IDS: '1001', AUTH_STATE_TTL_MS: '4000', AUTH_APP_CODE_TTL_MS: '3000', NOTIFY_WATCH: 'off',
 })
 {
   const old = new DatabaseSync(join(server.data, 'mvlos.db'))
@@ -408,6 +412,126 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
   for (let i = 0; i < 25; i++) await victim.clone().get('/api/auth/google/login')
   r = await googleFinish(victim2, own, { claims: claims('g-victim', own.nonce) })
   check('the same address starting more than its share gives up its own oldest', r === '/?auth=error')
+}
+
+// ---- Signing in the Android app (server/appLogin.ts) ----
+
+{
+  const info = (await (await fetch(`${ORIGIN}/api/auth/app`)).json()) as { app?: number; providers?: { github: boolean; google: boolean } }
+  check('GET /api/auth/app says the server signs in the app, with both providers', info.app === 1 && !!info.providers?.github && !!info.providers.google)
+  const APP = 'nl.mvlos.experiment:/oauth?'
+  const pkce = () => {
+    const verifier = randomBytes(32).toString('base64url')
+    return { verifier, challenge: createHash('sha256').update(verifier).digest('base64url'), state: randomBytes(16).toString('base64url') }
+  }
+  let page = ''
+  let pageHeaders = new Headers()
+  /** The system browser's part: start, the provider's callback, and the confirmation page's "Open the app" link. */
+  async function appRound(provider: 'github' | 'google', p: { challenge: string; state: string }, who: { id: number; login: string } | string, extra: Record<string, unknown> = {}) {
+    const browser = new Browser()
+    const start = await browser.get(`/api/auth/app/start?provider=${provider}&challenge=${p.challenge}&state=${p.state}`)
+    const to = new URL(loc(start))
+    const state = to.searchParams.get('state')!
+    const code = randomBytes(6).toString('hex')
+    let res: Response
+    if (provider === 'github') {
+      githubUsers.set(code, { ...(who as { id: number; login: string }), name: null })
+      res = await browser.get(`/api/auth/github/callback?code=${code}&state=${encodeURIComponent(state)}`)
+    } else {
+      googleCodes.set(code, { claims: claims(who as string, to.searchParams.get('nonce')!, extra), challenge: to.searchParams.get('code_challenge')! })
+      res = await browser.get(`/api/auth/google/callback?code=${code}&state=${encodeURIComponent(state)}`)
+    }
+    page = res.status === 200 ? await res.text() : ''
+    pageHeaders = res.headers
+    const end = res.status === 200 ? (/href="(nl\.mvlos\.experiment:[^"]+)"/.exec(page)?.[1] ?? '').replace(/&#38;/g, '&') : loc(res)
+    const back = end.startsWith(APP) ? new URLSearchParams(end.slice(APP.length)) : new URLSearchParams()
+    return { end, status: res.status, code: back.get('code') ?? '', error: back.get('error'), reason: back.get('reason'), appState: back.get('state'), browser }
+  }
+  let setCookies: string[] = []
+  /** The app's own POST (not its WebView). `cookie`: what the app's WebView had for the server. */
+  async function redeem(body: unknown, opts: { headers?: Record<string, string>; cookie?: string; raw?: string } = {}) {
+    const res = await fetch(`${ORIGIN}/api/auth/app/redeem`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', 'X-MvL-App-Redeem': '1', ...(opts.cookie ? { Cookie: opts.cookie } : {}), ...opts.headers }, body: opts.raw ?? JSON.stringify(body) })
+    setCookies = res.headers.getSetCookie()
+    return res.status
+  }
+  /** The app puts the redeemed cookies into its WebView: a Browser with them. */
+  const webviewWith = (cookies: string[]) => {
+    const b = new Browser()
+    for (const c of cookies) {
+      const [pair] = c.split(';')
+      const i = pair.indexOf('=')
+      b.jar.set(pair.slice(0, i), pair.slice(i + 1))
+    }
+    return b
+  }
+
+  check('app start without a valid state: refused with a plain error', (await new Browser().get('/api/auth/app/start?provider=github&challenge=x&state=bad')).status === 400)
+  check('app start with a bad challenge: back to the app with an error', loc(await new Browser().get(`/api/auth/app/start?provider=github&challenge=short&state=${'s'.repeat(20)}`)) === `${APP}error=error&state=${'s'.repeat(20)}`)
+
+  let p = pkce()
+  let round = await appRound('github', p, { id: 2002, login: 'bob' })
+  check('app sign-in with GitHub ends on a page naming the account and the server, with an "Open the app" link carrying a code and the app state', round.status === 200 && page.includes('@bob') && page.includes(ORIGIN) && !!round.code && round.appState === p.state)
+  check('...that page runs no scripts, is not kept and refers nothing on', /default-src 'none'/.test(pageHeaders.get('content-security-policy') ?? '') && !/<script/i.test(page) && pageHeaders.get('cache-control') === 'no-store' && pageHeaders.get('referrer-policy') === 'no-referrer')
+  check('...and makes no session in the system browser', !round.browser.jar.has('mvlos_sid') && !(await round.browser.me()).user)
+  check('a code without its verifier is refused', (await redeem({ code: round.code })) === 400)
+  check('...and the code is gone afterwards, even with the right verifier', (await redeem({ code: round.code, verifier: p.verifier })) === 400)
+
+  p = pkce()
+  round = await appRound('github', p, { id: 2002, login: 'bob' })
+  check('a web form (no app header, form encoding) can not redeem', (await redeem(null, { headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-MvL-App-Redeem': '' }, raw: `code=${round.code}&verifier=${p.verifier}` })) === 400)
+  check('JSON without the app header can not redeem either', (await redeem({ code: round.code, verifier: p.verifier }, { headers: { 'X-MvL-App-Redeem': '' } })) === 400)
+  check('...and those attempts did not use the code up', (await redeem({ code: round.code, verifier: pkce().verifier })) === 400)
+  p = pkce()
+  round = await appRound('github', p, { id: 2002, login: 'bob' })
+  check('a wrong verifier: refused', (await redeem({ code: round.code, verifier: pkce().verifier })) === 400 && setCookies.length === 0)
+
+  p = pkce()
+  round = await appRound('github', p, { id: 2002, login: 'bob' })
+  check('code + verifier from the app: 200 with session cookies, no redirect', (await redeem({ code: round.code, verifier: p.verifier })) === 200)
+  check('...an HttpOnly session cookie and readable account cookies, like a browser sign-in', setCookies.some((c) => /^mvlos_sid=[^;]+;.*Path=\/;.*HttpOnly/.test(c)) && setCookies.some((c) => /^mvlos_uid=5;/.test(c) && !/HttpOnly/.test(c)) && setCookies.every((c) => !/Domain=/i.test(c)))
+  let webview = webviewWith(setCookies)
+  me = await webview.me()
+  check('...which sign the app WebView in as that account', me.user?.id === 5)
+  check('a used code can not be redeemed again', (await redeem({ code: round.code, verifier: p.verifier })) === 400)
+
+  // Signing in as another account in the same WebView ends the session it had.
+  const oldSid = webview.jar.get('mvlos_sid')!
+  p = pkce()
+  round = await appRound('google', p, 'g-app-new')
+  check('app sign-in with Google (a new account), sending the WebView\'s old session along: signed in, not admin', (await redeem({ code: round.code, verifier: p.verifier }, { cookie: `mvlos_sid=${oldSid}` })) === 200)
+  webview = webviewWith(setCookies)
+  me = await webview.me()
+  check('...as the new account, not admin', !!me.user && me.user.id !== 5 && !me.user.admin)
+  check("...and the WebView's previous session was ended on the server", !(db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(createHash('sha256').update(decodeURIComponent(oldSid)).digest('hex'))))
+
+  p = pkce()
+  round = await appRound('github', p, { id: 2002, login: 'bob' })
+  await sleep(3500)
+  check('an expired code: refused', (await redeem({ code: round.code, verifier: p.verifier })) === 400)
+
+  p = pkce()
+  round = await appRound('google', p, 'g-alice')
+  check('a banned account: the app is told, with the reason, and gets no code', round.error === 'banned' && round.reason === 'spam' && !round.code)
+  // An admin bans the account and lets it back in before the redeem: the ban signed it out
+  // everywhere, which also forgot its waiting codes, so the code stays dead after the unban.
+  const boss = new Browser()
+  await githubSignIn(boss, { id: 1001, login: 'admin-again' })
+  check('(an admin signs in again with the admin GitHub id)', (await boss.me()).user?.admin === true)
+  p = pkce()
+  round = await appRound('github', p, { id: 2002, login: 'bob' })
+  const banned = await boss.send('POST', '/api/admin/users/5/ban')
+  const unbanned = await boss.send('POST', '/api/admin/users/5/unban')
+  check('banned and let back in between the browser part and the redeem: the code is gone', banned.status === 200 && unbanned.status === 200 && (await redeem({ code: round.code, verifier: p.verifier })) === 400)
+  p = pkce()
+  round = await appRound('github', p, { id: 2002, login: 'bob' })
+  db.prepare('UPDATE users SET banned_at = ? WHERE id = 5').run(Date.now())
+  check('banned at the moment of the redeem: refused', (await redeem({ code: round.code, verifier: p.verifier })) === 400)
+  db.prepare('UPDATE users SET banned_at = NULL, ban_reason = NULL WHERE id = 5').run()
+  db.prepare("UPDATE app_settings SET value = 'closed' WHERE key = 'registration'").run()
+  p = pkce()
+  round = await appRound('google', p, 'g-app-closed')
+  check('registration closed: a new account from the app is turned away, and the app is told', round.error === 'closed' && !round.code)
+  db.prepare("UPDATE app_settings SET value = 'open' WHERE key = 'registration'").run()
 }
 
 // ---- Client addresses for the per-address cap (server/egress.ts) ----

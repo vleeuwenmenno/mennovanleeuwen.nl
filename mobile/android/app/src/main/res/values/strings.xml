@@ -11,7 +11,7 @@
     <string name="local_body">The desktop bundled in this app, as a guest. Sign-in, sync, mail and Agents are not available. Your data stays on this phone and is never uploaded.</string>
     <string name="open_local">Open on this device</string>
     <string name="cloud_title">Cloud server</string>
-    <string name="cloud_body">Opens your MvL OS server in a secure browser tab. It is browser-hosted: sign in there with GitHub or Google, as on the web. Native app features are not available there. Data on this device is separate and is not uploaded or merged.</string>
+    <string name="cloud_body">Opens your MvL OS server full screen inside the app. Signing in with GitHub or Google opens your browser briefly and comes back here; that needs a server with app sign-in. The server\'s desktop gets no access to the phone beyond what a website has. Data on this device is separate and is never uploaded or merged.</string>
     <string name="server_label">Server address</string>
     <string name="server_hint">https://example.com</string>
     <string name="connect">Connect</string>
@@ -19,11 +19,41 @@
     <string name="open_saved">Open</string>
     <string name="disconnect">Disconnect</string>
     <string name="disconnect_title">Disconnect from %1$s?</string>
-    <string name="disconnect_message">The app forgets this server address. This does NOT sign you out of the site in your browser. To sign out, use Sign out on the site, or clear that browser\'s data.</string>
+    <string name="disconnect_message">Signs the app out of this server and deletes everything the app kept for it (cookies, its saved data and cache), then forgets the address. Your browser is not affected: if you use the site there too, it stays signed in until you sign out there.</string>
     <string name="auto_open">Open my choice automatically when the app starts</string>
-    <string name="auto_open_hint">To come back here, close the browser tab, press Back on the desktop, or long-press the app icon and pick \"Choose mode\".</string>
+    <string name="auto_open_hint">To come back here, press Back on the desktop, or long-press the app icon and pick \"Choose mode\".</string>
     <string name="no_browser_title">No browser found</string>
-    <string name="no_browser_message">Install or enable a web browser to open a cloud server.</string>
+    <string name="no_browser_message">Install or enable a web browser.</string>
+
+    <string name="switch_title">Switch to %1$s?</string>
+    <string name="switch_message">The app signs out of %1$s and deletes what it kept for it before connecting to the new server. Your browser is not affected.</string>
+    <string name="switch_confirm">Switch</string>
+
+    <!-- Cloud desktop -->
+    <string name="cloud_error_title">Can\'t reach the server</string>
+    <string name="cloud_error_body">%1$s did not answer. Check your connection and the address, then try again.</string>
+    <string name="cloud_ssl_error">The secure connection to %1$s failed: its certificate is not trusted. The app does not open servers without a valid HTTPS certificate.</string>
+    <string name="cloud_retry">Try again</string>
+    <string name="cloud_no_downloads">Downloads are not supported in the app yet. Use the site in a browser to download files.</string>
+    <string name="login_old_server_title">Sign-in needs a server update</string>
+    <string name="login_old_server_body">%1$s does not support signing in from the app yet: it needs a newer MvL OS version with app sign-in. You can keep using it here as a guest, or sign in on the site in a browser.</string>
+    <string name="login_provider_off_title">Not available</string>
+    <string name="login_provider_off_body">This server has not set up that sign-in method.</string>
+    <string name="login_unreachable_title">Can\'t reach the server</string>
+    <string name="login_unreachable_body">%1$s did not answer. Check your connection and try again.</string>
+    <string name="login_no_browser">Signing in opens your web browser, and none was found. Install or enable a browser and try again.</string>
+    <string name="login_failed_title">Not signed in</string>
+    <string name="login_expired">That sign-in expired or was not started in this app. Start it again from the desktop.</string>
+    <string name="login_error">The sign-in did not complete. Try again.</string>
+    <string name="login_denied">Access was not granted.</string>
+    <string name="login_closed">Sign-up is closed on this server right now, so no account was made. Existing accounts can still sign in.</string>
+    <string name="login_full">This server has room for a limited number of accounts and they are all taken, so no account was made.</string>
+    <string name="login_banned">The admin blocked this account from signing in.</string>
+    <string name="login_banned_reason">The admin blocked this account: %1$s</string>
+    <string name="provider_page_title">Use a browser for this</string>
+    <string name="provider_page_body">GitHub\'s and Google\'s pages never open inside the app. Linking another sign-in, connecting Google Calendar or allowing private repositories needs a browser: open %1$s in your browser, sign in there and do it there. It then applies here too.</string>
+    <string name="login_server_error">%1$s answered with an error. Try again later.</string>
+    <string name="reset_unconfirmed">The app removed its sign-in and data, but the server could not confirm the sign-out. That session ends when it expires.</string>
 
     <!-- Server address errors -->
     <string name="error_empty">Enter your server\'s address, for example https://example.com.</string>

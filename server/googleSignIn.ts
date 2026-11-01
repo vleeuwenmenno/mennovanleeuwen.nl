@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { admission, backTo, backWith, bannedRedirect, beginFlow, currentUser, finishFlow, googleSignInClient, identityOwner, issueSession, requireUser, sessionKey, type Flow } from './auth.ts'
+import { admission, backTo, backWith, beginFlow, completeSignIn, failSignIn, currentUser, finishFlow, googleSignInClient, identityOwner, requireUser, sessionKey, type Flow } from './auth.ts'
 import { database, nextUserId } from './db.ts'
 import { cookies, HttpError, json, publicOrigin, redirect, setCookie } from './http.ts'
 import { verifyGoogleIdToken } from './oidc.ts'
@@ -27,7 +27,7 @@ const SCOPES = 'openid email profile'
 const callbackUrl = (req: IncomingMessage) => `${publicOrigin(req)}/api/auth/google/callback`
 const challenge = (verifier: string) => createHash('sha256').update(verifier).digest('base64url')
 
-function googleRedirect(req: IncomingMessage, flow: Omit<Flow, 'e' | 'n' | 'p' | 'v' | 'o'>, clientId: string) {
+export function googleRedirect(req: IncomingMessage, flow: Omit<Flow, 'e' | 'n' | 'p' | 'v' | 'o'>, clientId: string) {
   const state = randomBytes(16).toString('base64url')
   const verifier = randomBytes(48).toString('base64url')
   const nonce = randomBytes(16).toString('base64url')
@@ -81,7 +81,7 @@ export async function finishGoogleSignIn(req: IncomingMessage, res: ServerRespon
   const flow = finishFlow(req, 'google', cookies(req)[STATE_COOKIE], url.searchParams.get('state'))
   const home = flow?.b ?? '/'
   const failed = flow?.m === 'link' ? 'link-error' : 'error'
-  const fail = (reason: string) => redirect(res, backWith(home, reason), { 'Set-Cookie': clear })
+  const fail = (reason: string) => failSignIn(res, flow, home, reason, [clear])
   const client = googleSignInClient()
   if (!client) return fail('off')
   if (!flow || !flow.v || !flow.o) return fail('error')
@@ -122,7 +122,7 @@ export async function finishGoogleSignIn(req: IncomingMessage, res: ServerRespon
     return redirect(res, backWith('/', 'linked-google'), { 'Set-Cookie': clear })
   }
 
-  if (owner?.banned_at) return bannedRedirect(res, home, owner.ban_reason, [clear])
+  if (owner?.banned_at) return failSignIn(res, flow, home, 'banned', [clear], owner.ban_reason)
   let id: number
   if (owner) {
     id = owner.id
@@ -142,5 +142,5 @@ export async function finishGoogleSignIn(req: IncomingMessage, res: ServerRespon
       return fail('error')
     }
   }
-  issueSession(req, res, id, backWith(home, 'ok'), [clear])
+  completeSignIn(req, res, flow, id, [clear], { provider: 'google', subject: who.sub })
 }

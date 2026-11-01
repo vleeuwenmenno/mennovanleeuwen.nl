@@ -1,7 +1,7 @@
 import { requirePrivateRequest, withPrivateTarget } from './privateRequest.ts'
 import { privateFetch as fetch } from './privateRequest.ts'
 import { stopTurnsOf } from './agents.ts'
-import { isAdmin, type User } from './auth.ts'
+import { forgetAppCodes, isAdmin, type User } from './auth.ts'
 import { database, decrypt, userGone } from './db.ts'
 import { disconnectGoogle } from './google.ts'
 import { HttpError } from './http.ts'
@@ -27,6 +27,8 @@ function userById(id: number): User {
 
 /** Ends every session the account has, closes every stream and socket they opened, and stops its running Agents turns. */
 export function signOutEverywhere(id: number) {
+  // App sign-ins still waiting to be redeemed would make new sessions: they go too.
+  forgetAppCodes(id)
   database().prepare('DELETE FROM push_subscriptions WHERE user_id = ?').run(id)
   database().prepare('DELETE FROM sessions WHERE user_id = ?').run(id)
   endAccount(id)
@@ -96,6 +98,7 @@ export async function unlinkIdentity(user: User, provider: string): Promise<{ si
     db.exec('ROLLBACK')
     throw e
   }
+  forgetAppCodes(user.id)
   const demoted = provider === 'github' && user.admin
   if (demoted) signOutEverywhere(user.id)
   if (provider === 'github') await withPrivateTarget(user, () => revokeGithub(user.githubToken))

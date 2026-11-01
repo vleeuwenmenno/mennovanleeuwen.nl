@@ -651,6 +651,7 @@ const AUTH_NOTICES: Record<string, { title: string; body?: string }> = {
   denied: { title: 'Not signed in', body: 'Access was not granted.' },
   'linked-github': { title: 'GitHub linked', body: 'You can now sign in to this account with GitHub too.' },
   'linked-google': { title: 'Google linked', body: 'You can now sign in to this account with Google too. Google Calendar is connected separately, in Settings → Integrations.' },
+  'app-error': { title: 'Not signed in', body: 'The app sign-in did not complete or expired. Try signing in again.' },
   'link-error': { title: 'Not linked', body: 'Linking did not complete. Start again from Settings → Account, on this device, while signed in.' },
 }
 

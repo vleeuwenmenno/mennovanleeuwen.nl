@@ -1,9 +1,7 @@
 package nl.mvlos.experiment;
 
 import android.app.Activity;
-import android.content.ActivityNotFoundException;
 import android.content.Intent;
-import android.net.Uri;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.View;
@@ -15,21 +13,32 @@ import android.widget.TextView;
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.browser.customtabs.CustomTabsClient;
-import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 /**
- * The launcher: choose the bundled desktop on this device, or a cloud server that opens in the
- * user's browser as a Custom Tab (no WebView, no bridge, no tokens through the app).
+ * The launcher: choose the bundled desktop on this device, or a cloud server whose desktop opens
+ * full screen inside the app (CloudActivity: a plain WebView in its own process, no bridge).
  */
 public class LauncherActivity extends AppCompatActivity {
     /** Set when the chooser is opened on purpose (Back, shortcut, web side); never auto-opens. */
     static final String EXTRA_CHOOSE = "nl.mvlos.experiment.extra.CHOOSE";
 
     private EditText urlField;
+    /** What to do once the cloud data of the previous server has been reset (CloudResetActivity). */
+    private Runnable afterReset;
+    private final androidx.activity.result.ActivityResultLauncher<Intent> reset =
+        registerForActivityResult(new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(), r -> {
+            Intent data = r.getData();
+            if (data != null && data.getBooleanExtra(CloudResetActivity.EXTRA_HAD_SESSION, false)
+                && !data.getBooleanExtra(CloudResetActivity.EXTRA_SIGNED_OUT, false)) {
+                android.widget.Toast.makeText(this, R.string.reset_unconfirmed, android.widget.Toast.LENGTH_LONG).show();
+            }
+            Runnable next = afterReset;
+            afterReset = null;
+            if (next != null) next.run();
+        });
     private View savedGroup;
     private TextView savedLabel;
 
@@ -104,12 +113,12 @@ public class LauncherActivity extends AppCompatActivity {
                 return;
             }
             AppPrefs.setCloud(this, server);
-            openInBrowser(server);
+            openCloud();
         });
         disconnect.setOnClickListener(v -> confirmDisconnect());
         auto.setOnCheckedChangeListener((v, checked) -> AppPrefs.setAutoOpen(this, checked));
 
-        if (autoServer != null) openInBrowser(autoServer);
+        if (autoServer != null) openCloud();
     }
 
     private void refreshSaved() {
@@ -134,9 +143,36 @@ public class LauncherActivity extends AppCompatActivity {
         urlField.setError(null);
         urlField.setText(result.origin);
         urlField.setSelection(result.origin.length());
+        String previous = AppPrefs.server(this);
+        if (previous != null && !previous.equals(result.origin)) {
+            // Another server: the app signs out of the old one and forgets its data first.
+            new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.switch_title, result.origin))
+                .setMessage(getString(R.string.switch_message, previous))
+                .setPositiveButton(R.string.switch_confirm, (d, w) -> resetCloud(previous, () -> {
+                    AppPrefs.setCloud(this, result.origin);
+                    openCloud();
+                }))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+            return;
+        }
         AppPrefs.setCloud(this, result.origin);
         refreshSaved();
-        openInBrowser(result.origin);
+        openCloud();
+    }
+
+    /** Signs the app out of `origin` and deletes the cloud WebView's data, then runs `next`. */
+    private void resetCloud(String origin, Runnable next) {
+        afterReset = next;
+        reset.launch(new Intent(this, CloudResetActivity.class).putExtra(CloudResetActivity.EXTRA_ORIGIN, origin));
+    }
+
+    private void openCloud() {
+        String server = AppPrefs.server(this);
+        if (server == null) return;
+        startActivity(new Intent(this, CloudActivity.class).putExtra(CloudActivity.EXTRA_ORIGIN, server));
+        finish();
     }
 
     private void confirmDisconnect() {
@@ -148,42 +184,14 @@ public class LauncherActivity extends AppCompatActivity {
         new AlertDialog.Builder(this)
             .setTitle(getString(R.string.disconnect_title, saved))
             .setMessage(R.string.disconnect_message)
-            .setPositiveButton(R.string.disconnect, (d, w) -> {
+            .setPositiveButton(R.string.disconnect, (d, w) -> resetCloud(saved, () -> {
                 AppPrefs.forgetServer(this);
                 urlField.setText("");
                 urlField.setError(null);
                 refreshSaved();
-            })
+            }))
             .setNegativeButton(android.R.string.cancel, null)
             .show();
-    }
-
-    /**
-     * Opens the origin in a Custom Tab of a browser that supports them, else in any browser.
-     * The site then uses that browser's own cookies; nothing passes through this app.
-     */
-    private void openInBrowser(String origin) {
-        Uri uri = Uri.parse(origin + "/");
-        String browser = CustomTabsClient.getPackageName(this, null);
-        if (browser != null) {
-            try {
-                CustomTabsIntent tab = new CustomTabsIntent.Builder().setShowTitle(true).build();
-                tab.intent.setPackage(browser);
-                tab.launchUrl(this, uri);
-                return;
-            } catch (ActivityNotFoundException ignored) {
-                // Fall back to a plain browser view below.
-            }
-        }
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE));
-        } catch (ActivityNotFoundException e) {
-            new AlertDialog.Builder(this)
-                .setTitle(R.string.no_browser_title)
-                .setMessage(R.string.no_browser_message)
-                .setPositiveButton(android.R.string.ok, null)
-                .show();
-        }
     }
 
     private static int errorText(ServerUrl.Error error) {

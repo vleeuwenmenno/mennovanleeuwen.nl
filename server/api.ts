@@ -50,6 +50,7 @@ import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
 import { deleteUser, unlinkIdentity } from './users.ts'
 import { finishGoogleSignIn, startGoogleLink, startGoogleSignIn } from './googleSignIn.ts'
+import { appLoginInfo, redeemAppLogin, startAppLogin } from './appLogin.ts'
 import { createShare, deleteShare, isShareToken, listShares, serveShare } from './shares.ts'
 import { handleMailApi } from './jmap.ts'
 
@@ -108,6 +109,11 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (read && path === '/api/auth/github/login') return startLogin(req, res, url), true
     if (read && path === '/api/auth/github/callback') return await finishLogin(req, res, url), true
     if (read && path === '/api/auth/google/login') return startGoogleSignIn(req, res, url), true
+    // Signing in from the Android app's cloud desktop (server/appLogin.ts): the redeem is
+    // authenticated by its one-time code and PKCE verifier, sent by the app in a way no web page can.
+    if (read && path === '/api/auth/app') return appLoginInfo(res), true
+    if (read && path === '/api/auth/app/start') return startAppLogin(req, res, url), true
+    if (method === 'POST' && path === '/api/auth/app/redeem') return await redeemAppLogin(req, res), true
     if (read && path === '/api/auth/google/callback') return await finishGoogleSignIn(req, res, url), true
     if (read && path === '/api/me') {
       const user = currentUser(req)

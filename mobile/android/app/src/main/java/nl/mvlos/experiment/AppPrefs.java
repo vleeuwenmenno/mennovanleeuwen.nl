@@ -3,7 +3,10 @@ package nl.mvlos.experiment;
 import android.content.Context;
 import android.content.SharedPreferences;
 
-/** The launcher's remembered choice: mode, saved server origin and auto-open. Private to the app. */
+/**
+ * The launcher's remembered choice: mode, saved server origin and auto-open. Private to the app.
+ * Written synchronously: the cloud process reads the same file.
+ */
 final class AppPrefs {
     static final String MODE_LOCAL = "local";
     static final String MODE_CLOUD = "cloud";
@@ -24,7 +27,7 @@ final class AppPrefs {
     }
 
     static void setMode(Context context, String mode) {
-        prefs(context).edit().putString(KEY_MODE, mode).apply();
+        prefs(context).edit().putString(KEY_MODE, mode).commit();
     }
 
     /** The saved server origin, re-validated so a tampered or stale value is never used. */
@@ -36,14 +39,14 @@ final class AppPrefs {
     }
 
     static void setCloud(Context context, String origin) {
-        prefs(context).edit().putString(KEY_SERVER, origin).putString(KEY_MODE, MODE_CLOUD).apply();
+        prefs(context).edit().putString(KEY_SERVER, origin).putString(KEY_MODE, MODE_CLOUD).commit();
     }
 
     /** Forgets the saved server in the app. Does not touch the browser's session for that site. */
     static void forgetServer(Context context) {
         SharedPreferences.Editor editor = prefs(context).edit().remove(KEY_SERVER);
         if (MODE_CLOUD.equals(mode(context))) editor.remove(KEY_MODE);
-        editor.apply();
+        editor.commit();
     }
 
     static boolean autoOpen(Context context) {
@@ -51,6 +54,6 @@ final class AppPrefs {
     }
 
     static void setAutoOpen(Context context, boolean auto) {
-        prefs(context).edit().putBoolean(KEY_AUTO, auto).apply();
+        prefs(context).edit().putBoolean(KEY_AUTO, auto).commit();
     }
 }
