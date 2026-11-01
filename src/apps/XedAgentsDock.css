@@ -1,0 +1,75 @@
+/* Xed's Agents panel: docked as a column at the right of the editor, or (narrow windows) a sheet
+   over it. Its width is --xed-right on .zed-body, which the splitter changes while dragging. */
+.xed-agents {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: var(--xed-right, 380px);
+  min-width: 0;
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  outline: none;
+}
+.xed-agents[hidden] {
+  display: none;
+}
+.xed-agents.is-sheet {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 5;
+  width: min(100%, 420px);
+  box-shadow: -12px 0 30px -12px rgba(0, 0, 0, 0.6);
+  animation: xed-agents-in 0.16s ease-out;
+}
+@keyframes xed-agents-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+.xed-agents-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.xed-agents-title {
+  flex: none;
+  color: var(--fg-bright);
+}
+.xed-agents-threads {
+  min-width: 0;
+  max-width: 55%;
+  margin-left: 4px;
+}
+.xed-agents-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 4px 6px;
+  color: var(--muted);
+}
+.xed-agents-btn:hover {
+  color: var(--fg-bright);
+  background: var(--panel-2);
+}
+.xed-agents-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+@media (pointer: coarse) {
+  .xed-agents-head {
+    height: 40px;
+  }
+  .xed-agents-btn {
+    padding: 8px 10px;
+  }
+}

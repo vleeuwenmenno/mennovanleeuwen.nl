@@ -1,0 +1,35 @@
+/* The placeholder pane (XedAgentsPane.tsx) until the real conversation replaces it. */
+.xed-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.xed-pane-log {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+}
+.xed-pane-chip {
+  padding: 3px 6px;
+  margin-bottom: 4px;
+  background: var(--panel-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.xed-pane-composer {
+  flex: none;
+  resize: none;
+  margin: 0 10px 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-dark);
+  color: var(--fg);
+  font: inherit;
+}
+.xed-pane-composer:focus {
+  outline: none;
+  border-color: var(--accent);
+}
