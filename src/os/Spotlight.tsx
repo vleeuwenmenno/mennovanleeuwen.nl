@@ -20,7 +20,7 @@ import { contributions, profile, projects } from '../data/profile'
 import { timeAgo, useRecents } from '../data/recents'
 import { age, fileKind, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
 import { MEDIA_APP } from '../data/media'
-import { signIn, useAccount } from './account'
+import { signIn, signInWithGoogle, useAccount } from './account'
 import { appHere, cvMode } from './cvMode'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
@@ -722,6 +722,7 @@ export function Spotlight() {
       enterLabel: 'Choose',
     })
     if (account.status === 'anon') action('sign-in', 'Sign in with GitHub', 'login sign in account github sync owner', signIn, '⎆', 'Sync notes and search your repositories')
+    if (account.status === 'anon' && account.signIn.google) action('sign-in-google', 'Sign in with Google', 'login sign in account google sync owner', signInWithGoogle, '⎆', 'Sync notes and settings between devices')
     action('settings', 'Settings', 'settings preferences account launchers gitea forgejo token sync', () => wm.open('settings'), '⚙')
     action('minimize', 'Minimize all windows', 'minimize hide windows show desktop', () => wm.windows.forEach((w) => wm.minimize(w.pid)), '▁')
     action('close', 'Close all windows', 'close quit all windows', () => wm.windows.forEach((w) => wm.close(w.pid)), '✕')

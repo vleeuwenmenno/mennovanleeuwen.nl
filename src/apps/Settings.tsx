@@ -16,6 +16,8 @@ import { addLauncher, cleanUrl, faviconOf, launcherImage, launchersAreFiles, mov
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
+import { inNativeApp, openAppChooser } from '../os/nativeApp'
+import { SignInButtons } from '../os/SignInButtons'
 import { UsersSettings } from './UsersSettings'
 import { openAlert, useAlerts } from '../os/alerts'
 import { formatSize, prettyPath } from '../terminal/vfs'
@@ -28,7 +30,7 @@ import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, u
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasOrgScope, hasRepoScope, orgAccess, signIn, signInWithRepos, signOut, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasGithub, hasOrgScope, hasRepoScope, linkSignIn, orgAccess, signInWithRepos, signOut, unlinkSignIn, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import type { OrgAccess, OrgsResponse } from '../data/code'
 import { APP_META } from '../os/apps'
@@ -80,11 +82,7 @@ const SignInFirst = ({ what }: { what: string }) => {
   return (
     <div className="set-empty">
       <p className="muted">Sign in first to {what}.</p>
-      {account.status === 'anon' && (
-        <button className="btn btn-primary" onClick={signIn}>
-          Sign in with GitHub
-        </button>
-      )}
+      {account.status === 'anon' && <SignInButtons />}
     </div>
   )
 }
@@ -93,6 +91,18 @@ function Account() {
   const account = useAccount()
   const [error, setError] = useState<string | null>(null)
   if (account.status === 'loading') return <p className="muted">Checking…</p>
+  if (account.status === 'off' && inNativeApp())
+    return (
+      <div className="set-hero">
+        <span className="set-hero-avatar is-guest">?</span>
+        <strong>On this device</strong>
+        <p className="muted">This desktop runs inside the Android app without a server. Notes and settings stay on this phone; sign-in, sync, Mail and Agents need a cloud server.</p>
+        <p className="muted">A cloud server opens in a browser tab, where you sign in with GitHub or Google. What you made here is not uploaded or merged.</p>
+        <button className="btn btn-primary" onClick={() => void openAppChooser()}>
+          Use a cloud server…
+        </button>
+      </div>
+    )
   if (account.status === 'off')
     return (
       <p className="muted">
@@ -110,24 +120,28 @@ function Account() {
         ) : account.registration?.full ? (
           <p className="muted">We're full: every account is taken. Existing accounts can still sign in.</p>
         ) : (
-          <p className="muted">Sign in with GitHub for your own desktop: notes, layouts and integrations that follow you between devices.</p>
+          <p className="muted">Sign in for your own desktop: notes, layouts and integrations that follow you between devices.</p>
         )}
-        <button className="btn btn-primary" onClick={signIn}>
-          Sign in with GitHub
-        </button>
+        <SignInButtons />
       </div>
     )
   const u = account.user!
-  const linked = [`GitHub`, ...account.forges.map((f) => f.label), ...(account.google ? ['Google Calendar'] : [])]
+  const signIns = u.identities?.map((i) => (i.provider === 'github' ? 'GitHub' : 'Google sign-in')) ?? ['GitHub']
+  const linked = [...signIns, ...account.forges.map((f) => f.label), ...(account.google ? ['Google Calendar'] : [])]
   return (
     <>
       <div className="set-hero">
         {u.avatar ? <img className="set-hero-avatar" src={u.avatar} alt="" /> : <span className="set-hero-avatar is-guest">{u.login[0].toUpperCase()}</span>}
         <strong>{u.name ?? u.login}</strong>
-        <a className="muted" href={`https://github.com/${u.login}`} target="_blank" rel="noopener noreferrer">
-          @{u.login} on GitHub
-        </a>
+        {hasGithub(u) ? (
+          <a className="muted" href={`https://github.com/${u.login}`} target="_blank" rel="noopener noreferrer">
+            @{u.login} on GitHub
+          </a>
+        ) : (
+          <span className="muted">@{u.login}</span>
+        )}
       </div>
+      <SignInMethods setError={setError} />
       <ul className="set-list">
         <li className="set-row">
           <span className="set-row-text">
@@ -165,6 +179,65 @@ function Account() {
       <p className="muted set-help">
         What is stored and who can see it: <a href="/privacy.html" target="_blank" rel="noopener">privacy</a>.
       </p>
+    </>
+  )
+}
+
+const PROVIDERS = { github: 'GitHub', google: 'Google' } as const
+
+/**
+ * Settings → Account → Sign-in: the ways into this account (server/auth.ts). Another one is only
+ * added from here, signed in, by going through that provider; accounts are never joined because an
+ * address matches. The last one can't be removed.
+ */
+function SignInMethods({ setError }: { setError: (e: string | null) => void }) {
+  const account = useAccount()
+  const u = account.user!
+  const ids = u.identities ?? (hasGithub(u) ? [{ provider: 'github' as const, label: `@${u.login}`, linkedAt: 0 }] : [])
+  const offered = (['github', 'google'] as const).filter((p) => account.signIn[p] || ids.some((i) => i.provider === p))
+  if (offered.length < 2 && ids.length < 2) return null
+  const unlink = async (provider: 'github' | 'google') => {
+    const ok = await ask({
+      title: `Remove ${PROVIDERS[provider]} sign-in?`,
+      body:
+        provider === 'github'
+          ? `You will no longer sign in here with GitHub, and Spotlight stops searching your GitHub repositories.${u.admin ? ' This account is an admin through its GitHub account: that ends too.' : ''} You stay signed in on this device.`
+          : 'You will no longer sign in here with Google. Google Calendar, if connected, stays connected. You stay signed in on this device.',
+      confirm: 'Remove',
+      danger: true,
+    })
+    if (ok) await unlinkSignIn(provider).catch((e: Error) => setError(e.message))
+  }
+  return (
+    <>
+      <h4 className="set-subhead">Sign-in</h4>
+      <ul className="set-list">
+        {offered.map((p) => {
+          const id = ids.find((i) => i.provider === p)
+          return (
+            <li key={p} className="set-row">
+              <span className="set-row-text">
+                <strong>{PROVIDERS[p]}</strong>
+                <span className="muted">{id ? id.label : `Not linked. Link it to sign in with ${PROVIDERS[p]} too.`}</span>
+              </span>
+              {id ? (
+                ids.length > 1 && (
+                  <button className="btn btn-small" onClick={() => void unlink(p)}>
+                    Remove
+                  </button>
+                )
+              ) : (
+                account.signIn[p] && (
+                  <button className="btn btn-small" onClick={() => void linkSignIn(p).catch((e: Error) => setError(e.message))}>
+                    Link {PROVIDERS[p]}
+                  </button>
+                )
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      <p className="muted set-help">Linking lets you sign in to this same account with either one. A GitHub or Google account that already has its own account here can't be linked; accounts are never merged.</p>
     </>
   )
 }
@@ -647,16 +720,33 @@ function Instances() {
       <ul className="set-list">
         <li className="set-row">
           <span className="set-glyph">⌥</span>
-          <span className="set-row-text">
-            <strong>GitHub</strong>
-            <span className="muted">
-              @{account.user!.login} · {hasRepoScope(account.user) ? 'public and private repositories' : 'public repositories only'}
-            </span>
-          </span>
-          {/* Sign-in only asks GitHub for the profile; private repositories take the broad `repo` scope. */}
-          <button className="btn btn-small" onClick={() => signInWithRepos(!hasRepoScope(account.user))}>
-            {hasRepoScope(account.user) ? 'Public only' : 'Allow private'}
-          </button>
+          {hasGithub(account.user) ? (
+            <>
+              <span className="set-row-text">
+                <strong>GitHub</strong>
+                <span className="muted">
+                  @{account.user!.login} · {hasRepoScope(account.user) ? 'public and private repositories' : 'public repositories only'}
+                </span>
+              </span>
+              {/* Sign-in only asks GitHub for the profile; private repositories take the broad `repo` scope. */}
+              <button className="btn btn-small" onClick={() => signInWithRepos(!hasRepoScope(account.user))}>
+                {hasRepoScope(account.user) ? 'Public only' : 'Allow private'}
+              </button>
+            </>
+          ) : (
+            <>
+              {/* An account made with Google: GitHub is linked from here or Settings → Account, never by matching addresses. */}
+              <span className="set-row-text">
+                <strong>GitHub</strong>
+                <span className="muted">Not linked. Link your GitHub account to search its repositories.</span>
+              </span>
+              {account.signIn.github && (
+                <button className="btn btn-small" onClick={() => void linkSignIn('github').catch((e: Error) => setError(e.message))}>
+                  Link GitHub
+                </button>
+              )}
+            </>
+          )}
         </li>
         {account.forges.map((f) => (
           <li key={f.id} className="set-row">
@@ -679,7 +769,7 @@ function Instances() {
       </button>
       <p className="muted set-help">Gitea and Forgejo instances are linked with a personal access token. Spotlight then searches their repositories, issues, pull requests and branches too.</p>
       <p className="muted set-help">Private GitHub repositories need GitHub's <code>repo</code> scope, which also allows writing to them (GitHub has no read-only version). Turning it off again may need the app removed under GitHub → Settings → Applications.</p>
-      <GithubOrgs />
+      {hasGithub(account.user) && <GithubOrgs />}
     </>
   )
 }
