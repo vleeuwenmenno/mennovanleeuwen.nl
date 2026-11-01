@@ -61,9 +61,14 @@ The app (**MvL OS**, `nl.mvlos.experiment`) opens on a native chooser
 
 The bundled page gets one native plugin, `window.Capacitor.Plugins.MvlosApp`
 (`src/os/nativeApp.ts`): `info()` (`{mode: "local", savedServer, version}`) and `openChooser()`.
-Nothing else crosses: no URL opening, storage or tokens. The WebView never loads a remote origin
-(the navigation guard in `MainActivity` sends gesture-initiated `https` links to the browser and
-blocks the rest), no origin is allowlisted for the bridge, `server.url` is never set, and cleartext
+Nothing else crosses: no URL opening, storage or tokens. Capacitor's own core plugins that the
+desktop doesn't need (`CapacitorHttp`, `CapacitorCookies`, `WebView`) are replaced by empty
+plugins of the same name (`DisabledCorePlugins.java`), so their native methods are refused and
+their JavaScript interfaces removed; `SystemBars` stays. The WebView never loads a remote page:
+the navigation guard in `MainActivity` sends gesture-initiated `https` links to the browser and
+blocks the rest, and remote documents are also refused at the request level, which covers form
+POSTs (Android doesn't ask the navigation guard about those) and, on WebViews too old for
+origin-restricted bridge messages, remote frames. No origin is allowlisted for the bridge, `server.url` is never set, and cleartext
 traffic stays off. Do not change API URLs or cookie/CORS policy to put accounts into the on-device
 mode: the account guard relies on the same-origin readable account cookie, and a bundled
 authenticated client would need its own reviewed authentication and storage design.
@@ -1406,7 +1411,10 @@ links the other provider to the signed-in account: a same-origin POST from that 
 (`/api/auth/<github|google>/link`) starts the round trip, which only finishes for the same account
 and the same session. A GitHub or Google account that already has an account of its own here is
 refused (accounts are never merged), and the last sign-in of an account can't be removed. Removing
-GitHub ends admin rights that came from it and revokes its token. Accounts made with Google have a
+GitHub revokes its token; on an admin account it also ends the admin rights and signs the account
+out everywhere, so no request already authorised as admin can finish afterwards. Pending sign-in
+round trips are capped per client address (20, oldest of that address first), so one address
+starting many can't push out anyone else's. Accounts made with Google have a
 login like `name_g` (GitHub logins can't contain `_`), no GitHub token, and no GitHub source in
 Spotlight or the Git app until GitHub is linked.
 

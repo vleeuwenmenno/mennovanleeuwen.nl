@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { clientIp } from './egress.ts'
 import { appSetting, database, decrypt, encrypt, nextUserId, sha256 } from './db.ts'
 import { cookies, guardBodies, HttpError, json, publicOrigin, redirect, setCookie } from './http.ts'
 import { endSession, sessionStored, track, type SessionBinding } from './liveSessions.ts'
@@ -258,22 +259,32 @@ export function chooseRepoScope(req: IncomingMessage, res: ServerResponse, body:
 
 /** How long the provider's page may take before the state is refused. */
 const FLOW_TTL = Number(process.env.AUTH_STATE_TTL_MS) || 10 * 60_000
-/** At most this many round trips wait at once; the oldest give way (one process). */
-const MAX_FLOWS = 1000
-const flows = new Map<string, number>()
+/**
+ * At most this many round trips wait at once (one process), and at most PER_CLIENT from one
+ * address (server/egress.ts clientIp): a client starting more gives up its own oldest, never
+ * someone else's. Once every slot holds a live round trip, new starts are refused until some lapse.
+ */
+const MAX_FLOWS = 10_000
+const PER_CLIENT = Number(process.env.AUTH_FLOWS_PER_CLIENT) || 20
+const flows = new Map<string, { until: number; client: string }>()
 
 export type FlowMode = 'signin' | 'link'
 /** A sealed round trip. `u`/`s`: the account and stored session that asked to link. */
 export type Flow = { p: 'github' | 'google'; n: string; m: FlowMode; b: string; e: number; u?: number; s?: string; v?: string; o?: string; repo?: boolean }
 
-/** Registers a new round trip and returns its sealed cookie value. */
-export function beginFlow(flow: Omit<Flow, 'e'>): string {
+/** Registers a new round trip for this request's address and returns its sealed cookie value. */
+export function beginFlow(req: IncomingMessage, flow: Omit<Flow, 'e'>): string {
   const now = Date.now()
-  for (const [k, until] of flows) {
-    if (until > now && flows.size < MAX_FLOWS) break
-    flows.delete(k)
+  const client = clientIp(req)
+  const mine: string[] = []
+  for (const [k, f] of flows) {
+    if (f.until <= now) flows.delete(k)
+    else if (f.client === client) mine.push(k)
   }
-  flows.set(flow.n, now + FLOW_TTL)
+  // Oldest first (a Map keeps insertion order).
+  while (mine.length >= PER_CLIENT) flows.delete(mine.shift()!)
+  if (flows.size >= MAX_FLOWS) throw new HttpError(503, 'Too many sign-ins at once. Try again in a few minutes.')
+  flows.set(flow.n, { until: now + FLOW_TTL, client })
   return encrypt(JSON.stringify({ ...flow, e: now + FLOW_TTL }))
 }
 
@@ -284,7 +295,7 @@ export function beginFlow(flow: Omit<Flow, 'e'>): string {
  */
 export function finishFlow(req: IncomingMessage, provider: Flow['p'], sealed: string | undefined, state: string | null): Flow | null {
   if (!state) return null
-  const until = flows.get(state)
+  const until = flows.get(state)?.until
   flows.delete(state)
   if (until === undefined || until <= Date.now() || !sealed) return null
   let flow: Flow
@@ -353,7 +364,7 @@ function githubRedirect(req: IncomingMessage, flow: Omit<Flow, 'e' | 'n' | 'p'>)
     state,
     allow_signup: 'false',
   })
-  const set = [setCookie(req, STATE_COOKIE, beginFlow({ ...flow, p: 'github', n: state }), { maxAge: FLOW_TTL / 1000, path: '/api/auth' }), setCookie(req, SCOPE_COOKIE, '', { maxAge: 0, path: '/api/auth' })]
+  const set = [setCookie(req, STATE_COOKIE, beginFlow(req, { ...flow, p: 'github', n: state }), { maxAge: FLOW_TTL / 1000, path: '/api/auth' }), setCookie(req, SCOPE_COOKIE, '', { maxAge: 0, path: '/api/auth' })]
   if (cookies(req)[LEGACY_REPO_COOKIE] !== undefined) set.push(setCookie(req, LEGACY_REPO_COOKIE, '', { maxAge: 0, path: '/api/auth' }))
   return { url: `${GITHUB_WEB}/login/oauth/authorize?${params}`, set }
 }

@@ -201,7 +201,7 @@ function SignInMethods({ setError }: { setError: (e: string | null) => void }) {
       title: `Remove ${PROVIDERS[provider]} sign-in?`,
       body:
         provider === 'github'
-          ? `You will no longer sign in here with GitHub, and Spotlight stops searching your GitHub repositories.${u.admin ? ' This account is an admin through its GitHub account: that ends too.' : ''} You stay signed in on this device.`
+          ? `You will no longer sign in here with GitHub, and Spotlight stops searching your GitHub repositories.${u.admin ? ' This account is an admin through its GitHub account: that ends, and the account is signed out everywhere, this device included. Sign in again with Google.' : ' You stay signed in on this device.'}`
           : 'You will no longer sign in here with Google. Google Calendar, if connected, stays connected. You stay signed in on this device.',
       confirm: 'Remove',
       danger: true,

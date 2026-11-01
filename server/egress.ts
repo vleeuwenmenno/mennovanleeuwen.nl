@@ -112,6 +112,19 @@ export function isPrivate(ip: string): boolean {
 }
 
 /**
+ * The address the request came from, as a key for the per-address limits. The last
+ * X-Forwarded-For entry is the one our own reverse proxy added, but only when the request came
+ * from that proxy (a private address): straight from the internet, the header is the client's to
+ * make up. IPv6 by its /64, which is what one home or server gets.
+ */
+export function clientIp(req: IncomingMessage) {
+  const peer = (req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '')
+  const fwd = String(req.headers['x-forwarded-for'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const ip = (fwd.length && isIP(peer) && isPrivate(peer) ? fwd.at(-1)! : peer).replace(/^::ffff:/, '')
+  return isIP(ip) === 6 ? `${ip.split(':').slice(0, 4).join(':')}::/64` : ip
+}
+
+/**
  * A host name's addresses (IPv4 and IPv6) from DNS, with a deadline of its own (2.5 s a try, two
  * tries) and cancelled for real when `signal` aborts, so a stalled resolver can't hold anything up.
  * Not the system's getaddrinfo, which can be neither cancelled nor timed and ties up one of the

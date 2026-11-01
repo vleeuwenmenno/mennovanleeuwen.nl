@@ -76,9 +76,11 @@ export async function deleteUser(id: number) {
  * Settings → Account: removes one sign-in (GitHub or Google) from the account, which keeps
  * everything else. The last sign-in can't go: the account would have no way in (delete it
  * instead). Without GitHub the account is no admin and loses the GitHub token, which is revoked;
- * Google sign-in keeps no token, so there is nothing to revoke. Its sessions stay signed in.
+ * Google sign-in keeps no token, so there is nothing to revoke. Its sessions stay signed in, except
+ * when GitHub made the account an admin: then every session ends (signOutEverywhere), so no request
+ * already authorised as admin can still finish after the rights are gone. Answers whether it did.
  */
-export async function unlinkIdentity(user: User, provider: string) {
+export async function unlinkIdentity(user: User, provider: string): Promise<{ signedOut: boolean }> {
   if (provider !== 'github' && provider !== 'google') throw new HttpError(404, 'No such sign-in')
   const db = database()
   const has = db.prepare('SELECT provider FROM identities WHERE user_id = ?').all(user.id) as { provider: string }[]
@@ -94,5 +96,8 @@ export async function unlinkIdentity(user: User, provider: string) {
     db.exec('ROLLBACK')
     throw e
   }
+  const demoted = provider === 'github' && user.admin
+  if (demoted) signOutEverywhere(user.id)
   if (provider === 'github') await withPrivateTarget(user, () => revokeGithub(user.githubToken))
+  return { signedOut: demoted }
 }

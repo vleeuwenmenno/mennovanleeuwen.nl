@@ -159,8 +159,12 @@ export async function linkSignIn(provider: 'github' | 'google') {
 
 /** Settings → Account: remove a linked sign-in (never the last one; the server refuses that). */
 export async function unlinkSignIn(provider: 'github' | 'google') {
-  await api(`/api/auth/identities/${provider}`, { method: 'DELETE' })
-  await loadAccount()
+  const { signedOut } = await api<{ signedOut?: boolean }>(`/api/auth/identities/${provider}`, { method: 'DELETE' })
+  if (!signedOut) return void (await loadAccount())
+  // Removing GitHub from an admin account signs it out everywhere (server/users.ts): this browser too.
+  await forgetBrowserAccount()
+  setLoginCookie(null)
+  location.reload()
 }
 
 /** Whether the account has GitHub linked (accounts from before Google sign-in always do). */

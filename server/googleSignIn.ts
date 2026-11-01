@@ -42,7 +42,7 @@ function googleRedirect(req: IncomingMessage, flow: Omit<Flow, 'e' | 'n' | 'p' |
     code_challenge_method: 'S256',
     prompt: 'select_account',
   })
-  const cookie = setCookie(req, STATE_COOKIE, beginFlow({ ...flow, p: 'google', n: state, v: verifier, o: nonce }), { maxAge: 600, path: '/api/auth' })
+  const cookie = setCookie(req, STATE_COOKIE, beginFlow(req, { ...flow, p: 'google', n: state, v: verifier, o: nonce }), { maxAge: 600, path: '/api/auth' })
   return { url: `${AUTH_URL}?${params}`, cookie }
 }
 

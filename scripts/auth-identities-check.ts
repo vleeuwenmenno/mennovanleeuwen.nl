@@ -14,7 +14,9 @@
 //     finished by the same account and session; an identity of another account is refused (no
 //     merge); one per provider; GitHub linked to a Google account brings no admin unless it is the
 //     admin's id; unlinking never removes the last sign-in,
-//   - bans and the registration limits hold for every sign-in.
+//   - bans and the registration limits hold for every sign-in,
+//   - removing GitHub from an admin ends admin rights and signs the account out everywhere,
+//   - one address starting many sign-ins only pushes out its own pending ones, never another's.
 //
 //   node scripts/auth-identities-check.ts
 //
@@ -126,6 +128,8 @@ const ORIGIN = server.origin
 
 class Browser {
   jar = new Map<string, string>()
+  /** Sent with every request: X-Forwarded-For makes it another address (the stand-in proxy is local). */
+  headers: Record<string, string> = {}
   get cookie() {
     return [...this.jar].map(([k, v]) => `${k}=${v}`).join('; ')
   }
@@ -140,7 +144,7 @@ class Browser {
     return res
   }
   async get(path: string) {
-    return this.take(await fetch(`${ORIGIN}${path}`, { redirect: 'manual', headers: { Cookie: this.cookie } }))
+    return this.take(await fetch(`${ORIGIN}${path}`, { redirect: 'manual', headers: { ...this.headers, Cookie: this.cookie } }))
   }
   async send(method: string, path: string, headers: Record<string, string> = {}) {
     return this.take(await fetch(`${ORIGIN}${path}`, { method, redirect: 'manual', headers: { Cookie: this.cookie, 'Content-Type': 'application/json', 'X-MvL-Account': this.jar.get('mvlos_uid') ?? 'visitor', ...headers }, body: method === 'DELETE' ? undefined : '{}' }))
@@ -151,6 +155,7 @@ class Browser {
   clone() {
     const b = new Browser()
     b.jar = new Map(this.jar)
+    b.headers = { ...this.headers }
     return b
   }
 }
@@ -367,6 +372,42 @@ db.prepare("INSERT INTO app_settings (key, value) VALUES ('max_users', ?) ON CON
 check('full: a new Google account is turned away', (await googleSignIn(new Browser(), 'g-new2')) === '/?auth=full')
 check('full: a new GitHub account is turned away', (await githubSignIn(new Browser(), { id: 5005, login: 'dave' })) === '/?auth=full')
 check('full: the admin still gets in', (await githubSignIn(new Browser(), { id: 1001, login: 'admin-renamed' })) === '/?auth=ok')
+
+// ---- Removing GitHub from an admin ----
+
+db.prepare("UPDATE app_settings SET value = '1000' WHERE key = 'max_users'").run()
+link = await googleStart(admin, true)
+r = await googleFinish(admin, link, { claims: claims('g-admin2', link.nonce) })
+check('the admin links another Google account', r === '/?auth=linked-google' && (await admin.me()).user?.admin === true)
+{
+  const res = await admin.send('DELETE', '/api/auth/identities/github')
+  const body = (await res.json()) as { signedOut?: boolean }
+  check('removing GitHub from the admin: done, and says it signed the account out', res.status === 200 && body.signedOut === true)
+  check('...every session of the account ended', !(await admin.me()).user && (db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE user_id = 1').get() as { n: number }).n === 0)
+  const b = new Browser()
+  await googleSignIn(b, 'g-admin2')
+  me = await b.me()
+  check('...and signing in with Google gives the same account, no longer an admin', me.user?.id === 1 && !me.user.admin && !me.user.github)
+}
+
+// ---- One address can't push out another's sign-ins ----
+
+{
+  // Two browsers behind the same address (one browser holds one round trip's cookie).
+  const victim = new Browser()
+  victim.headers = { 'X-Forwarded-For': '203.0.113.5' }
+  const victim2 = victim.clone()
+  const v = await googleStart(victim)
+  const own = await googleStart(victim2)
+  const flood = new Browser()
+  flood.headers = { 'X-Forwarded-For': '198.51.100.7' }
+  for (let i = 0; i < 60; i++) await flood.get('/api/auth/google/login')
+  r = await googleFinish(victim, v, { claims: claims('g-victim', v.nonce) })
+  check("another address starting 60 sign-ins doesn't push out this one's", r === '/?auth=ok')
+  for (let i = 0; i < 25; i++) await victim.clone().get('/api/auth/google/login')
+  r = await googleFinish(victim2, own, { claims: claims('g-victim', own.nonce) })
+  check('the same address starting more than its share gives up its own oldest', r === '/?auth=error')
+}
 
 await server.dispose()
 mock.close()

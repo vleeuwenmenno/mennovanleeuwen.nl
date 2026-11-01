@@ -156,9 +156,9 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       if (refused) return json(res, 409, { error: refused, accountChanged: true, reload: true }, { 'Set-Cookie': uidCookieFix(req, currentUser(req)) }), true
     }
     // Private by default. Public reads and OAuth/signed callbacks finish above this boundary.
-    // Session lifecycle endpoints finish their own logout/removal; guest rejoin and sealed Mail
+    // Session lifecycle endpoints finish their own logout/removal (removing a sign-in may end every session); guest rejoin and sealed Mail
     // pictures authenticate by their own capability (inline pictures restore the sealed session).
-    const independent = path === '/api/auth/logout' || (path === '/api/me' && method === 'DELETE') || path === '/api/empires/away' || path.startsWith('/api/mail/inline/')
+    const independent = path === '/api/auth/logout' || (path === '/api/me' && method === 'DELETE') || (path.startsWith('/api/auth/identities/') && method === 'DELETE') || path === '/api/empires/away' || path.startsWith('/api/mail/inline/')
     if (!independent && !privateRequestActive(req)) {
       const user = requireUser(req)
       return await runPrivateRequest(req, res, user, () => {
@@ -180,7 +180,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (method === 'POST' && path === '/api/auth/github/link') return startGithubLink(req, res), true
     if (method === 'POST' && path === '/api/auth/google/link') return startGoogleLink(req, res), true
     const unlink = /^\/api\/auth\/identities\/([a-z]+)$/.exec(path)
-    if (unlink && method === 'DELETE') return await unlinkIdentity(requireUser(req), unlink[1]), json(res, 200, { ok: true }), true
+    if (unlink && method === 'DELETE') return json(res, 200, { ok: true, ...(await unlinkIdentity(requireUser(req), unlink[1])) }), true
     // Deleting your own account (Settings → Account): everything it stored goes (server/users.ts).
     if (method === 'DELETE' && path === '/api/me') {
       await deleteUser(requireUser(req).id)

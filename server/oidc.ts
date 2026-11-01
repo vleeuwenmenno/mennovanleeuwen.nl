@@ -13,11 +13,27 @@ const ISSUERS = new Set(['https://accounts.google.com', 'accounts.google.com'])
 const SKEW_S = 120
 /** Keys are fetched again after this long at most, or sooner when Google says so (Cache-Control). */
 const MAX_KEY_AGE = 6 * 3600_000
-/** An unknown key id refetches the keys, but not more often than this. */
+/** An unknown key id refetches the keys, and a failed fetch is tried again, but not more often than this. */
 const REFETCH_GAP = 60_000
 
 let keys: { at: number; until: number; byKid: Map<string, KeyObject> } | null = null
 let lastFetch = 0
+let lastFailure = 0
+/** The fetch under way, shared by every sign-in that needs it. */
+let fetching: Promise<void> | null = null
+
+/** Fetches the keys once for everyone waiting; after a failure, sign-ins fail fast for REFETCH_GAP rather than each waiting on Google again. */
+function refreshKeys(): Promise<void> {
+  if (fetching) return fetching
+  if (Date.now() - lastFailure < REFETCH_GAP) return Promise.reject(new Error('Google keys unavailable'))
+  fetching = fetchKeys()
+    .catch((e) => {
+      lastFailure = Date.now()
+      throw e
+    })
+    .finally(() => (fetching = null))
+  return fetching
+}
 
 async function fetchKeys(): Promise<void> {
   lastFetch = Date.now()
@@ -39,10 +55,10 @@ async function fetchKeys(): Promise<void> {
 }
 
 async function keyFor(kid: string): Promise<KeyObject | null> {
-  if (!keys || Date.now() > keys.until) await fetchKeys()
+  if (!keys || Date.now() > keys.until) await refreshKeys()
   let key = keys!.byKid.get(kid)
   if (!key && Date.now() - lastFetch > REFETCH_GAP) {
-    await fetchKeys()
+    await refreshKeys().catch(() => {})
     key = keys!.byKid.get(kid)
   }
   return key ?? null
@@ -94,4 +110,4 @@ function sameText(a: string, b: string) {
 }
 
 /** For the checks: forget the cached keys. */
-export const oidcForTest = { reset: () => ((keys = null), (lastFetch = 0)) }
+export const oidcForTest = { reset: () => ((keys = null), (lastFetch = 0), (lastFailure = 0)) }
