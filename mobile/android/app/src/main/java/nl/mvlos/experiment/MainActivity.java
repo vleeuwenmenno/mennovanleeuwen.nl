@@ -21,6 +21,12 @@ import com.getcapacitor.BridgeActivity;
  * remote origin. Started by LauncherActivity (not exported); Back at the root returns there.
  */
 public class MainActivity extends BridgeActivity {
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) Immersive.enter(this);
+    }
+
     private static boolean isApp(Uri url) {
         return "https".equals(url.getScheme()) && "localhost".equals(url.getHost()) && url.getPort() == -1;
     }
@@ -52,6 +58,9 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(DisabledCorePlugins.ServerPath.class);
         super.onCreate(state);
         if (getBridge() == null) return;
+        // Full screen; Capacitor's SystemBars (insetsHandling "native") hands the cutout to the
+        // page's env(safe-area-inset-*) and pads only the keyboard.
+        Immersive.enter(this);
         // Without WebMessageListener, Capacitor falls back to a JavaScript interface that every frame
         // can reach, so remote frames are refused as well as remote pages.
         boolean framesSafe = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER);

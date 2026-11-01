@@ -3,7 +3,7 @@
     android:id="@+id/cloud_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?android:attr/colorBackground">
+    android:background="@android:color/black">
 
     <WebView
         android:id="@+id/cloud_web"

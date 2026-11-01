@@ -56,6 +56,15 @@ The app (**MvL OS**, `nl.mvlos.experiment`) opens on a native chooser
   cloud process ends and its profile directory is deleted), then forgets the address. Nothing
   changes unless that cleanup finished. Connecting to another server does the
   same for the previous one first. It doesn't touch the user's browser: a session there stays.
+- **Full screen** everywhere (`Immersive.java`): the status and navigation bars are hidden and
+  come back for a moment with a swipe from the screen edge; Back and gesture navigation keep
+  working, and full screen returns after dialogs, the keyboard or the sign-in browser. The content
+  draws edge to edge. Both desktops pad only for the keyboard and hand a display cutout to the
+  page as `env(safe-area-inset-*)`, which MvL OS already uses (`viewport-fit=cover`), so its top
+  bar stays clear of a camera notch; WebViews before version 140, which don't pass insets on,
+  get the cutout as padding instead (a black strip). The on-device desktop gets this from
+  Capacitor's SystemBars (`insetsHandling: "native"`), the cloud desktop from the same rule in
+  `Immersive.webViewInsets`; the chooser pads for the cutout and the keyboard.
 - *Open my choice automatically* skips the chooser on a fresh launch. The chooser stays reachable:
   Back at the root of either desktop, *Choose mode* in Settings → Account of the cloud desktop, and
   the launcher icon's long-press shortcut *Choose mode*.
@@ -153,14 +162,14 @@ adb shell am start -n nl.mvlos.experiment/.LauncherActivity
 ```
 
 Alternatively transfer the debug APK to your phone and open it, allowing installation
-from that file app when Android asks. It appears as **MvL OS** (version 1.2), separately
+from that file app when Android asks. It appears as **MvL OS** (version 1.3), separately
 from the website/PWA. On this device needs no server: try local notes, Terminal and games.
 Uninstalling clears its local guest data; Android backup is disabled. Debug APKs are signed with
 the building machine's debug key (`~/.android/debug.keystore`): an APK built with another key
 can't update an installed one, so uninstall the old one first (that clears its guest data).
 `./gradlew testDebugUnitTest` runs the server address, navigation and cookie checks
 (`ServerUrlTest`, `CloudPolicyTest`, `CloudLoginCookiesTest`). `-PmvlosTest` builds an emulator
-test variant (version `1.2-test`) that also trusts user-installed CAs in the debuggable build and
+test variant (version `1.3-test`) that also trusts user-installed CAs in the debuggable build and
 lets Chrome DevTools inspect the cloud WebView, for testing against a local HTTPS server with a
 test CA; never hand that build to users. Without the flag the APK trusts system CAs only.
 
@@ -170,8 +179,8 @@ Generated web assets, SDK paths, dependencies and APKs are ignored by git. The w
 is pinned to Gradle 8.14.3. If its initial download times out, retry on a working
 connection or raise `networkTimeout` in `gradle-wrapper.properties` locally.
 
-Capacitor SystemBars uses native insets to keep the WebView clear of system bars and
-cutouts; `adjustResize` supports keyboard resizing. Android Back first follows WebView
+Capacitor SystemBars handles the on-device desktop's insets natively (see Full screen above);
+`adjustResize` supports keyboard resizing. Android Back first follows WebView
 history and otherwise returns to the chooser. It does not yet close desktop windows or
 OS dialogs. The debug APK was smoke-tested on an Android 16 emulator (chooser, address checks,
 on-device desktop, Custom Tab, Disconnect, the plugin). Physical-device keyboard, rotation,

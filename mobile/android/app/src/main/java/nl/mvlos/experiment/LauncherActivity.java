@@ -109,6 +109,7 @@ public class LauncherActivity extends AppCompatActivity {
 
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_launcher);
+        Immersive.enter(this);
         View root = findViewById(R.id.launcher_root);
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
@@ -155,6 +156,12 @@ public class LauncherActivity extends AppCompatActivity {
         auto.setOnCheckedChangeListener((v, checked) -> AppPrefs.setAutoOpen(this, checked));
 
         if (autoServer != null) openCloud();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && findViewById(R.id.launcher_root) != null) Immersive.enter(this);
     }
 
     private void refreshSaved() {

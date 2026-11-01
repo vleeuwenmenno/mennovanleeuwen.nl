@@ -30,9 +30,6 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.browser.customtabs.CustomTabsClient;
 import androidx.browser.customtabs.CustomTabsIntent;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 import java.io.ByteArrayInputStream;
 import java.util.Collections;
 
@@ -90,13 +87,8 @@ public class CloudActivity extends AppCompatActivity {
         live = new java.lang.ref.WeakReference<>(this);
         EdgeToEdge.enable(this);
         setContentView(R.layout.activity_cloud);
-        View root = findViewById(R.id.cloud_root);
-        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
-            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
-                | WindowInsetsCompat.Type.displayCutout() | WindowInsetsCompat.Type.ime());
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            return WindowInsetsCompat.CONSUMED;
-        });
+        Immersive.enter(this);
+        Immersive.webViewInsets(this, findViewById(R.id.cloud_root));
         web = findViewById(R.id.cloud_web);
         progress = findViewById(R.id.cloud_progress);
         errorView = findViewById(R.id.cloud_error);
@@ -147,6 +139,13 @@ public class CloudActivity extends AppCompatActivity {
         if (state != null) web.restoreState(state);
         if (state == null || web.getUrl() == null) web.loadUrl(origin + "/");
         handleReturn(getIntent());
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // Back from a dialog, the keyboard or the sign-in browser: full screen again.
+        if (hasFocus) Immersive.enter(this);
     }
 
     @Override
