@@ -124,6 +124,7 @@ try {
   // Remove the installation from the Workshop (explicit, confirmed).
   await p.eval(`document.querySelector('.widget-custom [aria-label="Edit widget source"]').click()`)
   await p.waitFor(`!!document.querySelector('.wp-workshop')`)
+  check('Edit source opens the folder the widget was built from', await p.eval(`import('/src/widgets/platform/sources.ts').then(async m=>{const a=(await import('/src/widgets/platform/installations.ts')).installations.get()[${JSON.stringify(id)}].active.source;const at=m.sourcePath(a);const moved=m.sourcePath({...a,path:'/Projects/New folder/x'});return !!at&&document.querySelector('.wp-workshop input[aria-label="Widget source folder"]').value===at&&moved.endsWith('/Projects/New folder/x')})`))
   await button('Remove this widget')
   await p.waitFor(`[...document.querySelectorAll('button')].some(b=>b.textContent==='Remove widget')`, 5000)
   await p.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Remove widget').click()`)
