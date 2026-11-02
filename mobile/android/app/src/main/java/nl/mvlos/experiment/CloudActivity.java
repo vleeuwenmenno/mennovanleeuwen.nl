@@ -154,7 +154,7 @@ public class CloudActivity extends AppCompatActivity {
         String next = checkedOrigin(intent.getStringExtra(EXTRA_ORIGIN));
         if (next != null && !next.equals(origin)) {
             origin = next;
-            authOp++;
+            newOp();
             freshStart = true;
             web.loadUrl(origin + "/");
         }
@@ -176,8 +176,8 @@ public class CloudActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        opAtDestroy = authOp;
-        authOp++;
+        // This screen's answers stop counting; the latest attempt (shared) stays, so a late failure of it is handed over.
+        authOp = ++opSeq;
         if (web != null) {
             web.stopLoading();
             web.destroy();
@@ -202,7 +202,7 @@ public class CloudActivity extends AppCompatActivity {
 
     private void startLogin(String provider) {
         if (installingOp != 0) return;
-        final int op = ++authOp;
+        final int op = newOp();
         // A new sign-in replaces any browser sign-in still waiting: its return no longer counts,
         // also while this one is still asking the server what it supports.
         CloudLogin.clear(this);
@@ -348,7 +348,21 @@ public class CloudActivity extends AppCompatActivity {
 
     private static final String TAG = "MvLOS";
     /** The sign-in that was current when this screen was destroyed: its late answer is not a superseded one. */
-    private int opAtDestroy = -1;
+    /**
+     * Operation numbers are unique across screens (a recreated screen counts on), and the latest
+     * attempt or cancel anywhere is remembered: only its late answer is handed over, and only while
+     * no newer attempt has started.
+     */
+    private static int opSeq;
+    private static int latestAttempt;
+    private static int noticeOp;
+
+    /** A new sign-in attempt (or a cancel): every older answer stops counting, on every screen. */
+    private int newOp() {
+        authOp = ++opSeq;
+        latestAttempt = authOp;
+        return authOp;
+    }
     private boolean resumed;
     /**
      * A sign-in outcome that arrived after its screen was gone (same process): for which server and
@@ -364,10 +378,11 @@ public class CloudActivity extends AppCompatActivity {
      * failure to the next screen, so it is never just lost.
      */
     private void dropped(int op, String server, String what) {
-        boolean gone = (isDestroyed() || isFinishing()) && op == opAtDestroy;
+        boolean gone = (isDestroyed() || isFinishing()) && op == latestAttempt;
         android.util.Log.w(TAG, "native sign-in answer dropped (" + (gone ? "screen gone" : "replaced") + ")");
         if (!gone) return;
         noticeOrigin = server;
+        noticeOp = op;
         noticeText = getString(R.string.native_google_failed_code, what);
         CloudActivity next = live.get();
         if (next != null && next != this && next.resumed) next.showNotice();
@@ -377,10 +392,11 @@ public class CloudActivity extends AppCompatActivity {
     private void showNotice() {
         if (noticeText == null || web == null || origin == null) return;
         String text = noticeText;
-        boolean mine = origin.equals(noticeOrigin);
+        // Not for this server, or a newer attempt has started since: it would only get in the way.
+        boolean show = origin.equals(noticeOrigin) && noticeOp == latestAttempt && installingOp == 0;
         noticeText = null;
         noticeOrigin = null;
-        if (mine && installingOp == 0) offerBrowser(++authOp, origin, text);
+        if (show) offerBrowser(newOp(), origin, text);
     }
 
     @Override
@@ -404,7 +420,7 @@ public class CloudActivity extends AppCompatActivity {
             .setPositiveButton(R.string.native_google_browser, (d, w) -> {
                 if (op == authOp && server.equals(origin)) openBrowser(CloudLogin.begin(this, server, "google"));
             })
-            .setNegativeButton(android.R.string.cancel, (d, w) -> authOp++)
+            .setNegativeButton(android.R.string.cancel, (d, w) -> newOp())
             .show();
     }
 
@@ -455,7 +471,7 @@ public class CloudActivity extends AppCompatActivity {
             return;
         }
         // The return is a sign-in of its own now: anything older no longer lands.
-        final int op = ++authOp;
+        final int op = newOp();
         final String verifier = pending.verifier;
         final String oldCookie = CookieManager.getInstance().getCookie(server + "/");
         progress.setVisibility(View.VISIBLE);
