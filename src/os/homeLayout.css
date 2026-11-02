@@ -6,16 +6,18 @@
   overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
 }
 .desk-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* Phone home screens: fixed pages side by side (src/os/homePages.ts), nothing scrolls down. */
+/* Phone home screens: fixed pages side by side (src/os/homePages.ts), nothing scrolls down. The dots sit
+   right above the dock, wherever it measured to be (--home-dock-edge, src/os/bottomReserve.ts). */
 .home-pages {
-  position: fixed; z-index: 100; left: 0; right: 0; bottom: calc(90px + var(--sab, 0px));
+  position: fixed; z-index: 100; left: 0; right: 0; bottom: calc(var(--home-dock-edge, calc(82px + var(--sab, 0px))) + 6px);
   display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none;
 }
 .home-pages > * { pointer-events: auto; }
 .home-dots {
-  display: flex; align-items: center; height: 40px; padding: 0 4px; border-radius: 20px;
+  display: flex; align-items: center; height: 28px; padding: 0 4px; border-radius: 14px;
   background: color-mix(in srgb, var(--bg) 62%, transparent);
 }
+/* The pill is 28px; the buttons in it keep a 40px tap target (6px over its edges, where the page keeps room: bottomReserve.ts). */
 .home-dot, .home-edit { min-width: 28px; height: 40px; padding: 0; display: grid; place-items: center; color: var(--fg); background: none; border: 0; font: inherit; }
 .home-dot span { width: 8px; height: 8px; border-radius: 50%; background: color-mix(in srgb, var(--fg) 40%, transparent); transition: width 0.15s, background 0.15s; }
 .home-dot[aria-current] span { width: 18px; border-radius: 4px; background: var(--accent); }

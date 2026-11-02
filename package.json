@@ -134,6 +134,7 @@
     "check:widget-resize": "node scripts/widget-resize-e2e.ts",
     "check:home-pages": "node scripts/home-pages-check.ts",
     "check:mobile-home": "node scripts/mobile-home-e2e.ts",
+    "check:home-hold": "node scripts/home-hold-e2e.ts",
     "check:widgets-sync": "node scripts/widgets-sync-check.ts",
     "check:dock-drag": "node scripts/dock-drag-e2e.ts",
     "check:desktop-layout": "node scripts/desktop-layout-check.ts",

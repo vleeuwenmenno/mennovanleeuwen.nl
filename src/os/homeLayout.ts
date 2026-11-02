@@ -4,13 +4,25 @@ export const ICON_W = 100
 export const ICON_H = 120
 export const HOME_LEFT = 14
 export const HOME_TOP = 40
+/** An icon is this tall; the rest of its cell (ICON_H) is only the gap to the row below, so the last row needs no gap. */
+export const ICON_VISUAL_H = 112
+/** Fallback for the room the dock takes at the bottom of the desktop; the real one is measured (bottomReserve.ts). */
+export const DESK_BOTTOM = 100
+let deskBottom = DESK_BOTTOM
+/** The room kept free at the bottom of the desktop for the dock, in page px. */
+export const deskBottomReserve = () => deskBottom
+export function setDeskBottomReserve(px: number) {
+  deskBottom = Number.isFinite(px) && px >= 0 ? Math.round(px) : DESK_BOTTOM
+}
+/** Whole rows of icons that fit in `height` above the reserve; the last one may use its own gap. */
+export const deskRows = (height: number) => Math.max(1, Math.floor((height - HOME_TOP - deskBottom + (ICON_H - ICON_VISUAL_H)) / ICON_H))
 export type HomeRect = { x: number; y: number; w: number; h: number }
 export const overlaps = (a: HomeRect, b: HomeRect) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 
 /** Nearest free lattice origin on the current screen, or the first free row below it. */
 export function freeHomeRect(want: HomeRect, occupied: HomeRect[], width: number, height: number, stepX = HOME_GRID, stepY = HOME_GRID, preserveOverflow = false): HomeRect {
   const cols = Math.max(1, Math.floor((width - HOME_LEFT * 2 - want.w) / stepX) + 1)
-  const rows = Math.max(1, Math.floor((height - HOME_TOP - 100 - want.h) / stepY) + 1)
+  const rows = Math.max(1, Math.floor((height - HOME_TOP - deskBottom - want.h) / stepY) + 1)
   const left = HOME_LEFT
   const clear = (r: HomeRect) => !occupied.some((o) => overlaps(r, o))
   const wantedRow = Math.max(0, Math.round((want.y - HOME_TOP) / stepY))
@@ -40,7 +52,7 @@ export function freeHomeRect(want: HomeRect, occupied: HomeRect[], width: number
 export type HomeCell = { col: number; row: number }
 export function iconLayout(ids: string[], stored: Record<string, HomeCell>, width: number, height: number, occupied: HomeRect[] = []): Record<string, HomeCell> {
   const cols = Math.max(1, Math.floor((width - HOME_LEFT * 2) / ICON_W))
-  const rows = Math.max(1, Math.floor((height - HOME_TOP - 100) / ICON_H))
+  const rows = deskRows(height)
   const right = HOME_LEFT + (cols - 1) * ICON_W
   const out: Record<string, HomeCell> = {}
   const used = [...occupied]

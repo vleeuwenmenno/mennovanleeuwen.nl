@@ -2,7 +2,7 @@ import { useEffect, useRef, type RefObject } from 'react'
 import { DRAG_FILES, getDragged, setDragged } from '../data/seafile'
 import { droppedFiles, type Picked } from '../data/uploads'
 import { kindOfName, type FileKind } from '../terminal/vfs'
-import { closeContextMenu, releaseTouchPress } from './ContextMenu'
+import { closeContextMenu, forgetSecondHold, isSecondHold, openHeldMenu, ownTouchPress, primeSecondHold, releaseTouchPress, TOUCH_HOLD_MS, touchSpoiled } from './ContextMenu'
 import type { AppId } from './wm'
 import { toUi, uiPoint } from './uiScale'
 
@@ -403,23 +403,28 @@ export function beginPointerDrag(items: DragItem[], source: string, opts: { ghos
 
 // --- holding with a finger ------------------------------------------------------------------------
 
-const LIFT_MS = 350
 const SLOP = 10
 
 /**
  * Touch screens: hold an item still for a moment and it lifts (with a buzz); move the finger then
- * and it drags, to every target a mouse drag reaches. Holding on without moving still opens the
- * item's menu (the long press of ContextMenu.tsx); moving after that closes the menu and drags.
- * Call it from onPointerDown; `items` is asked at the moment the drag starts.
+ * and it drags, to every target a mouse drag reaches. A lift never opens the item's menu: let go
+ * without moving, then hold the same item again within a few seconds (SECOND_HOLD_MS) and the
+ * second hold opens it (with a buzz). Call it from onPointerDown; `items` is asked at the moment
+ * the drag starts.
  */
 export function holdToDrag(e: React.PointerEvent | PointerEvent, items: () => DragItem[] | null, source: string, files?: () => Promise<Picked[]>) {
   if (e.pointerType !== 'touch' || !e.isPrimary) return
   const el = e.currentTarget as HTMLElement | null
   const id = e.pointerId
   const start = { x: e.clientX, y: e.clientY }
+  let at = { ...start }
+  // This finger is the gesture's: the browser's long press and contextmenu stay out of it.
+  ownTouchPress(id)
+  const second = isSecondHold(el)
   let lifted = false
+  let menu = false
   let drag: PointerDrag | null = null
-  const timer = setTimeout(() => {
+  const lift = () => {
     lifted = true
     el?.setAttribute('data-lifted', '')
     try {
@@ -427,21 +432,45 @@ export function holdToDrag(e: React.PointerEvent | PointerEvent, items: () => Dr
     } catch {
       /* no vibration */
     }
-  }, LIFT_MS)
+  }
+  const timer = setTimeout(() => {
+    // A second finger is a pinch or a two-finger scroll, never a hold.
+    if (touchSpoiled()) return stop()
+    if (second) {
+      forgetSecondHold()
+      // An item without a menu (nothing took the contextmenu) is lifted again instead.
+      if (el && openHeldMenu(el, at.x, at.y)) menu = true
+      else lift()
+    } else lift()
+  }, TOUCH_HOLD_MS)
   // Once lifted, the finger drags instead of scrolling.
   const noScroll = (ev: TouchEvent) => {
     if (lifted && ev.cancelable) ev.preventDefault()
   }
+  const swallowClick = () => {
+    // The tap the browser sends after the lift is the hold's, not a click on what is underneath.
+    const swallow = (c: Event) => {
+      c.preventDefault()
+      c.stopImmediatePropagation()
+    }
+    window.addEventListener('click', swallow, { capture: true, once: true })
+    setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 600)
+  }
   const move = (ev: PointerEvent) => {
     if (ev.pointerId !== id) return
+    at = { x: ev.clientX, y: ev.clientY }
     const far = Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > SLOP
+    if (menu) return
     if (!lifted) {
-      if (far) stop()
+      if (far) {
+        forgetSecondHold()
+        stop()
+      }
       return
     }
     if (!drag && far) {
       const list = items()
-      if (!list?.length) return stop()
+      if (!list?.length || touchSpoiled()) return stop()
       releaseTouchPress()
       closeContextMenu()
       drag = beginPointerDrag(list, source, { ghost: 'always', files })
@@ -452,13 +481,11 @@ export function holdToDrag(e: React.PointerEvent | PointerEvent, items: () => Dr
     if (ev.pointerId !== id) return
     if (drag) {
       drag.end(ev.clientX, ev.clientY)
-      // The tap the browser sends after the lift is the drop's, not a click on what is underneath.
-      const swallow = (c: Event) => {
-        c.preventDefault()
-        c.stopImmediatePropagation()
-      }
-      window.addEventListener('click', swallow, { capture: true, once: true })
-      setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 600)
+      swallowClick()
+    } else if (lifted) {
+      // Lifted and put back down: the next hold on this item is its menu's.
+      primeSecondHold(el)
+      swallowClick()
     }
     stop()
   }

@@ -5651,13 +5651,31 @@ something. Small dots above the dock show the pages (named *Page 2 of 3*, the cu
 44 px-wide targets); a pencil next to them opens **Edit home screen**, as does the empty home's long
 press menu.
 
+The pages use all the room above the dots. What is kept free at the bottom is measured, not
+guessed ([`src/os/bottomReserve.ts`](src/os/bottomReserve.ts)): the dock's real height and its distance
+from the edge (which includes a phone's safe area and follows the dock's size and the UI scale), the
+28 px pill of the dots 6 px above it (their buttons keep a 40 px tap target, reaching 6 px over the
+pill's edges), and 6 px to the lowest row. The lowest row of icons needs only its 112 px icon, not the
+8 px gap below it. Nothing else is reserved; nothing scrolls down. A change of dock, screen,
+rotation or UI scale only re-lays out what is shown: the saved places are not rewritten. On the
+desktop the same measurement replaces the fixed 100 px below the icons (4 px above the dock, or 4 px
+when the dock always hides and there is a mouse).
+
 - **Lift and move.** Hold an icon or a widget's top strip still for about 0.4 s (a buzz): it lifts,
   the page stops following the finger and the item does. Hold it at the left or right edge for half
   a second and the screen turns to the next page (on the last page, if it holds something, a new
   one is made). Let go, and it takes the nearest free cell there; nothing swaps, nothing else
-  moves, nothing overlaps, and an item never hangs between two pages. Let go without moving and it is
-  a long press: the item's menu, which has **Move to page** (the alternative to dragging) and, for
-  widgets, Move up, down and to top.
+  moves, nothing overlaps, and an item never hangs between two pages. A lift never opens a menu.
+- **Two holds for the menu.** Lift the item, let go without dragging, then hold the same item again
+  within 3 seconds (`SECOND_HOLD_MS` in [`ContextMenu.tsx`](src/os/ContextMenu.tsx)): its menu opens
+  once, with a second buzz where the device has a vibration motor (best effort: iOS Safari has none, and
+  nothing is promised there). The menu has **Move to page** (the alternative to dragging) and, for
+  widgets, Move up, down and to top. The wait starts over when the second hold takes too long, the
+  finger moves or is cancelled, a second finger joins, another item or empty space is touched, or
+  the first hold was dragged and dropped. A drag or drop never opens a menu, and neither does the
+  browser's own long-press menu for a held finger (it is dropped for these items). The same menu is
+  one right-click, or the keyboard's context-menu key / Shift+F10 on the focused icon, away; and
+  with *Edit home screen* open the hint under the dots says how to reach it.
 - **Edit mode** has *Add page*, *Remove page* and *Done*. Only an empty page can be removed (the
   button says so); later pages move down one and nothing is deleted. At most 12 pages. Back leaves
   the editor.
@@ -5681,7 +5699,10 @@ coordinates save independently. Old mobile column layouts migrate in their saved
 pages without saving automatic positions or changing the desktop. The first manual mobile edit
 freezes those initial rows in the independent mobile set, so later removals cannot change
 untouched widgets' starting coordinates on reload.
-`pnpm check:home-pages` (pure layout, migration, drops), `pnpm check:mobile-home` (real touch in a
+`pnpm check:home-hold` covers the two-hold menu (single hold: no menu; second hold: exactly one;
+moved, cancelled, expired, two-finger and other-item sequences start over; drag and drop never open
+one; right-click and keyboard menus) and the bottom edge (lowest row clear of dots and dock on short,
+tall and landscape phones, UI scales, a safe area and a taller dock). `pnpm check:home-pages` (pure layout, migration, drops), `pnpm check:mobile-home` (real touch in a
 muted phone-sized Chromium: swipes, long press, dragging between pages, dots, edit mode, dock cap,
 Back, resize, blocked storage, desktop) and `pnpm check:desktop-layout` (crowded placement, independent
 mobile coordinates, reload and migration, touch widget and icon moves, app control reachability) cover this.
@@ -5721,8 +5742,8 @@ does not select its labels or show the browser's callout (see *Selecting text* a
 
 On phones, notes, phone-compatible widgets and icons sit on fixed home screens you swipe sideways
 (see *Phone home screens* above). Hold a note or widget's top strip, or an icon, until it lifts, then
-drag it, to the screen edge to change page; long-press for *Move to page*, *Move up*, *Move down* and
-*Move to top*. Widget selection and grid coordinates belong to the independent synced mobile
+drag it, to the screen edge to change page; let go and hold again for *Move to page*, *Move up*,
+*Move down* and *Move to top*. Widget selection and grid coordinates belong to the independent synced mobile
 set; desktop placement stays intact.
 
 The MvL OS menu (top left) opens the About app (*About this system*), Settings, and the Changelog
@@ -5732,8 +5753,9 @@ brings them back). On a phone, this leaves the icons on the home screens: tap on
 
 Dragging works with a finger too: drag a desktop icon directly, or hold a row in Files still
 until it lifts with a buzz, then move it, to
-the same places a mouse drags to. Holding on without moving opens its menu as before, and moving
-after that closes the menu and drags.
+the same places a mouse drags to. Items that lift (phone icons, phone widgets, Files rows) take
+two holds for their menu, so it never opens on top of a drag: hold to lift, let go, hold the same
+item again within 3 seconds (see *Phone home screens*). Everything else keeps the single long press.
 
 On phones and touch devices, **Maximize** fills all four edges, including after rotation.
 The title bar, OS bar and dock disappear, with no window border, margin or shadow. Notch and

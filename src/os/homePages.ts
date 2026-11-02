@@ -1,4 +1,4 @@
-import { HOME_GRID, HOME_LEFT, HOME_TOP, ICON_H, ICON_W, mobileHomeGeometry, overlaps, type HomeRect } from './homeLayout.ts'
+import { HOME_GRID, HOME_LEFT, HOME_TOP, ICON_H, ICON_VISUAL_H, ICON_W, mobileHomeGeometry, overlaps, type HomeRect } from './homeLayout.ts'
 
 /**
  * Phone home screens: fixed pages side by side, no vertical scrolling. A widget or note's window
@@ -8,8 +8,14 @@ import { HOME_GRID, HOME_LEFT, HOME_TOP, ICON_H, ICON_W, mobileHomeGeometry, ove
  */
 export const PAGE_STRIDE = 1000
 export const MAX_PAGES = 12
-/** Room kept free below a page for the dock. */
-export const PAGE_DOCK = 132
+/** Fallback for the room kept free below a page for the page dots and the dock; the real one is measured (bottomReserve.ts). */
+export const PAGE_DOCK = 122
+let pageDockPx = PAGE_DOCK
+/** Room kept free below a page: the dock, the page dots above it, and the phone's safe area, in page px. */
+export const pageDock = () => pageDockPx
+export function setPageDock(px: number) {
+  pageDockPx = Number.isFinite(px) && px >= 0 ? Math.round(px) : PAGE_DOCK
+}
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 export const clampPage = (page: number) => clamp(Math.floor(Number.isFinite(page) ? page : 0), 0, MAX_PAGES - 1)
@@ -26,8 +32,9 @@ export function fromContentX(cx: number, w: number, width: number, pages = MAX_P
 }
 
 /** Usable height of one page. */
-export const pageHeight = (height: number) => Math.max(1, height - HOME_TOP - PAGE_DOCK)
-export const pageRows = (height: number) => Math.max(1, Math.floor(pageHeight(height) / ICON_H))
+export const pageHeight = (height: number) => Math.max(1, height - HOME_TOP - pageDockPx)
+/** Whole rows that fit: the last one only needs its icon, not the gap a cell keeps below it. */
+export const pageRows = (height: number) => Math.max(1, Math.floor((pageHeight(height) + (ICON_H - ICON_VISUAL_H)) / ICON_H))
 export const pageCols = (width: number) => Math.max(1, Math.floor((width - HOME_LEFT * 2) / ICON_W))
 
 /**
@@ -81,7 +88,7 @@ export function fitPhoneWidget(g: { x: number; w: number }, width: number): { x:
 /** The nearest free lattice cell wholly on a page, or none. Ties go to the earlier row, then column. */
 export function fitOnPage(want: HomeRect, occupied: HomeRect[], width: number, height: number, stepX = HOME_GRID, stepY = HOME_GRID): HomeRect | undefined {
   const maxX = Math.max(HOME_LEFT, width - HOME_LEFT - want.w)
-  const maxY = Math.max(HOME_TOP, height - PAGE_DOCK - want.h)
+  const maxY = Math.max(HOME_TOP, height - pageDockPx - want.h)
   const clear = (r: HomeRect) => !occupied.some((o) => overlaps(r, o))
   let best: HomeRect | undefined
   let distance = Infinity
@@ -119,7 +126,7 @@ export function arrangePages(items: (PagedItem & { drawnW?: number; drawnH?: num
       if (r) placed = { page, r }
     }
     // Nothing has room (every page full): stay on the asked-for page, clamped inside it.
-    placed ??= { page: page0, r: { ...outer, x: clamp(outer.x, HOME_LEFT, Math.max(HOME_LEFT, width - HOME_LEFT - outer.w)), y: clamp(outer.y, HOME_TOP, Math.max(HOME_TOP, height - PAGE_DOCK - outer.h)) } }
+    placed ??= { page: page0, r: { ...outer, x: clamp(outer.x, HOME_LEFT, Math.max(HOME_LEFT, width - HOME_LEFT - outer.w)), y: clamp(outer.y, HOME_TOP, Math.max(HOME_TOP, height - pageDockPx - outer.h)) } }
     taken[placed.page].push(placed.r)
     result.set(item.id, { x: joinX(placed.page, placed.r.x + dx), y: placed.r.y + dy, w: item.w, h: item.h })
   }
