@@ -447,7 +447,14 @@ function apply(state: State, action: Action): State {
         ...state,
         phone: action.phone,
         windows: state.windows.map((w) => {
-          if (w.app === 'widget') return action.phone ? w : { ...w, ...projectWidget(w.want ?? w, w.wantScreen, width, height) }
+          if (w.app === 'widget') {
+            if (!action.phone) return { ...w, ...projectWidget(w.want ?? w, w.wantScreen, width, height) }
+            // A phone page is only as wide as the screen: shown narrower (and kept on its page) when
+            // it is smaller than the widget, wide again when it grows back; the saved place is untouched.
+            const g = w.want ?? w
+            const wide = Math.max(1, Math.min(g.w, width - 2 * HOME_LEFT))
+            return { ...w, w: wide, x: joinX(pageOfX(g.x), Math.max(HOME_LEFT, Math.min(localX(g.x), width - wide - HOME_LEFT))) }
+          }
           if (w.snap) return { ...w, ...snapRect(w.snap, width, height) }
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
           // Fitted from where it was put, not from an earlier fitting: a bigger screen gets it back as it was.
@@ -925,9 +932,12 @@ export function WindowManagerProvider({
       const rec = entry?.place
       // A resize shows the place's share of the room without changing it, so what is saved is
       // still tagged with the screen it was put on, not the one the window happens to be on.
-      const from = !state.phone && w.wantScreen ? w.wantScreen : { vw, vh }
-      const round = { x: Math.round(state.phone ? localX(g.x) : g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw: from.vw, vh: from.vh, phone: state.phone }
-      put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round,
+      // A place saved before screens were known stays unknown until it is moved or resized by hand
+      // (that sets wantScreen): minimizing it must not invent the screen it happens to be on.
+      const keepUnknown = !state.phone && !w.wantScreen && !!rec?.screenUnknown
+      const from = keepUnknown ? { vw: rec!.vw, vh: rec!.vh } : !state.phone && w.wantScreen ? w.wantScreen : { vw, vh }
+      const round = { x: Math.round(state.phone ? localX(g.x) : g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw: from.vw, vh: from.vh, phone: keepUnknown ? rec!.phone : state.phone }
+      put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round, ...(keepUnknown ? { screenUnknown: true } : {}),
         ...(state.phone ? { homeGrid: true, page: pageOfX(g.x) } : {}), stack: w.stack,
         minimized: w.minimized || undefined, at: nextAt(rec) }
 

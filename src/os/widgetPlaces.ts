@@ -180,7 +180,11 @@ if (import.meta.hot) import.meta.hot.dispose(disposeMobile)
 /** Freeze the old column's ordered starting coordinates on first edit, without touching its source.
  * Otherwise deleting an earlier legacy entry would change every later entry's row on reload. */
 export function migrateMobileWidgets(set: WidgetSet, width: number, height: number): WidgetSet {
-  const ordered = Object.entries(set.places).sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
+  // The same order as widgetsShown (wm.tsx) projects them in: keys first (as liveWidgets lists
+  // them), then the stable stack/id sort, so equal ids and stacks keep the same index in both.
+  const ordered = Object.entries(set.places)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
   return { ...set, places: Object.fromEntries(ordered.map(([key, p], index) => {
     if (p.homeGrid) return [key, p]
     // The page it was on (from the screen it was saved on) is frozen with its coordinates, since
