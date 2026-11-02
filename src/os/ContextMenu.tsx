@@ -416,6 +416,8 @@ function MenuList({ items, x, y, altX, up, altY, onClose }: { items: MenuItem[];
               className={`ctx-item ${item.danger ? 'is-danger' : ''} ${item.muted ? 'is-muted' : ''} ${openSub === i ? 'is-open' : ''}`}
               disabled={item.disabled}
               onPointerEnter={(e) => {
+                // A finger has no hover: touch opens a submenu on click only, else the submenu can land under the finger and take the tap meant for this row.
+                if (e.pointerType === 'touch') return
                 if (item.submenu) {
                   const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
                   setSubPos({ x: r.right + 2, y: r.top - 5, altX: r.left - 2 })
