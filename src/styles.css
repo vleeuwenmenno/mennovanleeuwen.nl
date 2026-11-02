@@ -8766,6 +8766,7 @@ ruby > rt {
   z-index: 100001;
 }
 .dock-item {
+  touch-action: none;
   position: relative;
   display: grid;
   justify-items: center;

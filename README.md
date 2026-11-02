@@ -1249,7 +1249,9 @@ dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or rep
 Spotlight or All apps to pin it. An open app that isn't pinned offers *Keep in dock* on its own
 dock item, or drag it in among the pinned ones to pin it at that spot. Settings → Dock lists what
 was taken off, to add it back, and restores the default dock. Everyone can still drag dock icons
-to reorder them. Dropping a launcher or an app (from All apps) on the dock pins it there, a file
+to reorder them with mouse, pen or touch. The grabbed point follows the pointer at every UI
+scale, stays inside the screen, and releases without opening an app. Escape, a cancelled gesture,
+window blur or a screen/scale change restores the saved order. Dropping a launcher or an app (from All apps) on the dock pins it there, a file
 dropped on an app's icon opens in that app if it opens that kind of file, and anything dropped on
 Trash goes in the trash.
 
