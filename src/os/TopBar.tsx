@@ -250,10 +250,9 @@ export function TopBar() {
     if (!unlocked || e.button !== 0 || !e.isPrimary || (e.pointerType !== 'mouse' && !handle)) return
     if (cancelDrag.current) return
     e.stopPropagation()
-    const target = e.currentTarget as HTMLElement
+    // Keyed slots move in the DOM during reordering, so capture on the stable root.
+    const capture = document.documentElement
     const pointerId = e.pointerId
-    // Only handles disable native panning. The rest of the bar remains usable for scrolling/taps.
-    if (handle) target.setPointerCapture(pointerId)
     const startX = e.clientX
     const startY = e.clientY
     const original = [...orderRef.current]
@@ -268,6 +267,8 @@ export function TopBar() {
         if (Math.hypot(ev.clientX - startX, ev.clientY - startY) <= DRAG_SLOP) return
         d = { index, startX, moved: true }
         drag.current = d
+        // Wait for a drag so a stationary handle press still clicks its own menu.
+        capture.setPointerCapture(pointerId)
       }
       ev.preventDefault()
       document.body.classList.add('is-dragging')
@@ -300,12 +301,12 @@ export function TopBar() {
       window.removeEventListener('pointercancel', onCancel)
       window.removeEventListener('blur', onCancel)
       window.removeEventListener('keydown', onKey)
-      target.removeEventListener('lostpointercapture', onCancel)
+      capture.removeEventListener('lostpointercapture', onLostCapture)
       cancelDrag.current = null
       const moved = !!drag.current?.moved
       drag.current = null
       document.body.classList.remove('is-dragging')
-      if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+      if (capture.hasPointerCapture(pointerId)) capture.releasePointerCapture(pointerId)
       if (moved) {
         suppressClick.current = true
         setTimeout(() => (suppressClick.current = false), 400)
@@ -322,6 +323,9 @@ export function TopBar() {
       if (ev instanceof PointerEvent && ev.pointerId !== pointerId) return
       finish(false)
     }
+    // The handle loses its implicit touch capture when capture transfers to the root.
+    // Ignore that bubbled loss; only losing the root's own capture cancels the drag.
+    const onLostCapture = (ev: PointerEvent) => { if (ev.target === capture) onCancel(ev) }
     const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.preventDefault(); finish(false) } }
     cancelDrag.current = onCancel
     window.addEventListener('pointermove', onMove, { passive: false })
@@ -329,7 +333,7 @@ export function TopBar() {
     window.addEventListener('pointercancel', onCancel)
     window.addEventListener('blur', onCancel)
     window.addEventListener('keydown', onKey)
-    target.addEventListener('lostpointercapture', onCancel)
+    capture.addEventListener('lostpointercapture', onLostCapture)
   }
 
   const reorderHandle = (slot: TopbarSlot, index: number) => unlocked && (

@@ -47,6 +47,37 @@ try {
   await p.eval(`${prefs}.setTopbarLocked(false)`)
   await p.waitFor(`!!document.querySelector(${JSON.stringify(handle)})`)
   const original = await order()
+  const slide = async (from: { x: number; y: number }, to: { x: number; y: number }) => {
+    for (let i = 1; i <= 12; i++) await touch('touchMove', { x: from.x + (to.x - from.x) * i / 12, y: from.y + (to.y - from.y) * i / 12 })
+  }
+  const visibleOrder = () => p.eval<string>(`[...document.querySelectorAll('.topbar > [data-id]')].filter(e => e.getBoundingClientRect().width > 0).map(e => e.dataset.id).join('|')`)
+  const originalVisible = await visibleOrder()
+  const menuHandle = '.topbar-slot[data-id="menu"] .topbar-reorder-handle'
+  const rightward = async () => {
+    const from = await point(menuHandle)
+    const search = await point(handle)
+    const to = { x: search.x + 12, y: from.y }
+    await touch('touchStart', from)
+    await slide(from, to)
+    return { from, to }
+  }
+  await rightward()
+  check('rightward menu drag stays active after moving its DOM node', await p.eval(`document.body.classList.contains('is-dragging') && [...document.querySelectorAll('.topbar > [data-id]')].findIndex(e => e.dataset.id === 'menu') > [...document.querySelectorAll('.topbar > [data-id]')].findIndex(e => e.dataset.id === 'search')`))
+  await touch('touchEnd')
+  const rightSaved = await order()
+  check('rightward touch drop saves order', rightSaved !== original && rightSaved.indexOf('menu') > rightSaved.indexOf('search'))
+  await load()
+  check('rightward touch order survives reload', rightSaved !== original && await order() === rightSaved)
+  await p.eval(`${prefs}.setTopbarOrder(${JSON.stringify(original.split('|'))})`)
+  await sleep(100)
+  const reverse = await rightward()
+  // Return past the leading spacer: its midpoint shifts as the menu crosses it.
+  await slide(reverse.to, { x: 12, y: reverse.from.y })
+  check('touch reversal stays active and restores original preview', await visibleOrder() === originalVisible && await p.eval(`document.body.classList.contains('is-dragging')`))
+  await touch('touchEnd')
+  check('touch reversal commits restored order and clears drag state', await visibleOrder() === originalVisible && await p.eval(`!document.body.classList.contains('is-dragging')`))
+  await p.eval(`${prefs}.setTopbarOrder(${JSON.stringify(original.split('|'))})`)
+  await load()
   const widget = await point('.topbar-slot[data-id="search"] > button')
   await touch('touchStart', widget)
   await touch('touchEnd')
