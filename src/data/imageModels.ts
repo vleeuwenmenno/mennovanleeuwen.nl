@@ -70,23 +70,23 @@ export const IMAGE_PRESETS: { id: ImagePreset; title: string; detail: string; re
   { id: 'krea2_turbo', title: 'Krea2 Turbo', detail: '1024 px · 8 steps · CFG 1 · Euler ancestral / beta', requirements: 'A Krea2 Turbo diffusion model, matching krea2 text encoder and separate VAE. Positive prompt only; zeroed negative conditioning.', size: 1024 },
 ]
 
-/** Explicit workflow properties; filenames never establish model compatibility. */
+/** Explicit workflow properties; filenames never establish model compatibility. `enhancer`: the family's official ComfyUI template has a TextGenerate prompt enhancer. */
 export function imagePresetSpec(preset: ImagePreset) {
   switch (preset) {
-    case 'krea2_raw': return { clipType: 'krea2', steps: 52, cfg: 3.5, sampler: 'euler', scheduler: 'simple', negative: true, zeroNegative: false }
-    case 'krea2_turbo': return { clipType: 'krea2', steps: 8, cfg: 1, sampler: 'euler_ancestral', scheduler: 'beta', negative: false, zeroNegative: true }
-    case 'moss_image': return { clipType: 'moss_image', steps: 25, cfg: 2.5, sampler: 'er_sde', scheduler: 'simple', negative: true, zeroNegative: false }
-    case 'z_image': return { clipType: 'lumina2', steps: 20, cfg: 4, sampler: 'euler', scheduler: 'simple', negative: true, zeroNegative: false }
-    case 'z_image_turbo': return { clipType: 'lumina2', steps: 8, cfg: 1, sampler: 'euler', scheduler: 'simple', negative: false, zeroNegative: false }
-    case 'sd15': return { clipType: '', steps: 20, cfg: 7, sampler: 'dpmpp_2m', scheduler: 'karras', negative: true, zeroNegative: false }
-    default: return { clipType: '', steps: 25, cfg: 7, sampler: 'dpmpp_2m', scheduler: 'karras', negative: true, zeroNegative: false }
+    case 'krea2_raw': return { clipType: 'krea2', steps: 52, cfg: 3.5, sampler: 'euler', scheduler: 'simple', negative: true, zeroNegative: false, enhancer: true }
+    case 'krea2_turbo': return { clipType: 'krea2', steps: 8, cfg: 1, sampler: 'euler_ancestral', scheduler: 'beta', negative: false, zeroNegative: true, enhancer: true }
+    case 'moss_image': return { clipType: 'moss_image', steps: 25, cfg: 2.5, sampler: 'er_sde', scheduler: 'simple', negative: true, zeroNegative: false, enhancer: true }
+    case 'z_image': return { clipType: 'lumina2', steps: 20, cfg: 4, sampler: 'euler', scheduler: 'simple', negative: true, zeroNegative: false, enhancer: false }
+    case 'z_image_turbo': return { clipType: 'lumina2', steps: 8, cfg: 1, sampler: 'euler', scheduler: 'simple', negative: false, zeroNegative: false, enhancer: false }
+    case 'sd15': return { clipType: '', steps: 20, cfg: 7, sampler: 'dpmpp_2m', scheduler: 'karras', negative: true, zeroNegative: false, enhancer: false }
+    default: return { clipType: '', steps: 25, cfg: 7, sampler: 'dpmpp_2m', scheduler: 'karras', negative: true, zeroNegative: false, enhancer: false }
   }
 }
 
 export type ImageAssets = Pick<ImageConfig, 'preset' | 'model' | 'clip' | 'vae'> & { loras?: ImageLora[] }
 export type ImageAssetField = 'model' | 'clip' | 'vae'
 export type ImageModelHint = { name: string; category: 'checkpoints' | 'diffusionModels'; baseModel: string }
-export type ImageAssetCatalog = { inpaint?: boolean; inpaintError?: string; autoMask?: boolean; autoMaskError?: string; remove?: boolean; removeError?: string; upscalers?: string[]; upscale?: boolean; upscaleError?: string; checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[]; loras?: string[]; loraHints?: ImageLoraHint[]; modelHints?: ImageModelHint[]; samplers?: string[]; schedulers?: string[] }
+export type ImageAssetCatalog = { /** Per enhancer-capable preset: '' when this ComfyUI's TextGenerate can run it, else why not. */ promptEnhancer?: Partial<Record<ImagePreset, string>>; inpaint?: boolean; inpaintError?: string; autoMask?: boolean; autoMaskError?: string; remove?: boolean; removeError?: string; upscalers?: string[]; upscale?: boolean; upscaleError?: string; checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[]; loras?: string[]; loraHints?: ImageLoraHint[]; modelHints?: ImageModelHint[]; samplers?: string[]; schedulers?: string[] }
 export type ImageSelection = { value: string; automatic: boolean; reason: string; candidates: string[]; error?: string }
 /** A MOSS Image model, LoRA or base-model name: "MOSS Image", "moss_image", "MOSS-Image", "moss.image". */
 export const isMossImageName = (name: string) => name.toLowerCase().replace(/[\s._-]+/g, '').includes('mossimage')
@@ -121,6 +121,22 @@ export function detectedImageFamily(name: string): ImagePreset | 'krea2' | 'unsu
   if (/sdxl|stablediffusionxl|illustrious|pony/.test(key)) return 'sdxl'
   if (/sd15|stablediffusion15|stablediffusionv1/.test(key)) return 'sd15'
   return undefined
+}
+/** A LoRA only works inside the architecture it was trained on: its keys name that model's own layers. */
+const loraGroup = (family: ReturnType<typeof detectedImageFamily> | ImagePreset): string | undefined =>
+  !family || family === 'unsupported' ? undefined : family === 'moss_image' ? 'moss_image' : family.startsWith('krea2') ? 'krea2' : family.startsWith('z_image') ? 'z_image' : family
+/**
+ * Why a LoRA cannot work on a preset, from the base model its LoRA Manager entry names, or '' when
+ * it fits or is unknown. ComfyUI loads a LoRA whose keys do not match without an error and skips them
+ * all (logged as "lora key not loaded"): a Krea 2 LoRA on MOSS Image renders pixel-identical to none.
+ */
+export function loraBaseMismatch(preset: ImagePreset, lora: { name: string; baseModel: string } | undefined): string {
+  if (!lora?.baseModel) return ''
+  const theirs = loraGroup(detectedImageFamily(lora.baseModel)), ours = loraGroup(preset)
+  // Only the model-only families (MOSS Image, Krea 2, Z-Image) are judged: their LoRA Manager base-model labels are specific, while Civitai labels for SD 1.5 / SDXL descendants are too loose to refuse on.
+  const strict = ['moss_image', 'krea2', 'z_image']
+  if (!theirs || theirs === ours || !strict.includes(theirs) || !strict.includes(ours ?? '')) return ''
+  return `LoRA “${lora.name}” is for ${lora.baseModel}, not ${IMAGE_PRESETS.find((p) => p.id === preset)!.title}. Its declared base model is incompatible with this workflow. Remove it, correct inaccurate LoRA metadata, or pick a LoRA made for this model.`
 }
 export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatalog) {
   const spec = imagePresetSpec(config.preset), krea = spec.clipType === 'krea2', moss = config.preset === 'moss_image'
@@ -181,7 +197,7 @@ export const IMAGE_SAMPLERS = ['euler', 'er_sde', 'euler_ancestral', 'dpmpp_2m',
 export const IMAGE_SCHEDULERS = ['simple', 'karras', 'normal', 'sgm_uniform', 'beta', 'exponential', 'ddim_uniform', 'kl_optimal'] as const
 export type ImageSampling = { steps: number; cfg: number; sampler: string; scheduler: string }
 export type HiresSettings = ImageSampling & { base_width: number; base_height: number; width: number; height: number; denoise: number; seed: number; upscale_model?: string }
-export type DiffusionImageSettings = ImageAssets & ImageSampling & { clip_skip?: number; /** A checkpoint's own VAE swapped for this installed one (the Image Studio). */ checkpoint_vae?: string; v_prediction?: boolean; operation?: 'generate' | 'refine' | 'inpaint'; mask?: { id: string; url: string; width: number; height: number; semantics: 'white-edits-black-preserves' }; upscale_model?: string; hires?: HiresSettings; loras: ImageLora[]; width: number; height: number; seed: number; prompt: string; negative_prompt: string; denoise: number; source?: { id: string; name: string; url: string; width: number; height: number; resize: 'lanczos-center-crop' }; profile_id?: number | null; profile_reason?: string }
+export type DiffusionImageSettings = ImageAssets & ImageSampling & { clip_skip?: number; /** A checkpoint's own VAE swapped for this installed one (the Image Studio). */ checkpoint_vae?: string; v_prediction?: boolean; operation?: 'generate' | 'refine' | 'inpaint'; mask?: { id: string; url: string; width: number; height: number; semantics: 'white-edits-black-preserves' }; upscale_model?: string; hires?: HiresSettings; loras: ImageLora[]; width: number; height: number; seed: number; prompt: string; negative_prompt: string; denoise: number; source?: { id: string; name: string; url: string; width: number; height: number; resize: 'lanczos-center-crop' }; profile_id?: number | null; profile_reason?: string; /** Recorded only when the positive prompt went through ComfyUI's TextGenerate enhancer; absent means it did not. */ enable_prompt_enhancer?: true; /** The enhancer's own sampling seed, independent of `seed`. */ prompt_enhancer_seed?: number }
 export type UpscaleImageSettings = { operation: 'upscale'; upscale_model: string; width: number; height: number; input_width: number; input_height: number; source: { id: string; name: string; url: string; width: number; height: number; resize: 'lanczos' } }
 /** LaMa object removal: the source's full size, a mask, and no prompt, model or sampler. */
 export type RemoveImageSettings = { operation: 'remove'; width: number; height: number; mask: { id: string; url: string; width: number; height: number; semantics: 'white-edits-black-preserves' }; source: { id: string; name: string; url: string; width: number; height: number; resize: 'none' } }
@@ -193,7 +209,7 @@ export type ImageGenerationSettings = DiffusionImageSettings | UpscaleImageSetti
  */
 export function inpaintSettingsOf(s: ImageGenerationSettings | null | undefined) {
   if (!s || s.operation === 'upscale' || s.operation === 'remove') return {}
-  return { preset: s.preset, model: s.model, clip: s.clip, vae: s.vae, loras: s.loras, steps: s.steps, cfg: s.cfg, sampler: s.sampler, scheduler: s.scheduler, ...(s.checkpoint_vae ? { checkpoint_vae: s.checkpoint_vae } : {}), ...(s.clip_skip && s.clip_skip > 1 ? { clip_skip: s.clip_skip } : {}) }
+  return { preset: s.preset, model: s.model, clip: s.clip, vae: s.vae, loras: s.loras, steps: s.steps, cfg: s.cfg, sampler: s.sampler, scheduler: s.scheduler, ...(s.checkpoint_vae ? { checkpoint_vae: s.checkpoint_vae } : {}), ...(s.clip_skip && s.clip_skip > 1 ? { clip_skip: s.clip_skip } : {}), ...(s.enable_prompt_enhancer && typeof s.prompt_enhancer_seed === 'number' ? { enable_prompt_enhancer: true as const, prompt_enhancer_seed: s.prompt_enhancer_seed } : {}) }
 }
 /** Diffu defaults.ts preferences, restricted to the KSampler workflows we actually build. */
 export function recommendedImageSampling(preset: ImagePreset, model: string, catalog?: { samplers?: string[]; schedulers?: string[]; modelHints?: ImageModelHint[] }): ImageSampling {

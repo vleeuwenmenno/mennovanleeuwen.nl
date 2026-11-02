@@ -91,7 +91,7 @@ export async function refineImage(id: string, input: RefineImageInput, onEvent: 
   await readEvents(res, onEvent)
 }
 
-export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'checkpoint_vae' | 'clip_skip' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler'>>
+export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'checkpoint_vae' | 'clip_skip' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler' | 'enable_prompt_enhancer' | 'prompt_enhancer_seed'>>
 export async function saveImageMask(thread: string, source: string, mask: Blob) {
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()

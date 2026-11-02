@@ -111,6 +111,43 @@ const catalog: StudioCatalog = {
   assert.equal(inpaintSettingsOf(recorded).checkpoint_vae, 'vae/x.safetensors'); assert.equal(inpaintSettingsOf(recorded).clip_skip, 2)
   assert.ok(!('checkpoint_vae' in inpaintSettingsOf({ ...recorded, checkpoint_vae: undefined, clip_skip: 1 })) && !('clip_skip' in inpaintSettingsOf({ ...recorded, clip_skip: 1 })))
   assert.deepEqual(inpaintSettingsOf({ operation: 'remove' } as never), {})
+  // A LoRA from another model-only family would be skipped by ComfyUI without an error: say so before Generate.
+  {
+    const { loraBaseMismatch } = await import('../src/data/imageModels.ts')
+    assert.match(loraBaseMismatch('moss_image', { name: 'Concept/Krea 2/Depth Charge.safetensors', baseModel: 'Krea 2' }), /is for Krea 2, not MOSS Image.*declared base model/)
+    assert.equal(loraBaseMismatch('krea2_turbo', { name: 'k', baseModel: 'Krea 2' }), '', 'Raw and Turbo share their LoRAs'); assert.equal(loraBaseMismatch('moss_image', { name: 'm', baseModel: 'MOSS Image' }), '')
+    for (const base of ['', 'Wrong family', 'SDXL 1.0', 'Pony', 'Flux.1 D']) assert.equal(loraBaseMismatch('moss_image', { name: 'x', baseModel: base }), '', `unknown or loose label ${base || '(none)'} is not judged`)
+    assert.equal(loraBaseMismatch('sdxl', { name: 'x', baseModel: 'Krea 2' }), '', 'checkpoint families are not judged'); assert.equal(loraBaseMismatch('moss_image', undefined), '')
+    const lora = [{ name: 'Concept/Krea 2/Depth Charge.safetensors', weight: 1 }]
+    const withHint = { ...catalog, nodes: [...(catalog.nodes ?? []), 'EmptyFlux2LatentImage', 'LoraLoaderModelOnly'], loras: lora.map((l) => l.name), loraHints: [{ name: lora[0].name, baseModel: 'Krea 2', triggers: [] }] } as StudioCatalog
+    assert.ok(studioProblems({ ...normalizeStudioForm({ preset: 'moss_image', prompt: 'p' }), loras: lora }, { configured: true, catalog: withHint }).some((p) => /is for Krea 2, not MOSS Image/.test(p)))
+    assert.ok(!studioProblems({ ...normalizeStudioForm({ preset: 'krea2_raw', prompt: 'p' }), loras: lora }, { configured: true, catalog: withHint }).some((p) => /is for Krea 2/.test(p)))
+  }
+  // Prompt enhancement: off in every old form, an explicit choice with its own seed, only where the family has the step.
+  {
+    const old = normalizeStudioForm({ preset: 'moss_image', prompt: 'p' })
+    assert.equal(old.enhance, false); assert.equal(old.enhanceSeed, -1)
+    assert.ok(!('enable_prompt_enhancer' in studioRunInput(old)) && !('prompt_enhancer_seed' in studioRunInput(old)))
+    for (const preset of ['moss_image', 'krea2_raw', 'krea2_turbo'] as const) assert.equal(presetRules(preset).enhancer, true, preset)
+    for (const preset of ['sd15', 'sdxl', 'z_image', 'z_image_turbo'] as const) assert.equal(presetRules(preset).enhancer, false, preset)
+    const on = { ...old, enhance: true, enhanceSeed: 42, seed: 5 }
+    assert.deepEqual([studioRunInput(on).enable_prompt_enhancer, studioRunInput(on).prompt_enhancer_seed, studioRunInput(on).seed], [true, 42, 5])
+    assert.ok(!('prompt_enhancer_seed' in studioRunInput({ ...on, enhanceSeed: -1 })) && studioRunInput({ ...on, enhanceSeed: -1 }).enable_prompt_enhancer === true, 'random enhancer seed is the server\'s to draw')
+    const stored = normalizeStudioForm(JSON.parse(JSON.stringify(on)))
+    assert.deepEqual([stored.enhance, stored.enhanceSeed], [true, 42], 'survives a saved copy'); assert.equal(normalizeStudioForm({ ...on, enhance: 'yes', enhanceSeed: 'x' }).enhance, false)
+    assert.ok(!('enable_prompt_enhancer' in studioRunInput({ ...defaultStudioForm('sdxl'), enhance: true, enhanceSeed: 3 })), 'a family without the step drops it')
+    assert.deepEqual(applyPresetRules({ preset: 'sdxl', enable_prompt_enhancer: true, prompt_enhancer_seed: 1 }), { preset: 'sdxl' })
+    assert.equal(applyPresetRules({ preset: 'krea2_turbo', enable_prompt_enhancer: true, prompt_enhancer_seed: 1 }).enable_prompt_enhancer, true)
+    const problems = (form: typeof on, promptEnhancer?: Record<string, string>) => studioProblems(form, { configured: true, catalog: { ...catalog, nodes: [...(catalog.nodes ?? []), 'EmptyFlux2LatentImage'], promptEnhancer } as StudioCatalog }).filter((p) => /TextGenerate|enhanc/i.test(p))
+    assert.deepEqual(problems(on, { moss_image: 'Prompt enhancement needs a newer ComfyUI with the TextGenerate node. Update ComfyUI.' }), ['Prompt enhancement needs a newer ComfyUI with the TextGenerate node. Update ComfyUI.'])
+    assert.deepEqual(problems({ ...on, enhance: false }, { moss_image: 'x' }), [], 'only a chosen enhancer is blocked'); assert.deepEqual(problems(on, { moss_image: '' }), [])
+    const back = formFromSettings({ ...old, seed: 1 }, { preset: 'moss_image', model: 'm', clip: 'c', vae: 'v', loras: [], steps: 25, cfg: 2.5, sampler: 'er_sde', scheduler: 'simple', width: 1024, height: 1024, seed: 9, prompt: 'p', negative_prompt: '', denoise: 1, enable_prompt_enhancer: true, prompt_enhancer_seed: 77 } as never)
+    assert.deepEqual([back.enhance, back.enhanceSeed, back.seed], [true, 77, 9], 'Use these settings restores both seeds')
+    const lockedBack = formFromSettings({ ...old, seed: 5, seedLock: true }, { ...back, preset: 'moss_image', prompt: 'p', negative_prompt: '', enable_prompt_enhancer: true, prompt_enhancer_seed: 77, seed: 9 } as never)
+    assert.deepEqual([lockedBack.seed, lockedBack.enhanceSeed], [5, 77], 'image seed lock does not lock the independent enhancer seed')
+    assert.equal(formFromSettings({ ...old, enhance: true, enhanceSeed: 3 }, { preset: 'moss_image', model: 'm', clip: 'c', vae: 'v', loras: [], steps: 25, cfg: 2.5, sampler: 'er_sde', scheduler: 'simple', width: 1024, height: 1024, seed: 9, prompt: 'p', negative_prompt: '', denoise: 1 } as never).enhance, false, 'a picture made without it restores it off')
+    assert.deepEqual([inpaintSettingsOf({ preset: 'moss_image', model: 'm', clip: 'c', vae: 'v', loras: [], steps: 25, cfg: 2.5, sampler: 'er_sde', scheduler: 'simple', width: 1, height: 1, seed: 1, prompt: '', negative_prompt: '', denoise: 1, enable_prompt_enhancer: true, prompt_enhancer_seed: 8 }).enable_prompt_enhancer], [true], 'inpaint carries it')
+  }
   // MOSS Image: detection by name or metadata, files from both folders, its encoder and VAE picked automatically.
   for (const name of ['MOSS Image/nsfw/x.safetensors', 'moss_image_v1.safetensors', 'MOSS-Image', 'mossImage.safetensors']) assert.equal(detectedImageFamily(name), 'moss_image', name)
   assert.notEqual(detectedImageFamily('moss_garden_sdxl.safetensors'), 'moss_image')

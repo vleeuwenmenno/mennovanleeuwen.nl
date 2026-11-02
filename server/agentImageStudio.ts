@@ -124,7 +124,8 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   res.on('close', () => { if (!res.writableEnded) ctl.abort() })
   const mine = runs.get(user.id) ?? new Set<AbortController>()
   runs.set(user.id, mine.add(ctl))
-  const runInput = (i: number): ImageInput => (typeof seed === 'number' && i > 0 ? { ...input, seed: seed + i } : input)
+  const enhancerSeed = input.prompt_enhancer_seed
+  const runInput = (i: number): ImageInput => (i > 0 && (typeof seed === 'number' || typeof enhancerSeed === 'number') ? { ...input, ...(typeof seed === 'number' ? { seed: seed + i } : {}), ...(typeof enhancerSeed === 'number' ? { prompt_enhancer_seed: enhancerSeed + i } : {}) } : input)
   let plan: Awaited<ReturnType<typeof prepareImageGeneration>>
   try { plan = await prepareImageGeneration(user, thread, runInput(0), ctl.signal) } catch (e) { forget(user.id, ctl); throw e }
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })

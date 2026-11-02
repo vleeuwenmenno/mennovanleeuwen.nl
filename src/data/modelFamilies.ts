@@ -248,13 +248,15 @@ export type PresetRules = {
   counter: 'tokens' | 'chars'
   /** The base edge the size buckets are built around. */
   edge: number
+  /** The family has a native TextGenerate prompt enhancer (optional, off by default). */
+  enhancer: boolean
   /** The Studio's default hires-fix denoise (MOSS Image refines at about 0.6 for a 1.5x pass). */
   hiresDenoise: number
 }
 export function presetRules(preset: ImagePreset): PresetRules {
   const spec = imagePresetSpec(preset), diffusion = Boolean(spec.clipType)
   const variants = preset.startsWith('krea2') ? (['krea2_raw', 'krea2_turbo'] as const) : preset.startsWith('z_image') ? (['z_image', 'z_image_turbo'] as const) : null
-  return { encoder: diffusion, vae: diffusion ? 'required' : 'builtin', negative: spec.negative, fixedCfg: spec.negative ? null : 1, clipSkip: !diffusion, embeddings: !diffusion, loraClip: !diffusion, variants, counter: diffusion ? 'chars' : 'tokens', edge: preset === 'sd15' ? 512 : 1024, hiresDenoise: preset === 'moss_image' ? 0.6 : 0.35 }
+  return { encoder: diffusion, vae: diffusion ? 'required' : 'builtin', negative: spec.negative, fixedCfg: spec.negative ? null : 1, clipSkip: !diffusion, embeddings: !diffusion, loraClip: !diffusion, enhancer: spec.enhancer, variants, counter: diffusion ? 'chars' : 'tokens', edge: preset === 'sd15' ? 512 : 1024, hiresDenoise: preset === 'moss_image' ? 0.6 : 0.35 }
 }
 /** Whether a preset is the turbo half of its pair. */
 export const isTurbo = (preset: ImagePreset) => preset === 'krea2_turbo' || preset === 'z_image_turbo'
@@ -262,7 +264,7 @@ export const isTurbo = (preset: ImagePreset) => preset === 'krea2_turbo' || pres
 export const presetFamily = (preset: ImagePreset): FamilyDefaults => MODEL_FAMILIES[preset]
 
 /** The request fields the rules touch. Everything else passes through unchanged. */
-type RuleFields = { preset?: unknown; negative_prompt?: unknown; cfg?: unknown; clip_skip?: unknown; clip?: unknown; vae?: unknown; checkpoint_vae?: unknown; hires?: unknown }
+type RuleFields = { enable_prompt_enhancer?: unknown; prompt_enhancer_seed?: unknown; preset?: unknown; negative_prompt?: unknown; cfg?: unknown; clip_skip?: unknown; clip?: unknown; vae?: unknown; checkpoint_vae?: unknown; hires?: unknown }
 const PRESET_IDS: readonly string[] = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo', 'moss_image']
 /**
  * A request as its preset runs it: no negative prompt (and CFG 1, the hires pass's too) where there
@@ -279,6 +281,7 @@ export function applyPresetRules<T extends RuleFields>(input: T): T {
     if (out.hires && typeof out.hires === 'object' && !Array.isArray(out.hires)) out.hires = { ...out.hires, cfg: rules.fixedCfg }
   }
   if (!rules.clipSkip) delete out.clip_skip
+  if (!rules.enhancer) { delete out.enable_prompt_enhancer; delete out.prompt_enhancer_seed }
   if (rules.encoder) delete out.checkpoint_vae
   else {
     delete out.clip

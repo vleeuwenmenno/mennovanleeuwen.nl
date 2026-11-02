@@ -46,5 +46,5 @@ export function addHiresStage(graph: ImageGraph, value: unknown, base: { width: 
   const sampled = add('hiresSampler', 'KSampler', { ...graph['7'].inputs, latent_image: latent, seed: settings.seed, steps: settings.steps, cfg: settings.cfg, sampler_name: settings.sampler, scheduler: settings.scheduler, denoise: settings.denoise })
   const decoded = add('hiresDecode', 'VAEDecode', { samples: sampled, vae })
   graph['9'].inputs.images = decoded
-  return { settings, progress: { phases: { '1': 'loading', '2': 'loading', '3': 'loading', '4': 'encoding', '5': 'encoding', '6': 'encoding', '7': 'sampling', '8': 'decoding', '9': 'saving', hiresModel: 'loading', hiresUpscale: 'upscaling', hiresSize: 'refining', hiresEncode: 'encoding', hiresSampler: 'refining', hiresDecode: 'decoding' }, counters: { '7': 'sampling', hiresUpscale: 'upscaling', hiresSampler: 'refining' } } }
+  return { settings, progress: { phases: { '1': 'loading', '2': 'loading', '3': 'loading', enhance: 'encoding', '4': 'encoding', '5': 'encoding', '6': 'encoding', '7': 'sampling', '8': 'decoding', '9': 'saving', hiresModel: 'loading', hiresUpscale: 'upscaling', hiresSize: 'refining', hiresEncode: 'encoding', hiresSampler: 'refining', hiresDecode: 'decoding' }, counters: { '7': 'sampling', hiresUpscale: 'upscaling', hiresSampler: 'refining' } } }
 }

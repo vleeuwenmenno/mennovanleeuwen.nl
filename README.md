@@ -3685,11 +3685,36 @@ templates: the model, a `moss_image` CLIPLoader with the Qwen3.5 9B encoder, `Em
 KSampler at 25 steps, CFG 2.5, `er_sde`/`simple`, and the FLUX.2 small VAE. Negative prompts are
 supported; prompts can be long (about 4K tokens). MOSS files in `models/checkpoints` hold the
 diffusion model only, so `CheckpointLoaderSimple` supplies just MODEL and the encoder and VAE always
-come from CLIPLoader and VAELoader. Its LoRAs are model-only (`LoraLoaderModelOnly`); clip skip and
-embeddings do not apply. The Studio's hires pass defaults to 0.6 strength for MOSS. Not yet built:
-the template's TextGenerate prompt enhancer, SkipLayerGuidanceDiTSimple, MOSSImageLayoutPrompt
-boxes, TextEncodeMOSSImageEdit and MOSSImageControl.
-Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; prompt enhancement, image-to-image and LoRAs are not included. Matching model, encoder and VAE files must be installed and resolved automatically or selected manually; filenames alone do not establish compatibility. Discovery reads only the ten required classes via ComfyUI's
+come from CLIPLoader and VAELoader. Its LoRAs are model-only (`LoraLoaderModelOnly`) and must be made
+for MOSS Image: ComfyUI skips a LoRA whose layers do not match without any error (a Krea 2 LoRA renders
+pixel-identical to none), so when LoRA Manager names a different model-only family (MOSS Image,
+Krea 2, Z-Image) as the LoRA's base model, generating is refused (HTTP 409) and the Studio blocks
+Generate with the reason. Clip skip and embeddings do not apply. The Studio's hires pass defaults to 0.6 strength for MOSS. Not yet built:
+SkipLayerGuidanceDiTSimple, MOSSImageLayoutPrompt boxes, TextEncodeMOSSImageEdit and
+MOSSImageControl.
+
+**Prompt enhancement (MOSS Image, Krea2 Raw, Krea2 Turbo).** Optional and off by default: a
+request, tool call or saved Studio form that does not mention it runs the exact graph it always did.
+When switched on (Studio: *Enhance prompt* under the prompt; tool: `enable_prompt_enhancer: true`),
+the positive prompt goes through ComfyUI's native `TextGenerate` node on the model's own text encoder,
+and its `generated_text` feeds the positive `CLIPTextEncode`. The negative prompt is never enhanced.
+The enhancer has its own seed (`prompt_enhancer_seed`, the Studio's *Enhancer seed*; random when
+omitted; -1 is the Studio’s random-seed choice, not a tool argument), independent of the image
+seed. A fixed seed requests repeatable caption sampling with the same prompt and backend. Recipes and system prompts are copied from the official templates in
+Comfy-Org/workflow_templates (`image_moss_image_t2i`, `image_krea2_turbo_t2i`; the node schema is
+`comfy_extras/nodes_textgen.py` in ComfyUI): MOSS sends the template's caption-writer system prompt
+as `system_prompt` with 4096 max tokens, temperature 0.7, top-k 64, top-p 0.95, min-p 0.05,
+repetition penalty 1 and no thinking; Krea2 prepends its template's system prompt to the prompt
+with 512 max tokens, repetition penalty 1.05 and thinking on. ComfyUI ships no enhancer template
+for Krea2 Raw; it shares the Krea2 text encoder and template recipe with Turbo, so it uses the same
+step. Other presets refuse it (HTTP 400). Support is checked against the installed `TextGenerate`
+schema (`list_image_models` → `prompt_enhancement`, and the Studio blocks Generate with the reason);
+an older ComfyUI without the node or its `sampling_mode`/`system_prompt` inputs gets a clear 409.
+It adds an LLM pass (extra time and memory) before sampling. The recorded settings keep
+`enable_prompt_enhancer` and `prompt_enhancer_seed` only when it was on (absent means off);
+Use these settings restores both, Refine and inpaint inherit them, and Generate another draws a new
+enhancer seed along with the new image seed. The expanded caption itself is not stored or returned.
+Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; image-to-image and LoRAs are not included here, and prompt enhancement is optional (see above). Matching model, encoder and VAE files must be installed and resolved automatically or selected manually; filenames alone do not establish compatibility. Discovery reads only the required classes (plus `TextGenerate` for the optional enhancer) via ComfyUI's
 `/object_info/{node_class}`, avoiding unrelated custom-node catalogs. Responses are limited to
 1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
 oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
@@ -3842,8 +3867,9 @@ scheduler options and up to 40 filenames per category (queryable, maximum 100). 
 to discover once, prefer recommended defaults, preserve explicit user choices and tune only when
 requested or clearly needed. Steps are integers from 1 to 80; CFG is finite from 0 to 20, with CFG
 fixed at 1 for both Turbo workflows. Only the listed KSampler options are accepted. Denoise stays
-1 for text-to-image; arbitrary graphs, backend settings, model downloads, batch generation,
-prompt enhancement, LoRAs and upscaling are not tool options.
+1 for text-to-image; `enable_prompt_enhancer` and `prompt_enhancer_seed` are the only enhancer
+options; arbitrary graphs, backend settings, model downloads, batch generation
+and custom enhancer prompts are not tool options.
 
 **Model details (`model_details`)** give the agent a recipe per model instead of one per preset.
 It is a read-only Images tool, with no approval card: `name` (an exact installed identifier) returns
