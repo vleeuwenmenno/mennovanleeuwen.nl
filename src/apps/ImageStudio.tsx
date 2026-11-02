@@ -5,7 +5,7 @@ import { IMAGE_SETTINGS_EVENT, deleteStudioImage, getImageCatalog, getLoraDetail
 import { applyRecipe, defaultStudioForm, formFromSettings, normalizeStudioForm, sourceSize, STEP_PRESETS, STUDIO_LIMITS, studioProblems, studioRecipe, studioRunInput, studioSamplers, studioSchedulers, variantPreset, type StudioCatalog, type StudioForm, type StudioRecipe, type StudioSource } from '../data/imageStudio'
 import { isTurbo, presetRules, promptTokens, SIZE_LIMITS, sizeBuckets } from '../data/modelFamilies'
 import { detectedImageFamily, IMAGE_PRESETS, imagePresetSpec, resolveImageAssets, type ImagePreset, type ImageProgress } from '../data/imageModels'
-import { toAttachment, type Thread } from '../data/agents'
+import { toAttachment, type Thread, previewUrl } from '../data/agents'
 import { getDraft, setDraft } from '../data/agentDrafts'
 import { imageFileName } from '../data/agentImageFiles'
 import { synced } from '../os/synced'
@@ -335,7 +335,7 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
       <GeneratedPicture operation={run.live.job.operation} width={run.live.width} height={run.live.height} pending progress={run.live.progress} frame={frame} onView={() => {}} />
     </> : shown ? <>
       <p className="muted studio-caption" title={shown.name}>{shown.width} × {shown.height}{shown.settings && 'seed' in shown.settings ? ` · seed ${shown.settings.seed}` : ''}{shown.settings && 'model' in shown.settings ? ` · ${shown.settings.model.split(/[\\/]/).at(-1)}` : shown.settings ? '' : ' · uploaded'} · {new Date(shown.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</p>
-      <GeneratedPicture image={asGenerated(shown)} width={shown.width || 1024} height={shown.height || 1024} pending={false} frame={frame} onView={() => setDialog({ kind: 'view', image: shown })} />
+      <GeneratedPicture full sizes="(max-width: 960px) 100vw, 900px" image={asGenerated(shown)} width={shown.width || 1024} height={shown.height || 1024} pending={false} frame={frame} onView={() => setDialog({ kind: 'view', image: shown })} />
       <ResultActions image={shown} threads={threads} disabled={false} onUse={() => shown.settings && studioForm.set((f) => formFromSettings(f, shown.settings!))} onSend={(t) => void sendToChat(shown, t).catch((e: Error) => update({ error: e.message }))} onDialog={(kind) => setDialog({ kind, image: shown })} onDelete={() => void removeImage(shown)} onVideo={() => void makeVideo(shown).catch((e: Error) => update({ error: e.message }))} />
     </> : <div className="studio-empty muted">{studio && !studio.configured ? 'Connect ComfyUI to start.' : 'Your pictures show here. Write a prompt and press Generate.'}</div>}
   </section>
@@ -344,7 +344,7 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
     {historyError && <ErrorBox text={historyError} />}
     {!images.length && !historyError && <p className="muted">Nothing generated in the Studio yet.</p>}
     <ul className="studio-thumbs">
-      {images.map((i) => <li key={i.id}><button type="button" className={`studio-thumb ${shown?.id === i.id && !run.live ? 'is-on' : ''}`} onClick={() => setSelected(i.id)} title={i.settings && 'prompt' in i.settings ? i.settings.prompt.slice(0, 200) : i.name} aria-label={`Show ${i.name}`}><img src={i.url} alt="" loading="lazy" draggable={false} /></button></li>)}
+      {images.map((i) => <li key={i.id}><button type="button" className={`studio-thumb ${shown?.id === i.id && !run.live ? 'is-on' : ''}`} onClick={() => setSelected(i.id)} title={i.settings && 'prompt' in i.settings ? i.settings.prompt.slice(0, 200) : i.name} aria-label={`Show ${i.name}`}><img src={previewUrl(i.url)} alt="" loading="lazy" draggable={false} /></button></li>)}
     </ul>
     {olderFrom && <button type="button" className="btn btn-small" onClick={() => void loadHistory(olderFrom)}>Show older</button>}
   </section>
@@ -609,7 +609,7 @@ function SourcePicker({ onChoose, onClose, onError }: { onChoose: (s: StudioSour
       {!list && !error && <p className="muted" role="status">Loading your pictures…</p>}
       {list && !list.length && <p className="muted">No generated pictures yet.</p>}
       <ul className="studio-thumbs is-picker">
-        {list?.map((i) => <li key={i.id}><button type="button" className="studio-thumb" onClick={() => onChoose({ id: i.id, name: i.name, url: i.url, width: i.width, height: i.height })} aria-label={`Use ${i.name}`} title={`${i.name} · ${i.width} × ${i.height}`}><img src={i.url} alt="" loading="lazy" draggable={false} /></button></li>)}
+        {list?.map((i) => <li key={i.id}><button type="button" className="studio-thumb" onClick={() => onChoose({ id: i.id, name: i.name, url: i.url, width: i.width, height: i.height })} aria-label={`Use ${i.name}`} title={`${i.name} · ${i.width} × ${i.height}`}><img src={previewUrl(i.url)} alt="" loading="lazy" draggable={false} /></button></li>)}
       </ul>
       {next && <button type="button" className="btn btn-small" onClick={() => void load(next)}>Show older</button>}
     </div>

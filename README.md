@@ -1736,13 +1736,14 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
   a visitor's are this browser's, a signed-in player's follow the account). A page only reads its
   own account's space, so nothing of another account shows, even from a cache. Responses behind
   a session (agent attachments, photos' originals, mail attachments, contact photos, mail icons,
-  Files thumbnails, link previews) are `private, no-store`, so the browser never replays one after
+  Files thumbnails, link previews, generated pictures and their previews, Video Studio keyframes) are `private, no-store`, so the browser never replays one after
   the account switches or the cookie goes; photo thumbnails are `private, no-cache` with an ETag, so
   every reuse is checked by the server first. Copies stored by older releases (`private, max-age`
   up to 7 days) are purged once per browser: the first app page or `/api/me` answer without the
   `mvlos_cache_purge` marker cookie (HttpOnly, SameSite=Lax, Secure on HTTPS, 400 days) carries
   `Clear-Site-Data: "cache"` and sets it ([`server/http.ts`](server/http.ts), `cachePurge`; bump
-  `CACHE_PURGE_EPOCH` to repeat it). Only `"cache"`: the other directives would sign people out or
+  `CACHE_PURGE_EPOCH` to repeat it; it is 2 since Video Studio keyframes, once sent with a day's
+  `max-age`, became `no-store`). Only `"cache"`: the other directives would sign people out or
   wipe their local data and service worker. `/api/me` repeats it because a service worker may serve
   the page itself. With cookies blocked the purge just repeats on each load, which is harmless.
   `pnpm check:sync-accounts` covers it. What belongs to the
@@ -2039,6 +2040,19 @@ starting room (default 2048, 2 GB) and Settings → Users → *Room per account*
 release ([`server/quota.ts`](server/quota.ts)). That room covers synced desktop state, Agents
 threads with their attachments, generated images and memories. Over it, reading and deleting keep
 working and a save is refused with a 413 that names the limit, so the account can free space first.
+Settings → Sync → **Storage** shows the signed-in account how much of its room is used, with a bar
+and, read only, what uses it: desktop and app settings, Agents conversations and the files kept in
+them, generated pictures (with pictures uploaded to Image Studio), selection masks, picture references, the icon library, found pictures,
+memories, video projects, keyframes and videos, each with its size and how many. The figures are
+the quota's own, from one read of the database (`GET /api/account/storage`, the session's own
+account only, `private, no-store`; [`server/quota.ts`](server/quota.ts) `storageReport`): they add
+up exactly to what Settings → Users shows and what a save is checked against, counted as the quota
+counts (text by its characters, so a picture kept as base64 counts at that size; blobs by their
+bytes; videos by their recorded size). Over the limit the real figure shows, with nothing left. A
+part that can't be read shows as unknown, and so does the total, never as zero. It names what
+isn't counted: what is kept only in this browser, the Seafile library (on its own server), and
+server records the quota leaves out (sign-ins, linked accounts, the thread list). Nothing is
+deleted from there; that is done where the things are. `pnpm check:account-storage` covers it.
 Over the cap, or with sign-up closed, a new account gets a "We're full" (or
 "Sign-up is closed") dialog instead; existing accounts and admins can always sign in. GitHub accounts whose numeric id is in
 `ADMIN_GITHUB_IDS` (comma-separated, default `46482143`) are admins (the id never changes, a login can be renamed and taken by someone else; the old `ADMIN_USERS` is retired and grants nothing): Settings → Users lists the accounts (counts and
@@ -4196,6 +4210,40 @@ every turn), so a thread opened later shows them again: `GET
 …/messages/:mid/attachments/:index` serves one to the thread's owner, as the picture types it knows
 or as plain bytes otherwise, never rendered as a page. Preview opens such an address with props
 `src`, `name` and `from` instead of a file path. Shared links still carry only names and sizes.
+
+**Picture previews.** Thumbnails and inline pictures don't download the original: a 1024² PNG is
+about 2.7 MB, and a Studio page of 60 thumbnails was 162 MB before (27 s on a 50 Mbit/s link). They
+load a preview instead, `…/preview/384` or `…/preview/768` after a generated image's or a message
+picture's address (`GET /api/agents/images/<id>/preview/<size>`, `GET
+…/messages/:mid/attachments/:index/preview/<size>`, [`server/imagePreview.ts`](server/imagePreview.ts)):
+the same picture with its longer side at that size, its shape, transparency (alpha, palette and
+tRNS colour keys) and colour-space chunks kept, its text chunks (prompts) dropped. Thumbnails
+(Agents, the Studio grids, Video Studio's picker, observations) take 384; inline pictures (a
+generated image in a thread, a gpt-image result) choose 384 or 768 through `srcset`, never the
+original (a phone's 3× screen would otherwise always take it); only Image Studio's own preview of
+the picked picture may take the original on a big or sharp screen. Full views, **Download**, **Open in Preview**, edits, masks, Save to
+Files and picture sources still use the original address, byte for byte. A preview is made on
+demand in one worker thread ([`server/imagePreviewWorker.ts`](server/imagePreviewWorker.ts)) from
+the PNG alone: no database, session or network there. Its limits: originals up to 32 MB and
+4096 × 4096 pixels by their header (checked before anything is inflated, and the inflate capped
+to what the header needs), 12 jobs waiting or running (checked before the picture's data is
+loaded or decoded; for a message picture SQLite has still parsed the stored attachment JSON, in
+native code, to find its type and length, also on a cache hit), 15 s
+from admission (a running job past it is stopped with its worker), previews up to 2 MB. What the
+worker won't shrink faithfully (not a PNG, 16-bit or below 8-bit samples, interlaced, animated,
+turned by EXIF, a grey picture with an ICC profile, a bad chunk CRC, an unknown critical chunk,
+chunks out of order, malformed, too big, already small, or no smaller), or can't right now (queue full,
+too slow), gets the exact original from the same request, once, so nothing retries in a loop; a
+JPEG or WebP picture with a message always does. Previews are kept only in the server's memory,
+per account, for 10 minutes and 48 MB in all; nothing derived is written to disk. Before a cached
+one is sent and after a job finishes, the session and the picture are checked again, so a deleted
+picture, a signed-out session or another account gets a 404 or 401, never a preview. Signing out
+cancels that session's waiting and running jobs. Responses are `private, no-store` like the
+originals, with `X-Preview: <size>` or `original` (and `X-Preview-Cache: hit` or `miss` on a
+preview). A generated image's `HEAD` reads only its stored
+length. gpt-image's rough previews while it draws stay as they were. `pnpm
+check:agents-image-previews` covers it; it lowers the deadline and the cache size with
+`IMAGE_PREVIEW_DEADLINE_MS` and `IMAGE_PREVIEW_CACHE_BYTES`, which can only lower them.
 
 **Shared links** ([`server/shares.ts`](server/shares.ts), [`src/apps/AgentsShare.tsx`](src/apps/AgentsShare.tsx)):
 *Share thread…* (the thread's ⋯ menu, its right-click menu in the sidebar or the conversation) and

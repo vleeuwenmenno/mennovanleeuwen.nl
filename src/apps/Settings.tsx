@@ -19,6 +19,7 @@ import { ask } from '../os/Dialogs'
 import { CLOUD_APP_CHOOSER, inCloudApp, inNativeApp, openAppChooser } from '../os/nativeApp'
 import { SignInButtons } from '../os/SignInButtons'
 import { UsersSettings } from './UsersSettings'
+import { StorageUsage } from './StorageUsage'
 import { openAlert, useAlerts } from '../os/alerts'
 import { formatSize, prettyPath } from '../terminal/vfs'
 import { browserFilesState, browserTree, useBrowserFiles, wipeBrowserFiles } from '../data/browserfs'
@@ -2342,6 +2343,7 @@ function SyncPane() {
         </li>
       </ul>
       <p className="muted set-help">Notes, launchers, desktop icons, the dock, the top bar, the search engine, where links open, the go links account, Spotlight's settings, favourites and history, notification settings, what opens at the start, /etc/fstab, and window layouts (one for phones, one for bigger screens) follow you between devices once signed in. So do some apps' settings: the Terminal's text size and extra keys, Agents, the Calendar app's view and calendars, Files' bookmarks, and Weather's units and saved cities; and game high scores, Gladiator's saves and your Empires At War multiplayer name. Without an account they stay in this browser, as do the other apps' settings in Settings → Apps.</p>
+      <StorageUsage />
     </>
   )
 }
@@ -2393,7 +2395,7 @@ const GROUPS: Group[] = [
   },
   {
     panes: [
-      { id: 'sync', label: 'Sync', hue: 'var(--green)', account: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud', blurb: 'What follows you between devices.', render: () => <SyncPane /> },
+      { id: 'sync', label: 'Sync', hue: 'var(--green)', account: true, icon: svg(<><path d="M20 12a8 8 0 0 1-14 5.3M4 12a8 8 0 0 1 14-5.3" /><path d="M18 3v4h-4M6 21v-4h4" /></>), keywords: 'sync devices cloud storage space quota used usage full limit disk how much left remaining breakdown size', blurb: 'What follows you between devices, and how much storage your account uses.', render: () => <SyncPane /> },
       { id: 'users', label: 'Users', hue: 'var(--accent)', account: true, admin: true, icon: svg(<><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6" /><circle cx="17" cy="9" r="2.5" /><path d="M16 14.2c2.9.1 5 2.4 5 5.8" /></>), keywords: 'users accounts admin sign-up registration ban delete cap full', blurb: 'Every account, sign-up and the cap. Only for admins.', render: () => <UsersSettings /> },
       { id: 'about', label: 'About', hue: 'var(--text)', icon: svg(<><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.5" /></>), keywords: 'about version update release build', blurb: 'Which version this is, and whether a newer one is out.', render: () => <About /> },
     ],

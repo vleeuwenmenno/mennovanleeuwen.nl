@@ -1,0 +1,15 @@
+/* Settings → Sync: the account's storage (src/apps/StorageUsage.tsx). */
+.storage { margin-top: 18px; }
+.storage-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.storage-title { margin: 0; font-size: 14px; color: var(--fg-bright); }
+.storage-total { margin: 4px 0 6px; }
+.storage-bar { height: 8px; margin-bottom: 12px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--bg-dark); }
+.storage-bar > span { display: block; height: 100%; background: var(--accent); }
+.storage-bar.is-high > span { background: var(--yellow); }
+.storage-bar.is-over > span { background: var(--red); }
+.storage-error { color: var(--red); }
+.storage-part { align-items: flex-start; }
+.storage-purpose { font-size: 12px; }
+.storage-size { display: grid; flex: none; justify-items: end; text-align: right; font-variant-numeric: tabular-nums; }
+/* The purpose wraps under the name instead of being cut off (phones, narrow windows). */
+.storage-part .set-row-text > * { white-space: normal; }

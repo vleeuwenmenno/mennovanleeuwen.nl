@@ -26,6 +26,7 @@ import { HttpError, SECURITY } from './http.ts'
 import { search as codeSearch } from './search.ts'
 import { guardedFetch } from './egress.ts'
 import { checkRoom } from './quota.ts'
+import type { PreviewSource } from './imagePreview.ts'
 import { fileLink, libraries, listDir, mkdir, removeItems, rename, seafile, seafileInfo, transfer, type Library } from './seafile.ts'
 import { readState } from './state.ts'
 import { webSearch } from './websearch.ts'
@@ -4411,6 +4412,37 @@ export function messagePicture(user: User, id: string, messageId: string, index:
   let still: { data: string; mime: string } = { data: file.data, mime: file.mime }
   try { still = stillData(file.data, file.mime) } catch { /* sent as it is */ }
   return { type: PICTURE_TYPES.has(still.mime) ? still.mime : 'application/octet-stream', body: Buffer.from(still.data, 'base64') }
+}
+
+/**
+ * The same picture as a preview source (server/imagePreview.ts). Until a job is admitted only its
+ * type and length come back from SQLite (which still parses the message's whole attachment JSON
+ * to find them, cache hits included); then only its own data. The original response is
+ * messagePicture's, byte for byte.
+ */
+export function messagePictureSource(user: User, id: string, messageId: string, index: string): PreviewSource {
+  const row = ownThread(user, id, true)
+  const path = `$[${Number(index)}]`
+  const db = database()
+  const meta = db.prepare(`SELECT json_extract(attachments, ? || '.kind') AS kind, json_extract(attachments, ? || '.mime') AS mime, length(json_extract(attachments, ? || '.data')) AS chars
+    FROM agent_messages WHERE id = ? AND thread_id = ? AND json_valid(attachments)`).get(path, path, path, Number(messageId), row.id) as { kind: unknown; mime: unknown; chars: number | null } | undefined
+  if (!meta || meta.kind !== 'image' || !meta.chars) throw new HttpError(404, 'No such picture')
+  const chars = meta.chars
+  const exists = () => {
+    try { ownThread(user, id, true) } catch { return false }
+    return !!db.prepare("SELECT 1 FROM agent_messages WHERE id = ? AND thread_id = ? AND json_valid(attachments) AND length(json_extract(attachments, ? || '.data')) = ?").get(Number(messageId), row.id, path, chars)
+  }
+  return {
+    key: `att:${row.id}:${Number(messageId)}:${Number(index)}:${chars}`,
+    bytes: Math.floor((chars * 3) / 4),
+    png: meta.mime === 'image/png',
+    exists,
+    load: () => {
+      const found = db.prepare("SELECT json_extract(attachments, ? || '.data') AS data FROM agent_messages WHERE id = ? AND thread_id = ? AND json_valid(attachments)").get(path, Number(messageId), row.id) as { data: unknown } | undefined
+      return typeof found?.data === 'string' ? Buffer.from(found.data, 'base64') : null
+    },
+    original: () => { const p = messagePicture(user, id, messageId, index); return { type: p.type, body: p.body } },
+  }
 }
 
 /**

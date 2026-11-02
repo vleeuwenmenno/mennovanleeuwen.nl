@@ -16,11 +16,13 @@ import { forgejoActivity } from './activity.ts'
 import { handleWebSearchApi } from './websearch.ts'
 import { fxRates } from './fx.ts'
 import { privateRequestActive, runPrivateRequest } from './privateRequest.ts'
+import { servePreview } from './imagePreview.ts'
+import { storageReport } from './quota.ts'
 import { assertSeafileLink, bindSeafileRequest, withSeafileLink } from './seafile.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
 import { handleAgentTasksApi } from './agentTasks.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
-import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, claimClientCall, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread, listSubagents, messageSubagentAsUser, stopSubagentAsUser, watchSubagents } from './agents.ts'
+import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, messagePictureSource, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, claimClientCall, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread, listSubagents, messageSubagentAsUser, stopSubagentAsUser, watchSubagents } from './agents.ts'
 import { adminStats, adminUser, banUser, listUsers, removeUser, signOutUser, unbanUser, updateSettings } from './admin.ts'
 import { accountMismatch, bindResponse, requireStillSignedIn, chooseRepoScope, authEnabled, currentUser, finishLogin, identitiesOf, signInProviders, startGithubLink, logout, registration, requireAdmin, requireUser, sessionKey, startLogin, uidCookieFix } from './auth.ts'
 import { addForge, listForges, removeForge } from './forges.ts'
@@ -194,6 +196,10 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
       await deleteUser(requireUser(req).id)
       return logout(req, res), true
     }
+
+    // Settings → Sync: the signed-in account's own storage as its quota counts it (server/quota.ts).
+    // Only the session's account: there is no parameter naming whose.
+    if (path === '/api/account/storage' && read) return json(res, 200, storageReport(requireUser(req).id), { 'Cache-Control': 'private, no-store' }), true
 
     // The Minecraft server window's RCON panel, for admins only (server/minecraft.ts).
     if (path === '/api/minecraft/rcon' && read) return requireAdmin(req), json(res, 200, { configured: rconConfigured() }), true
@@ -395,6 +401,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/threads' && method === 'POST') return json(res, 200, await createThread(requireUser(req), await readJson(req, 4096))), true
     // A picture sent with one of your messages: the thumbnails and the full view in the app. Never
     // stored by the browser: a stored copy could be replayed after the account switches.
+    // Its small preview, made in memory (server/imagePreview.ts); the original stays as below.
+    const agentPicturePreview = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/messages\/(\d{1,15})\/attachments\/(\d{1,2})\/preview\/(\d{1,4})$/.exec(path)
+    if (agentPicturePreview && read) {
+      const user = requireUser(req)
+      return await servePreview(res, user, head, messagePictureSource(user, agentPicturePreview[1], agentPicturePreview[2], agentPicturePreview[3]), Number(agentPicturePreview[4])), true
+    }
     const agentPicture = /^\/api\/agents\/threads\/([0-9a-f-]{36})\/messages\/(\d{1,15})\/attachments\/(\d{1,2})$/.exec(path)
     if (agentPicture && read) {
       const p = messagePicture(requireUser(req), agentPicture[1], agentPicture[2], agentPicture[3])

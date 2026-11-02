@@ -920,6 +920,28 @@ export function textAttachment(text: string, name: string): Attachment {
 /** Where a picture sent with a message loads from (server/agents.ts messagePicture): `index` among the message's attachments. */
 export const pictureUrl = (thread: string, message: number, index: number) => `/api/agents/threads/${thread}/messages/${message}/attachments/${index}`
 
+/** The account's own stored pictures: generated images and pictures kept with messages. */
+const OWN_PICTURE = /^\/api\/agents\/(?:images\/[0-9a-f-]{36}|threads\/[0-9a-f-]{36}\/messages\/\d{1,15}\/attachments\/\d{1,2})$/
+/**
+ * A small preview of one of those pictures (server/imagePreview.ts) for thumbnails and inline
+ * display, 384 or 768 pixels on its longer side; anything else (a data: URL in the message box,
+ * another address) is returned as it is. The original address stays what full views, downloads,
+ * edits and sources use.
+ */
+export const previewUrl = (url: string, size: 384 | 768 = 384) => (OWN_PICTURE.test(url) ? `${url}/preview/${size}` : url)
+/**
+ * A srcset for a picture drawn wider than a thumbnail: both previews (described by their real
+ * widths when the picture's size is known). `original`: offer the original too, at its own width,
+ * where the picture is what is being looked at (Image Studio's preview); elsewhere (a thread) a
+ * phone's 3× screen would otherwise always take the original, and the full view is a click away.
+ */
+export function previewSrcSet(url: string, width?: number, height?: number, original = false): string | undefined {
+  if (!OWN_PICTURE.test(url)) return undefined
+  const known = !!width && !!height
+  const at = (size: number) => (known ? Math.min(width!, Math.round((width! * size) / Math.max(width!, height!))) : size)
+  return [`${url}/preview/384 ${at(384)}w`, `${url}/preview/768 ${at(768)}w`, ...(original && known && Math.max(width!, height!) > 768 ? [`${url} ${width}w`] : [])].join(', ')
+}
+
 export const fileSize = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`)
 
 export type MentionTool = { name: string; group: ToolGroup | null }

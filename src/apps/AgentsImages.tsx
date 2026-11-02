@@ -5,7 +5,7 @@ import { UpscaleDialog } from './AgentsUpscale'
 import type { GeneratedImage, UpscaleImageInput, RefineImageInput, MaskedEditInput } from '../data/agentImages'
 import { imageProgressFraction, imageProgressLabel, type ImageProgress } from '../data/imageModels'
 import { createPortal } from 'react-dom'
-import { fileSize, pictureUrl, type AgentMessage, type Attachment, type AttachmentInfo } from '../data/agents'
+import { fileSize, pictureUrl, previewSrcSet, previewUrl, type AgentMessage, type Attachment, type AttachmentInfo } from '../data/agents'
 import { useWM } from '../os/wm'
 import { openContextMenu, type MenuItem } from '../os/ContextMenu'
 import { imageFileName } from '../data/agentImageFiles'
@@ -20,7 +20,8 @@ import { ACTION, ActionRow, MoreButton, tidy } from './AgentsActions'
 // opened again; one in the message box is the data in memory.
 
 /** A picture to show: where it loads from, and whether that is an address Preview can open later too. */
-export type Picture = { name: string; src: string; size: number; source: string; preview: boolean }
+/** `width`/`height`: its pixels, when known (a wide thumbnail then offers the original to sharp screens too). */
+export type Picture = { name: string; src: string; size: number; source: string; preview: boolean; width?: number; height?: number }
 
 const dataUrls = new WeakMap<Attachment, string>()
 /**
@@ -71,7 +72,7 @@ export function AttachedFiles({ files, pictureOf, onRemove, sent = false, more }
 }
 
 /** A row of thumbnails; clicking one opens the full view at it. `onRemove` adds an × to each (the message box). */
-export function Thumbnails({ pictures, onRemove, onBroken, actions }: { pictures: Picture[]; onRemove?: (i: number) => void; /** One could not load: show it as a plain chip instead */ onBroken?: (i: number) => void; /** More buttons in the full view of picture i */ actions?: (i: number) => { label: string; onSelect: () => void }[] }) {
+export function Thumbnails({ pictures, onRemove, onBroken, actions, wide = false }: { /** A lone picture drawn wide (a gpt-image result), not as a small thumbnail */ wide?: boolean; pictures: Picture[]; onRemove?: (i: number) => void; /** One could not load: show it as a plain chip instead */ onBroken?: (i: number) => void; /** More buttons in the full view of picture i */ actions?: (i: number) => { label: string; onSelect: () => void }[] }) {
   const [open, setOpen] = useState<number | null>(null)
   const anchor = useRef<HTMLUListElement>(null)
   if (!pictures.length) return null
@@ -81,7 +82,10 @@ export function Thumbnails({ pictures, onRemove, onBroken, actions }: { pictures
         {pictures.map((p, i) => (
           <li key={`${p.src.slice(0, 120)}-${i}`}>
             <button type="button" className="agt-thumb" onClick={() => setOpen(i)} title={`${p.name} (${fileSize(p.size)}): click to view`} aria-label={`View ${p.name}`}>
-              <img src={p.src} alt={p.name} loading="lazy" draggable={false} onError={() => onBroken?.(i)} />
+              {/* A preview, not the original (server/imagePreview.ts); the full view below opens the original. */}
+              {wide && pictures.length === 1
+                ? <img src={previewUrl(p.src, 768)} srcSet={previewSrcSet(p.src, p.width, p.height)} sizes="(max-width: 560px) 100vw, 520px" alt={p.name} loading="lazy" draggable={false} onError={() => onBroken?.(i)} />
+                : <img src={previewUrl(p.src)} alt={p.name} loading="lazy" draggable={false} onError={() => onBroken?.(i)} />}
               <span className="agt-thumb-name">{p.name}</span>
             </button>
             {onRemove && (
@@ -214,7 +218,7 @@ function blockGrid(width: number, height: number) {
 }
 
 /** Same frame before and after generation: only its contents change, never its aspect ratio. */
-export function GeneratedPicture({ image, width, height, pending, progress, frame, onView, onMenu, operation = 'generate' }: { operation?: 'generate' | 'upscale' | 'refine' | 'inpaint' | 'remove'; image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress; frame: RefObject<HTMLDivElement | null>; onView: () => void; onMenu?: (e: React.MouseEvent) => void }) {
+export function GeneratedPicture({ image, width, height, pending, progress, frame, onView, onMenu, operation = 'generate', sizes = '(max-width: 700px) 100vw, 640px', full = false }: { /** How wide it is drawn, for choosing between its previews (and the original, with `full`) */ sizes?: string; /** The main view of the picture (Image Studio): big or sharp screens may take the original */ full?: boolean; operation?: 'generate' | 'upscale' | 'refine' | 'inpaint' | 'remove'; image?: GeneratedImage; width: number; height: number; pending: boolean; /** Where the job is, from the server; none yet means waiting */ progress?: ImageProgress; frame: RefObject<HTMLDivElement | null>; onView: () => void; onMenu?: (e: React.MouseEvent) => void }) {
   const displayedImage = useRef<HTMLImageElement>(null)
   const [animate, setAnimate] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -246,7 +250,7 @@ export function GeneratedPicture({ image, width, height, pending, progress, fram
         </div>
         <span className="agt-image-status">{pending ? operation !== 'generate' && (!progress || progress.phase === 'running') ? operation === 'remove' ? 'Removing the masked area…' : operation === 'inpaint' ? 'Inpainting image…' : operation === 'upscale' ? 'Upscaling image…' : 'Refining image…' : imageProgressLabel(progress) : 'Loading image…'}{pending && <small>Use Stop to cancel</small>}</span>
       </div>}
-      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={onView}><img ref={displayedImage} src={image.url} alt={operation === 'inpaint' ? 'Inpainted image' : operation === 'upscale' ? 'Upscaled image' : operation === 'refine' ? 'Refined image' : 'Generated image'} width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
+      {image && <button type="button" className="agt-generated-open" aria-label={`View ${image.name}`} onClick={onView}><img ref={displayedImage} src={previewUrl(image.url, 768)} srcSet={previewSrcSet(image.url, image.width, image.height, full)} sizes={sizes} alt={operation === 'inpaint' ? 'Inpainted image' : operation === 'upscale' ? 'Upscaled image' : operation === 'refine' ? 'Refined image' : 'Generated image'} width={width} height={height} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} style={{ opacity: loaded && !failed ? 1 : 0 }} />{failed && <span className="agt-image-status">Image could not load. Open to retry.</span>}</button>}
     </div>
   )
 }

@@ -358,7 +358,10 @@ assert.equal((await call('POST', '/api/video/projects', { project: ship() })).st
 try {
   const src = await ok('POST', '/api/video/sources', { name: 'ship.png', data: pngData })
   assert.match(src.id, /^[0-9a-f-]{36}$/)
-  assert.equal((await call('GET', `/api/video/sources/${src.id}`)).status, 200)
+  const keyframe = await call('GET', `/api/video/sources/${src.id}`)
+  assert.equal(keyframe.status, 200)
+  // Account-scoped: never kept by the browser (it was a day's max-age before CACHE_PURGE_EPOCH 2).
+  assert.equal(keyframe.headers.get('cache-control'), 'private, no-store')
   assert.equal((await call('GET', `/api/video/sources/${src.id}`, undefined, 1)).status, 404, 'another account cannot read a keyframe')
   const notPng = await call('POST', '/api/video/sources', { name: 'x.png', data: Buffer.from('hello').toString('base64') })
   assert.equal(notPng.status >= 400, true)
