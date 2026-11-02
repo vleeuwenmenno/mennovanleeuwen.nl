@@ -237,6 +237,27 @@ for (let i = 0; i < 40; i++) {
   }
 }
 check('many bad credentials from one address are rate limited', limited)
+// Fairness: one account's burst over many phones does not starve another account's send.
+{
+  const slow: { release: () => void }[] = []
+  let busy = 0
+  let peak = 0
+  setFcmTransport({ token: async () => ({ status: 200, body: { access_token: 'fake-access-token', expires_in: 3600 } }), send: async (project, accessToken, message) => { busy++; peak = Math.max(peak, busy); await new Promise<void>((r) => slow.push({ release: r })); busy--; sent.push({ project, accessToken, message }); return { status: 200, body: {} } } })
+  addUser(3, 'carol')
+  addSession('s-carol-1', 3)
+  const carol = { id: 3, login: 'carol' } as never
+  const fp = np.prepare(req({}, '198.51.100.201'), carol, 's-carol-1', { installId: install(31) })
+  const fa = np.activate(req(), carol, 's-carol-1', { prep: fp.prep })
+  await np.setToken(bearer(fa.cap), () => Promise.resolve({ token: TOKEN(31) }))
+  const burst = Array.from({ length: 6 }, () => np.pushNative(carol, { source: 'mail.new', title: 'burst' }))
+  await new Promise((r) => setTimeout(r, 50))
+  check('one account holds at most 4 sends at once', peak <= 4, { peak })
+  const drain = setInterval(() => slow.splice(0).forEach((s) => s.release()), 10)
+  const done = await Promise.all(burst)
+  clearInterval(drain)
+  check('the waiting sends still go out, in turn', done.every((d) => d.sent === 1), done)
+  setFcmTransport({ token: async () => ({ status: 200, body: { access_token: 'fake-access-token', expires_in: 3600 } }), send: async (project, accessToken, message) => (sent.push({ project, accessToken, message }), { status: 200, body: {} }) })
+}
 // Sending is budgeted per account, the test per minute, and a body that cannot be parsed is awaited after authentication.
 let budgetHit = false
 for (let i = 0; i < 70; i++) if ((await np.pushNative(alice, notice)).sent + (await np.pushNative(alice, notice)).failed === 0) budgetHit = true

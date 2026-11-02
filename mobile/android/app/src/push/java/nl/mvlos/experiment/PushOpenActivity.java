@@ -22,7 +22,8 @@ public class PushOpenActivity extends Activity {
             PushState state2 = PushStore.get(this);
             PushState.Snapshot s = state2.snapshot();
             if (rid != null && path != null && state2.isCurrent(gen, rid) && PushOrigins.allowed(BuildConfig.PUSH_ORIGINS, s.origin)) {
-                startActivity(new Intent(this, CloudActivity.class).putExtra(CloudActivity.EXTRA_ORIGIN, s.origin).putExtra(CloudActivity.EXTRA_PUSH_PATH, path));
+                startActivity(new Intent(this, CloudActivity.class).putExtra(CloudActivity.EXTRA_ORIGIN, s.origin).putExtra(CloudActivity.EXTRA_PUSH_PATH, path)
+                    .putExtra(CloudActivity.EXTRA_PUSH_GEN, gen).putExtra(CloudActivity.EXTRA_PUSH_RID, rid));
             }
         } catch (RuntimeException ignored) {
             // Nothing opens on anything unreadable.

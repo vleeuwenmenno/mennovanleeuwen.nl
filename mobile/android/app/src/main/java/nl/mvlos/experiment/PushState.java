@@ -225,6 +225,16 @@ public final class PushState {
         return out;
     }
 
+    /** Keeps a revocation credential for a registration the app made but cannot keep (an opt-in that failed after activation): deleted on the server when the network allows. */
+    public synchronized void rememberForDeletion(String origin, String rid, String revocationCredential) {
+        List<String> lines = new ArrayList<>();
+        String raw = store.get(K_PENDING);
+        if (raw != null) for (String line : raw.split("\n")) if (!line.isEmpty()) lines.add(line);
+        lines.add(origin + "\t" + rid + "\t" + box.seal(revocationCredential, aad(origin, rid, "rev")) + "\t" + (clock.now() + PENDING_FOR_MS));
+        while (lines.size() > 8) lines.remove(0);
+        store.commit(Collections.singletonMap(K_PENDING, String.join("\n", lines)), Collections.<String>emptySet());
+    }
+
     /** The server confirmed (or no longer knows) this registration: its record goes. */
     public synchronized void dropPending(String rid) {
         String raw = store.get(K_PENDING);

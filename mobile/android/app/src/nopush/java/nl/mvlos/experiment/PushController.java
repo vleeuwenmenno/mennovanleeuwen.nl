@@ -29,4 +29,9 @@ final class PushController {
     static void checkSession(Context context, String origin, String uidCookie) {}
 
     static void retryPending(Context context) {}
+
+    /** Never true here: a push address arriving in this build is refused. */
+    static boolean stillCurrent(Context context, String origin, long generation, String rid) {
+        return false;
+    }
 }

@@ -46,6 +46,9 @@ public class CloudActivity extends AppCompatActivity {
     static final String EXTRA_ORIGIN = "origin";
     /** A notification's address (validated again here): opened on the saved origin, nothing else. */
     static final String EXTRA_PUSH_PATH = "pushPath";
+    /** With the path: the registration and generation it was tapped under (checked with the owner before anything loads). */
+    static final String EXTRA_PUSH_GEN = "pushGen";
+    static final String EXTRA_PUSH_RID = "pushRid";
     static final String EXTRA_STATE = "state";
     static final String EXTRA_CODE = "code";
     static final String EXTRA_ERROR = "error";
@@ -140,8 +143,8 @@ public class CloudActivity extends AppCompatActivity {
 
         if (state != null) web.restoreState(state);
         if (state == null || web.getUrl() == null) {
-            String pushed = PushDeepLink.validate(getIntent().getStringExtra(EXTRA_PUSH_PATH));
-            web.loadUrl(origin + (pushed != null ? pushed : "/"));
+            if (getIntent().hasExtra(EXTRA_PUSH_PATH)) openPushed(getIntent());
+            else web.loadUrl(origin + "/");
         }
         handleReturn(getIntent());
     }
@@ -163,9 +166,30 @@ public class CloudActivity extends AppCompatActivity {
             freshStart = true;
             web.loadUrl(origin + "/");
         }
-        String pushed = PushDeepLink.validate(intent.getStringExtra(EXTRA_PUSH_PATH));
-        if (pushed != null && next != null && next.equals(origin)) web.loadUrl(origin + pushed);
+        if (intent.hasExtra(EXTRA_PUSH_PATH) && next != null && next.equals(origin)) openPushed(intent);
         handleReturn(intent);
+    }
+
+    /**
+     * A notification's address: only after the owner says the registration it was tapped under is
+     * still current for this origin (a Disconnect in between makes it stale), and only a path that
+     * passes the validator. Otherwise nothing opens from it (the chooser, if there is no desktop yet).
+     */
+    private void openPushed(Intent intent) {
+        final String path = PushDeepLink.validate(intent.getStringExtra(EXTRA_PUSH_PATH));
+        final long gen = intent.getLongExtra(EXTRA_PUSH_GEN, -1);
+        final String rid = intent.getStringExtra(EXTRA_PUSH_RID);
+        final String server = origin;
+        progress.setVisibility(View.VISIBLE);
+        new Thread(() -> {
+            boolean ok = path != null && PushController.stillCurrent(this, server, gen, rid);
+            runOnUiThread(() -> {
+                if (!server.equals(origin)) return;
+                if (ok) web.loadUrl(server + path);
+                else if (web.getUrl() == null) LauncherActivity.showChooser(this);
+                else progress.setVisibility(View.GONE);
+            });
+        }).start();
     }
 
     @Override

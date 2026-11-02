@@ -286,7 +286,7 @@ export async function pushNative(user: Pick<User, 'id'>, n: NativeNotice): Promi
       const at = Date.now()
       db.prepare('INSERT INTO native_push_content (nid, reg_id, source, title, body, path, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(nid, r.id, n.source.slice(0, 60), n.title.slice(0, 200), n.body ? n.body.slice(0, 500) : null, nativePath(n.action), at, at + CONTENT_FOR)
       db.prepare('DELETE FROM native_push_content WHERE reg_id = ? AND nid NOT IN (SELECT nid FROM native_push_content WHERE reg_id = ? ORDER BY created_at DESC LIMIT ?)').run(r.id, r.id, MAX_PENDING_PER_REG)
-      const result = await sendData(token, { v: '1', rid: r.rid, nid, k: kindOf(n.source) }).catch(() => 'failed' as const)
+      const result = await sendData(token, { v: '1', rid: r.rid, nid, k: kindOf(n.source) }, String(user.id)).catch(() => 'failed' as const)
       if (result === 'sent') return void sent++
       failed++
       db.prepare('DELETE FROM native_push_content WHERE nid = ?').run(nid)

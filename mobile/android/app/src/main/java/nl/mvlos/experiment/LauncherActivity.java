@@ -84,6 +84,8 @@ public class LauncherActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Revocations that could not reach the server earlier are tried again (a durable, network-constrained job).
+        PushController.retryPending(this);
         if (savedInstanceState != null) {
             pendingAction = savedInstanceState.getString("pendingAction");
             pendingServer = savedInstanceState.getString("pendingServer");

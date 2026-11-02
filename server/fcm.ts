@@ -32,7 +32,54 @@ const PROJECT = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/
 const MAX_DATA_BYTES = 1024
 /** Sends to Google that may be under way at once, for the whole server. */
 const MAX_IN_FLIGHT = 16
+/** ...and by one account (so one account's burst cannot take every slot from the others). */
+const MAX_PER_ACCOUNT = 4
+/** How long a send waits for a slot before it is given up (reported as failed). */
+const WAIT_MS = 8000
 let inFlight = 0
+const perAccount = new Map<string, number>()
+const waiters: { account: string; go: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> }[] = []
+
+const free = (account: string) => inFlight < MAX_IN_FLIGHT && (perAccount.get(account) ?? 0) < MAX_PER_ACCOUNT
+const take = (account: string) => {
+  inFlight++
+  perAccount.set(account, (perAccount.get(account) ?? 0) + 1)
+}
+
+/** A slot for `account`, waiting (bounded, in order) while the server or the account is at its limit. */
+function acquire(account: string): Promise<boolean> {
+  if (free(account)) {
+    take(account)
+    return Promise.resolve(true)
+  }
+  return new Promise((go) => {
+    const w = {
+      account,
+      go,
+      timer: setTimeout(() => {
+        const i = waiters.indexOf(w)
+        if (i >= 0) waiters.splice(i, 1)
+        go(false)
+      }, WAIT_MS),
+    }
+    waiters.push(w)
+  })
+}
+
+function release(account: string) {
+  inFlight--
+  const n = (perAccount.get(account) ?? 1) - 1
+  if (n > 0) perAccount.set(account, n)
+  else perAccount.delete(account)
+  // The oldest waiter whose account has room goes next: another account's waiter is not stuck behind a busy one.
+  const i = waiters.findIndex((w) => free(w.account))
+  if (i >= 0) {
+    const [w] = waiters.splice(i, 1)
+    clearTimeout(w.timer)
+    take(w.account)
+    w.go(true)
+  }
+}
 
 const realTransport: FcmTransport = {
   async token(assertion) {
@@ -64,6 +111,11 @@ export function setFcmTransport(t: FcmTransport | null) {
   inflight = null
   pausedUntil = 0
   inFlight = 0
+  perAccount.clear()
+  for (const w of waiters.splice(0)) {
+    clearTimeout(w.timer)
+    w.go(false)
+  }
 }
 
 type Account = { project: string; email: string; key: string }
@@ -134,17 +186,16 @@ function errorCode(body: unknown): string | null {
  * Sends one data-only message to a device token. 'unregistered' only when FCM says UNREGISTERED
  * for it; everything else that goes wrong is 'failed' (and a rate limit pauses sending a while).
  */
-export async function sendData(token: string, data: Record<string, string>): Promise<FcmResult> {
+export async function sendData(token: string, data: Record<string, string>, account = ''): Promise<FcmResult> {
   const a = loadAccount()
   if (!a || Date.now() < pausedUntil) return 'failed'
   if (dataSize(data) > MAX_DATA_BYTES) return 'failed'
-  // Bounded work: past this many sends in flight, more are shed (reported as failed), never queued without end.
-  if (inFlight >= MAX_IN_FLIGHT) return 'failed'
-  inFlight++
+  // Bounded work: a slot per send (so many in flight at once, and per account), waiting a little and in order, then given up.
+  if (!(await acquire(account))) return 'failed'
   try {
     return await send(a, token, data)
   } finally {
-    inFlight--
+    release(account)
   }
 }
 

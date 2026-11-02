@@ -4350,6 +4350,12 @@ second model family; the invariants below are what must not be weakened):
   capability are read together under one generation and credentials are only ever sent to an
   allow-listed origin; a stale worker can never revoke a newer registration (`revokeIfCurrent`).
   A Disconnect whose revoke is not acknowledged deletes nothing and reports the reset as not done.
+  Token creation and deletion are serialized through one queue and awaited, so a deletion for one
+  registration cannot finish under the next; a session check only revokes the registration it
+  looked at; a tapped notification is checked with the owner (generation and registration) before
+  `CloudActivity` loads anything, so a tap after a Disconnect opens nothing; opt-ins that cannot be
+  kept hand their revocation credential to the owner, and the retry job drains until nothing is left
+  (also started at launch).
   Settings lists the account's phones and removes one (the app notices on the next call, a 401, and
   turns itself off).
 - **Safe deep links.** The server builds the address from a short list (`/`, or `/?open=` agents
@@ -4360,7 +4366,9 @@ second model family; the invariants below are what must not be weakened):
   `CloudActivity`, which validates the path once more. Pending intents are immutable and carry the
   registration and notification id in their data, so two never share one.
 - **Server limits.** At most 10 phones per account, 5 pending preparations, content kept 15
-  minutes (≤ 30 per phone, ≤ 5000 total), per-account and per-address rate limits, bounded bodies,
+  minutes (≤ 30 per phone, ≤ 5000 total), per-account and per-address rate limits, a send budget
+  per account, at most 16 sends to Google in flight (4 per account; a send waits its turn up to
+  8 s, then gives up), bounded bodies,
   a token belongs to exactly one registration (digest), and only the structured FCM error
   `UNREGISTERED` removes a token (never `INVALID_ARGUMENT` or a plain `NOT_FOUND`), and only the
   token that was sent. Nothing sensitive is logged; the sending key is read from a file

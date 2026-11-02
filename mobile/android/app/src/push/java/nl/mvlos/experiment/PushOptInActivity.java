@@ -108,7 +108,7 @@ public class PushOptInActivity extends AppCompatActivity {
                 // The activation may have been slow: the same session and account, or the registration is dropped again.
                 String after = CookieManager.getInstance().getCookie(origin + "/");
                 if (!uid.equals(PushController.cookieValue(after, "mvlos_uid")) || !PushController.cookieValue(cookie, "mvlos_sid").equals(PushController.cookieValue(after, "mvlos_sid"))) {
-                    PushApi.bearer("DELETE", origin, "/api/push/native", rev, null);
+                    cleanup(rid, rev);
                     runOnUiThread(() -> end(R.string.push_failed));
                     return;
                 }
@@ -122,13 +122,22 @@ public class PushOptInActivity extends AppCompatActivity {
                 Bundle ack = PushOwnerClient.call(this, PushOwnerService.OP_ENROLL, b, 8000);
                 boolean ok = ack != null && ack.getBoolean("ok");
                 // The owner could not keep it: the registration must not stay on the server.
-                if (!ok) PushApi.bearer("DELETE", origin, "/api/push/native", rev, null);
+                if (!ok) cleanup(rid, rev);
                 final boolean done = ok;
                 runOnUiThread(() -> end(done ? R.string.push_done : R.string.push_failed));
             } catch (Exception e) {
                 runOnUiThread(() -> end(R.string.push_failed));
             }
         }).start();
+    }
+
+    /** The registration cannot be kept: the owner stores its revocation credential and deletes it on the server when the network allows. */
+    private void cleanup(String rid, String rev) {
+        Bundle b = new Bundle();
+        b.putString("origin", origin);
+        b.putString("rid", rid);
+        b.putString("rev", rev);
+        PushOwnerClient.call(this, PushOwnerService.OP_CLEANUP, b, 5000);
     }
 
     private void end(int message) {

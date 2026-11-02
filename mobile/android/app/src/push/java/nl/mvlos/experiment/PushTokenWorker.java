@@ -4,9 +4,6 @@ import android.content.Context;
 import androidx.annotation.NonNull;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
-import com.google.android.gms.tasks.Tasks;
-import com.google.firebase.messaging.FirebaseMessaging;
-import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
 
 /**
@@ -28,7 +25,7 @@ public final class PushTokenWorker extends Worker {
         String rid = getInputData().getString("rid");
         if (rid == null || !state.isCurrent(gen, rid)) return Result.success();
         try {
-            String token = Tasks.await(FirebaseMessaging.getInstance().getToken(), 30, TimeUnit.SECONDS);
+            String token = PushOwner.token();
             // Origin, registration and capability in one read under this generation, or nothing.
             PushState.Credential cred = state.credential(gen, rid);
             if (cred == null || token == null) return Result.success();

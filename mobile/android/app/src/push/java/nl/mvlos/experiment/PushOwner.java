@@ -68,16 +68,39 @@ final class PushOwner {
         }
     }
 
-    /** Deletes the device token only while `rid` is still current: the token is shared by all registrations. */
+    /** Token work (make, delete) is serialized through ONE queue and awaited to completion: a deletion started for one registration cannot finish under the next. */
+    private static final java.util.concurrent.ExecutorService TOKENS = java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    /** Deletes the device token (queued, awaited); only while `rid` is still current when it runs. */
     static void deleteTokenIfCurrent(Context c, long generation, String rid) {
-        synchronized (LOCK) {
+        TOKENS.execute(() -> {
             if (!PushStore.get(c).isCurrent(generation, rid)) return;
-            try {
-                FirebaseMessaging.getInstance().deleteToken();
-            } catch (RuntimeException ignored) {
-                // Not configured.
-            }
+            deleteTokenNow();
+        });
+    }
+
+    private static void deleteTokenNow() {
+        try {
+            com.google.android.gms.tasks.Tasks.await(FirebaseMessaging.getInstance().deleteToken(), 30, TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            // Not configured, offline or slow: a later token request is queued behind this anyway.
         }
+    }
+
+    /** The current token, made after every queued deletion has finished. Null when it could not be made. */
+    static String token() {
+        try {
+            return TOKENS.submit(() -> com.google.android.gms.tasks.Tasks.await(FirebaseMessaging.getInstance().getToken(), 30, TimeUnit.SECONDS)).get(45, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** An opt-in that could not be kept: its revocation credential is stored and deleted on the server when the network allows. */
+    static void cleanup(Context c, String origin, String rid, String revocationCredential) {
+        if (!PushOrigins.allowed(BuildConfig.PUSH_ORIGINS, origin)) return;
+        PushStore.get(c).rememberForDeletion(origin, rid, revocationCredential);
+        retryPending(c);
     }
 
     /** Stops everything now (state first, then the rest), then tries the server for the delete-only records. */
@@ -92,12 +115,12 @@ final class PushOwner {
             NotificationManagerCompat.from(c).cancelAll();
             try {
                 // Auto-init off BEFORE the token is deleted, or the SDK would make a new one.
-                FirebaseMessaging m = FirebaseMessaging.getInstance();
-                m.setAutoInitEnabled(false);
-                m.deleteToken();
+                FirebaseMessaging.getInstance().setAutoInitEnabled(false);
             } catch (RuntimeException ignored) {
                 // Not configured.
             }
+            // The deletion itself is queued and awaited; the next enrollment's token waits behind it.
+            TOKENS.execute(PushOwner::deleteTokenNow);
         }
         retryPending(c);
     }

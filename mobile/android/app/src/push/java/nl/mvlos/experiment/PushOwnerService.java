@@ -22,6 +22,10 @@ public class PushOwnerService extends Service {
     static final int OP_REVOKE = 2;
     static final int OP_ENROLL = 3;
     static final int OP_REFRESH = 4;
+    /** Revoke only if the registration the caller looked at is still the current one (generation and rid in the data). */
+    static final int OP_REVOKE_IF = 5;
+    /** Keep a revocation credential for deletion on the server (an opt-in that could not be kept). */
+    static final int OP_CLEANUP = 6;
 
     private final ExecutorService work = Executors.newSingleThreadExecutor();
     private final Messenger messenger = new Messenger(new Handler(Looper.getMainLooper()) {
@@ -45,6 +49,14 @@ public class PushOwnerService extends Service {
                         case OP_ENROLL:
                             boolean ok = in != null && PushOwner.enroll(getApplicationContext(), in.getLong("gen", -1), in.getString("origin"), in.getString("uid"), in.getString("rid"), in.getString("cap"), in.getString("rev"));
                             out.putBoolean("ok", ok);
+                            break;
+                        case OP_REVOKE_IF:
+                            if (in != null && in.getString("rid") != null) PushOwner.revokeIfCurrent(getApplicationContext(), in.getLong("gen", -1), in.getString("rid"));
+                            out.putBoolean("ok", true);
+                            break;
+                        case OP_CLEANUP:
+                            if (in != null) PushOwner.cleanup(getApplicationContext(), in.getString("origin"), in.getString("rid"), in.getString("rev"));
+                            out.putBoolean("ok", true);
                             break;
                         case OP_REFRESH:
                             PushOwner.uploadToken(getApplicationContext());

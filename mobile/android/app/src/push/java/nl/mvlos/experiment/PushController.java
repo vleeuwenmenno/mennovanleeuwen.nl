@@ -66,11 +66,21 @@ final class PushController {
             boolean sid = cookie != null && cookie.contains("mvlos_sid=");
             String uid = cookieValue(cookie, "mvlos_uid");
             if (!origin.equals(st.getString("origin")) || !sid || uid == null || !uid.equals(st.getString("uid"))) {
-                PushOwnerClient.call(app, PushOwnerService.OP_REVOKE, null, 5000);
+                // Only if it is still the registration that was looked at: a newer enrollment is not touched.
+                Bundle only = new Bundle();
+                only.putLong("gen", st.getLong("gen", -1));
+                only.putString("rid", st.getString("rid"));
+                PushOwnerClient.call(app, PushOwnerService.OP_REVOKE_IF, only, 5000);
                 return;
             }
             PushOwnerClient.call(app, PushOwnerService.OP_REFRESH, null, 3000);
         }).start();
+    }
+
+    /** Not on the main thread: whether `rid` of `generation` is still the current registration for `origin` (a tap that arrives after a Disconnect is refused here). */
+    static boolean stillCurrent(Context c, String origin, long generation, String rid) {
+        Bundle st = PushOwnerClient.call(c, PushOwnerService.OP_STATUS, null, 3000);
+        return st != null && st.getBoolean("enabled") && st.getLong("gen", -2) == generation && rid != null && rid.equals(st.getString("rid")) && origin != null && origin.equals(st.getString("origin"));
     }
 
     /** Main process: delete-only records that could not reach the server earlier. */
