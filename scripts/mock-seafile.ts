@@ -76,7 +76,7 @@ function png(r: number, g: number, b: number): Buffer {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))])
 }
 
-export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { videoThumbs?: boolean } = {}): Promise<{ base: string; repos: Map<string, MockRepo>; server: Server; close: () => Promise<void> }> {
+export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { videoThumbs?: boolean } = {}): Promise<{ base: string; repos: Map<string, MockRepo>; server: Server; control: { listDelay: number }; close: () => Promise<void> }> {
   const repos = new Map<string, MockRepo>([
     [MY_LIBRARY, repo(MY_LIBRARY, 'My Library', ['/Desktop', '/Documents', '/Downloads', '/Music', '/Pictures', '/Videos'])],
     [PHOTOS, repo(PHOTOS, 'Photos', ['/2024'])],
@@ -112,9 +112,12 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { vid
     }
   }
 
+  // Checks can slow folder listings down (ms) to hold a request open while something else happens.
+  const control = { listDelay: 0 }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.pathname
+    if (control.listDelay && req.method === 'GET' && /\/dir\/$/.test(path)) await new Promise((r) => setTimeout(r, control.listDelay))
     const p = url.searchParams.get('p') ?? '/'
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Headers', '*')
@@ -270,7 +273,7 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { vid
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve))
   base = `http://${host}:${(server.address() as { port: number }).port}`
-  return { base, repos, server, close: () => new Promise((r) => server.close(() => r())) }
+  return { base, repos, server, control, close: () => new Promise((r) => server.close(() => r())) }
 }
 
 /** Puts a text file in a library (making its folders). */

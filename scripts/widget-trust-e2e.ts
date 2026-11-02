@@ -10,7 +10,11 @@
 //   - removal revokes, and a stale copy of the old envelope cannot bring the trust back;
 //   - live source: a bind mount over the folder, an in-place edit and a deleted folder each stop the widget at once
 //     with no access; the first two run again once undone, a deletion revokes for good (same bytes back, reload);
-//     a second browser of the same account (no source there) never runs it.
+//     a second browser of the same account (no source there) never runs it;
+//   - same-size write under a rolled-back clock stops it; another tab of the same browser editing the same IndexedDB
+//     store (same length and timestamp) stops it after A re-reads IndexedDB, and the exact bytes back restore the
+//     existing grant only; a missed announcement is caught when the evidence runs out; a stalled re-read gives no
+//     access while unresolved and times out.
 // Seafile home (mock Seafile behind the real server, user 2, two browsers = two devices):
 //   - trusted on device A, it runs on device B without asking;
 //   - entries Seafile reports as anything but a plain file or folder (inside the folder or on an ancestor) and a
@@ -18,7 +22,9 @@
 //   - A trusts, B revokes, a stale A syncs: no resurrection; A re-trusts while B (stale) revokes concurrently:
 //     blocked; after observing both revocations A trusts again and both devices run it;
 //   - a read-only home mount and a link entry appearing stop it (no revocation); the folder deleted in Seafile: B loading
-//     then never runs and revokes, A stops, and putting the folder back plus a stale account copy does not restore it.
+//     then never runs and revokes, A stops, and putting the folder back plus a stale account copy does not restore it;
+//   - a visibility change drops evidence; with the wall clock set back and Seafile unreachable it still runs out;
+//   - a slow gate after A's click while B revokes (and A receives it): no grant; a new click trusts again.
 // Synthetic data, muted Chromium, scratch DATA_DIR. Exits 1 on any failure.
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -69,15 +75,18 @@ const origin = `http://127.0.0.1:${PORT}`
 for (let i = 0; i < 150 && !log.includes('ready') && vite.exitCode === null; i++) await sleep(200)
 if (!log.includes('ready') || vite.exitCode !== null) throw new Error(`vite did not start:\n${log}`)
 
+let browser1: Awaited<ReturnType<typeof launch>>
 async function device(sid: string, login: string, uid: number): Promise<Page> {
   const b = await launch(1500, 1000)
   browsers.push(b)
+  if (uid === 1 && !browser1) browser1 = b
   const p = await newPage(b, 1500, 1000, '')
   await p.send('Network.enable')
   for (const [name, value] of [['mvlos_sid', sid], ['mvlos_login', login], ['mvlos_uid', String(uid)]]) await p.send('Network.setCookie', { name, value, url: origin })
   return p
 }
 const boot = async (p: Page) => {
+  await p.send('Page.bringToFront')
   await p.send('Page.navigate', { url: origin })
   try { await p.waitFor(`!!document.querySelector('.desktop') && !document.querySelector('.boot')`, 90_000) } catch (e) { throw new Error(`${(e as Error).message}\n  page: ${await p.eval(`location.href+' '+document.body?.innerText.slice(0,600)`).catch(() => '?')}\n  errors: ${p.errors.join(" | ")}\n  vite: ${log.slice(-1500)}`) }
   await p.eval(`import('/src/data/browserfs.ts').then(m=>m.browserFilesReady())`)
@@ -92,7 +101,7 @@ const run = <T>(p: Page, body: string) => p.eval<T>(`(async()=>{const i=${M.inst
 const pkg = '.widget-custom .wp-package'
 const body = (p: Page) => p.eval<string>(`document.querySelector('${pkg}')?.textContent ?? ''`)
 const tools = (p: Page) => p.eval<string[]>(`[...document.querySelectorAll('${pkg} .wp-tool')].map(b=>b.textContent.trim())`)
-const runs = (p: Page) => p.waitFor(`(()=>{const t=document.querySelector('${pkg}')?.textContent??'';return t.includes('all time')&&!t.includes('Allow this revision')})()`, 20_000)
+const runs = async (p: Page) => { try { await p.waitFor(`(()=>{const t=document.querySelector('${pkg}')?.textContent??'';return t.includes('all time')&&!t.includes('Allow this revision')})()`, 30_000) } catch (e) { throw new Error(`${(e as Error).message}\n  widget: ${await body(p)}\n  status: ${await p.eval(`(async()=>{const i=${M.inst};const r=Object.values(i.installations.get()).find(x=>x.kind==='custom');return r?JSON.stringify(i.trustStatus(r.instance,r.active)):'none'})()`).catch(() => '?')}`) } }
 const asks = (p: Page) => p.waitFor(`(document.querySelector('${pkg}')?.textContent??'').includes('Allow this revision')`, 20_000)
 const closeAll = (p: Page, app: string) => p.eval(`document.querySelectorAll('[data-app="${app}"] .ctl-close').forEach(e=>e.click())`)
 const workshop = async (p: Page, props: Record<string, string>) => {
@@ -212,6 +221,48 @@ try {
   await run(p, `const b=await import('/src/data/browserfs.ts');await b.writeBrowserFile(${JSON.stringify(mainFile)},${JSON.stringify(files[mainFile])})`)
   await runs(p)
   check('the exact trusted bytes back: it runs again', await trusted(p, id))
+  // A same-size write with the clock set back to the old mtime: size and time are unchanged, the mutation number is not.
+  const sameSize = files[mainFile].replace(/render/, 'rendeR')
+  await run(p, `const b=await import('/src/data/browserfs.ts');const e=b.realBrowserEntry(${JSON.stringify(mainFile)});const real=Date.now;Date.now=()=>e.mtime;try{await b.writeBrowserFile(${JSON.stringify(mainFile)},${JSON.stringify(sameSize)})}finally{Date.now=real};const n=b.realBrowserEntry(${JSON.stringify(mainFile)});if(n.size!==e.size||n.mtime!==e.mtime)throw Error('fixture: size or mtime changed')`)
+  await asks(p)
+  check('a same-size write under a rolled-back clock (same size and mtime) still stops it', await noAccess(p, id))
+  await run(p, `const b=await import('/src/data/browserfs.ts');await b.writeBrowserFile(${JSON.stringify(mainFile)},${JSON.stringify(files[mainFile])})`)
+  await runs(p)
+  // Another tab (B) of this browser writes the same IndexedDB store. Tab A's memory does not follow it, so A
+  // must read the folder again from IndexedDB: the edit has the same length and the same timestamp.
+  const other = await newPage(browser1, 1500, 1000, '')
+  await boot(other)
+  await runs(other)
+  await p.send('Page.bringToFront') // a background tab runs no widget at all; A is the one under test
+  const sneaky = (silent: boolean) => `const b=await import('/src/data/browserfs.ts');window.__post??=BroadcastChannel.prototype.postMessage;BroadcastChannel.prototype.postMessage=${silent ? '()=>{}' : 'window.__post'};const e=b.realBrowserEntry(${JSON.stringify(mainFile)});const real=Date.now;Date.now=()=>e.mtime;try{await b.writeBrowserFile(${JSON.stringify(mainFile)},${JSON.stringify(sameSize)})}finally{Date.now=real}`
+  const restore = `const b=await import('/src/data/browserfs.ts');if(window.__post)BroadcastChannel.prototype.postMessage=window.__post;await b.writeBrowserFile(${JSON.stringify(mainFile)},${JSON.stringify(files[mainFile])})`
+  await run(other, sneaky(false))
+  await asks(p)
+  check('tab B edits the same file (same length and timestamp): tab A re-reads IndexedDB and stops, no access', await noAccess(p, id) && await retains(p, id))
+  await run(other, restore)
+  await runs(p)
+  check('tab B puts the exact bytes back: tab A re-reads and runs again, with the existing grant (no new grant made)', await trusted(p, id) && await run<number>(p, `return Object.keys(c.canonicalTrust.get().grants).length`) === 1)
+  // A missed announcement: tab B cannot tell tab A. A's evidence runs out within 20 s and is re-checked from IndexedDB.
+  await run(other, sneaky(true))
+  await sleep(1500)
+  const t0 = Date.now()
+  await p.waitFor(`(async()=>{const i=${M.inst};return i.trustStatus(${JSON.stringify(id)},i.installation(${JSON.stringify(id)}).active).state!=='trusted'})()`, 30_000)
+  check(`missed announcement: tab A stops once its evidence runs out and IndexedDB is read again (${Math.round((Date.now() - t0) / 1000)} s)`, await noAccess(p, id))
+  await run(other, restore)
+  await boot(p)
+  await runs(p)
+  // A stalled re-read: tab A's IndexedDB reads hang. It fails closed meanwhile, and the check times out.
+  await p.eval(`window.__getAll=IDBObjectStore.prototype.getAll;IDBObjectStore.prototype.getAll=function(){return {}}`)
+  await run(other, sneaky(false))
+  await sleep(1500)
+  check('a re-read that stalls: no access while it is unresolved', await noAccess(p, id) && await p.eval(`!!document.querySelector('${pkg} [data-trust-checking]')`))
+  await p.waitFor(`(document.querySelector('${pkg}')?.textContent??'').includes('took too long')`, 30_000)
+  check('... the stalled check times out and still gives no access', await noAccess(p, id))
+  await p.eval(`IDBObjectStore.prototype.getAll=window.__getAll`)
+  await run(other, restore)
+  await other.close()
+  await runs(p)
+  check('reads work again and the exact bytes are back: it runs again with the same grant', await trusted(p, id))
   await run(p, `const b=await import('/src/data/browserfs.ts');await b.removeBrowser(${JSON.stringify(base)})`)
   await asks(p)
   await p.waitFor(`(async()=>{const i=${M.inst};return !i.retainsTrust(${JSON.stringify(id)})})()`, 20_000)
@@ -414,6 +465,39 @@ try {
   await sleep(1500)
   const undo = await run<{ live: boolean; retained: boolean }>(A, `const tm=await import('/src/widgets/platform/trust.ts');const merged=tm.mergeTrust(c.canonicalTrust.get(),tm.normalizeTrust(${JSON.stringify(staleTrust)}));return {live:Object.values(merged.grants).some(g=>g.instance===${JSON.stringify(sid)}),retained:i.retainsTrust(${JSON.stringify(sid)})}`)
   check('the folder put back, and a stale copy of the account state merged in: trust stays revoked', !undo.live && !undo.retained && await noAccess(A, sid) && await noAccess(B, sid), undo)
+
+  // Evidence time is monotonic and a hidden tab drops it: the wall clock set back an hour, Seafile unreachable.
+  await A.waitFor(`!!document.querySelector('${pkg} .wp-trust')`, 30_000)
+  await realClick(A, `${pkg} .wp-trust`); await runs(A); await flush(A)
+  check('a visibility change drops Seafile evidence: it checks again before running', await A.eval(`(async()=>{const i=${M.inst};const r=i.installation(${JSON.stringify(sid)}).active;const before=i.trustStatus(${JSON.stringify(sid)},r).state;document.dispatchEvent(new Event('visibilitychange'));return before==='trusted'&&i.trustStatus(${JSON.stringify(sid)},r).state==='checking'&&!i.hasAccess(${JSON.stringify(sid)},r)})()`))
+  await runs(A)
+  await A.send('Network.setBlockedURLs', { urls: ['*/api/seafile/*'] })
+  await A.eval(`(()=>{const real=Date.now;window.__realNow=real;Date.now=()=>real()-3600_000})()`)
+  await A.waitFor(`(async()=>{const i=${M.inst};return i.trustStatus(${JSON.stringify(sid)},i.installation(${JSON.stringify(sid)}).active).state!=='trusted'})()`, 30_000)
+  check('with the clock set back and Seafile unreachable, the evidence still runs out (within 20 s): no access', await noAccess(A, sid))
+  await A.eval(`Date.now=window.__realNow`)
+  await A.send('Network.setBlockedURLs', { urls: [] })
+  await runs(A)
+
+  // The causal race: A clicks Trust always, its gate is slow; B revokes meanwhile and A receives that before
+  // the check ends. The revocation was not seen at the click, so no grant is made.
+  await toolClick(A, 'Revoke trust'); await asks(A); await flush(A)
+  await A.waitFor(`!!document.querySelector('${pkg} .wp-trust')`, 20_000)
+  const revBefore = await revocations(A, sid)
+  mock.control.listDelay = 2500
+  await realClick(A, `${pkg} .wp-trust`)
+  await sleep(300)
+  await pull(B)
+  await run(B, `await i.revokeTrust(${JSON.stringify(sid)})`)
+  await flush(B)
+  await pull(A)
+  check('A received B\'s revocation while its check was still running', await revocations(A, sid) === revBefore + 1)
+  mock.control.listDelay = 0
+  await A.waitFor(`(document.querySelector('${pkg}')?.textContent??'').includes('revoked on another device while this was being checked')`, 30_000)
+  check('the delayed check made no grant: the revocation arrived after the click', await noAccess(A, sid) && !(await recorded(A, sid)) && !(await retains(A, sid)))
+  await realClick(A, `${pkg} .wp-trust`)
+  await runs(A)
+  check('a new click after seeing it trusts it again', await trusted(A, sid))
 
   const errors = [...p.errors, ...p2.errors, ...A.errors, ...B.errors].filter((e) => !/ResizeObserver|Failed to fetch|NetworkError|net::ERR/.test(e))
   check('no page errors', errors.length === 0, errors)

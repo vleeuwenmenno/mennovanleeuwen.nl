@@ -4929,7 +4929,8 @@ at most 4 KiB, read as `input.custom.state` and replaced only by a button event 
 `{type:'custom.replace', state, expectedRevision}` (refused if the state changed meanwhile or is too
 large). Every package also sees the clock (`input.custom.now`, `input.custom.today`). There is no
 network, notes, other widget data or DOM. As for any fork, a revision never runs until you grant that
-exact revision for that instance in this session; after a reload the widget asks again
+exact revision for that instance in this session, unless you chose **Trust always** for it (below);
+after a reload an untrusted widget asks again
 (*Allow this revision…*, which allows it once) and **Pause access** withdraws that session grant.
 **Reset saved state** in the Workshop clears the state. `pnpm check:widget-custom` covers manifest rules,
 the starter in the VM, the state limit and record merge/limits; `pnpm check:widget-custom-ui` runs the
@@ -4959,19 +4960,32 @@ another revision or a different installation. A grant that does not match is ign
 
 A recorded grant alone never runs a widget. Each device checks with its own storage that the folder
 is still exactly there (the same gate as above, rebuilt to the pinned digest) and keeps what it saw
-as evidence. The evidence counts only while the device sees the same thing: the mounts, the folder
-and every entry in it are compared on every render and before every run and button action, and a
-Seafile check also expires after 20 seconds and is repeated. While a check runs the widget shows
-*Checking this trusted widget's folder…* and nothing runs. A device where the source is missing or
+as evidence. The check always reads the folder from where it is stored (IndexedDB for browser files,
+Seafile itself), never from the tab's memory alone. The evidence counts only while the device sees the
+same thing: the mounts, the folder and every entry in it are compared on every render and before every
+run and button action. In browser files every write, removal or move gives the entry a new mutation
+number (so a same-size write, or a clock set back, still counts as a change). Another tab of the same
+browser announces the paths it changed; that makes this tab read the folder again from IndexedDB, and
+nothing runs until it has. Evidence also expires after 20 seconds on the monotonic clock (setting the
+clock back cannot stretch it), for browser files too, so a missed announcement or a Seafile change made
+elsewhere is caught then, and it is dropped when the tab is hidden, frozen, resumed or comes back online.
+It is checked again in the background after 10 seconds while the existing evidence still counts; a
+check that has not finished after 15 seconds fails. Without evidence that counts (first load, after
+something it saw changed, or after it ran out), the widget shows *Checking this trusted widget's
+folder…* and nothing runs until the check passes. A passing check only lets an existing grant count
+again; it never makes a new one. A device where the source is missing or
 different (another browser for a browser-files widget, a deleted or edited folder, a bind or
 read-only mount, an unknown entry type) falls back to asking, with the reason under *Allow this
 revision…*; putting the exact bytes back, or undoing the mount, runs it again. A folder deleted from
 its own storage revokes the trust for good (on every device, and the same bytes put back or a stale
 copy of the account state do not restore it). Seafile changes made elsewhere are noticed within the
 20 seconds. Trusting a newer revision of a widget retires the grants for its older installations
-(their installation generation can never come back), so a widget can be edited and trusted any
-number of times; **Revoke trust** stays available while any earlier decision is left.
-Only your own click (a browser-trusted event) creates trust: activation, builds, recovery, sync and the
+(their installation generation can never come back; each widget keeps the highest generation it was
+trusted for, so this is the same whatever order devices merge in), so a widget can be edited and
+trusted any number of times; **Revoke trust** stays available while any earlier decision is left.
+The revocations of that widget you had seen at the moment of your click are what the grant records:
+if another device revokes it while the check after your click is still running, no grant is made and
+you are asked to decide again. Only your own click (a browser-trusted event) creates trust: activation, builds, recovery, sync and the
 agents' `widget` command cannot (their activation is always `trust: false`). **Revoke trust** in the
 widget's toolbar (next to *Pause access*) ends trust and every Allow once grant for that widget at once,
 here and on other devices as soon as they sync. Removing the widget revokes too. Revocation is causal,

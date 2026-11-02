@@ -7,7 +7,7 @@ import { useWM, type WinState } from '../../os/wm'
 import { useAccount } from '../../os/account'
 import { ask } from '../../os/Dialogs'
 import { defaultBuild } from './defaults'
-import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, trustBuildEligibility, trustInstallation, useInstallationPresence, useTrustStatus, type Revision, type TrustEligibility } from './installations'
+import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, trustBuildEligibility, trustFrontier, trustInstallation, useInstallationPresence, useTrustStatus, type Revision, type TrustEligibility } from './installations'
 import { CUSTOM_KIND, isInstanceKind, buildPackage, descriptor, supportsCapabilities, type Descriptor } from './package'
 import { cloneDefault, cloneTemplate, readSource, sourceIdentity, sourcePath, WIDGET_HOME } from './sources'
 import { execute } from './runtime'
@@ -80,10 +80,14 @@ export function Workshop({ win }: { win: WinState }) {
     return () => { live = false }
   }, [trustKey]) // eslint-disable-line react-hooks/exhaustive-deps
   const trustResult = trustCheck?.digest === trustKey ? trustCheck.result : null
+  /** What the person decided at their click, captured before activation waits for anything: whether
+   * to trust, the click itself, and the revocations of that widget they had seen then. */
+  type TrustIntent = { want: boolean; gesture: Event; observed: readonly string[] }
+  const intentAt = (id: string, gesture: Event): TrustIntent => ({ want: trustChoice, gesture, observed: trustFrontier(id) })
   /** After an activation: trust it too when the person ticked the box (their click is the gesture). */
-  const trustAfter = async (id: string, value: Revision, gesture: Event) => {
-    if (!trustChoice) return ''
-    try { await trustInstallation(id, value, gesture) } catch (error) { return ` Not trusted: ${error instanceof Error ? error.message : 'trust failed'}. It runs after Allow, as before.` }
+  const trustAfter = async (id: string, value: Revision, intent: TrustIntent) => {
+    if (!intent.want) return ''
+    try { await trustInstallation(id, value, intent.gesture, intent.observed) } catch (error) { return ` Not trusted: ${error instanceof Error ? error.message : 'trust failed'}. It runs after Allow, as before.` }
     return ' Trusted: it runs without asking until you revoke trust or edit it.'
   }
   const verified = async (value: Revision) => {
@@ -155,29 +159,26 @@ export function Workshop({ win }: { win: WinState }) {
       </label>}
       {custom && instance && trustedNow && <p data-trusted>The active revision is trusted: it runs without asking. Revoke trust from the widget's toolbar.</p>}
       <div className="wp-controls">
-        {custom && !instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={event => void run(async () => {
-          const gesture = event.nativeEvent
+        {custom && !instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={event => { const id = `custom-${crypto.randomUUID().slice(0, 8)}`, intent = intentAt(id, event.nativeEvent); void run(async () => {
           if (!revision) return
           await verified(revision)
-          const id = `custom-${crypto.randomUUID().slice(0, 8)}`
           await activate(id, CUSTOM_KIND, revision, 0, installationVersion(id).identity)
           allowRevision(id, revision)
           setWidgetConfig(id, { tilt: randomTilt() })
           setMade(id); adopt(id)
           openWidget(wm, CUSTOM_KIND, id)
-          const trusted = await trustAfter(id, revision, gesture)
+          const trusted = await trustAfter(id, revision, intent)
           setMessage(`New widget "${revision.snapshot.manifest.name}" activated and placed on the desktop.${trusted}`); setOptIn(false); setTrustChoice(false)
-        })}>Activate as new widget</button>}
-        {instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={event => void run(async () => {
-          const gesture = event.nativeEvent
+        }) }}>Activate as new widget</button>}
+        {instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={event => { const intent = intentAt(instance, event.nativeEvent); void run(async () => {
           if (!revision) return
           await verified(revision)
           await activate(instance, kind, revision, generation.current, expectedIdentity.current)
           allowRevision(instance, revision)
           adopt(instance)
-          const trusted = kind === CUSTOM_KIND ? await trustAfter(instance, revision, gesture) : ''
+          const trusted = kind === CUSTOM_KIND ? await trustAfter(instance, revision, intent) : ''
           setMessage(`Revision activated. The desktop now loads this immutable snapshot.${trusted}`); setOptIn(false); setTrustChoice(false)
-        })}>Activate built revision</button>}
+        }) }}>Activate built revision</button>}
         {instance && <button disabled={busy || !current?.previous || !optIn || account.status !== 'user'} onClick={() => void run(async () => {
           await recover(instance, current?.generation ?? 0, installationIdentity(current))
           const active = installation(instance)!.active

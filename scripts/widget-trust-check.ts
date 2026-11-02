@@ -110,6 +110,37 @@ test('the grant quota counts other widgets only; a revoked widget can still be r
   assert.throws(() => grantNow(t, 1), /Too many trusted widgets/)
   assert.doesNotThrow(() => grantNow(t, 1, { instance: 'custom-00000001', installation: '[9,"x"]' }), 'a widget that already has a grant can be trusted again for a new revision')
 })
+test('a grant pins the revocations seen at the click: one that arrived during the check still defeats it', () => {
+  let t = add(emptyTrust(), grantNow(emptyTrust()))
+  t = revoke(t).trust
+  const atClick = trustModel.revocationsOf(t, subject.instance) // the person saw r1
+  const later = revoke(t, 1).trust // r2 arrives while the gate runs
+  const g = newGrant(later, subject, uuid(), 3000, atClick)
+  assert.deepEqual(g.after, atClick)
+  assert.equal(live(add(later, g)), false, 'pinned to what was seen: r2 still defeats it')
+})
+test('pruning is the same in any grouping: an older grant that saw r, a newer one that did not, and r', () => {
+  const r = newRevocation(subject.instance, uuid(), 1)
+  const older = { ...grantNow(emptyTrust(), 1, { installation: JSON.stringify([5, DIGEST]) }), after: [r.id] }
+  const newer = grantNow(emptyTrust(), 2, { installation: JSON.stringify([7, DIGEST]) })
+  const A: TrustState = { grants: { [older.id]: older }, revoked: {} }, B: TrustState = { grants: { [newer.id]: newer }, revoked: {} }, C: TrustState = { grants: {}, revoked: { [r.id]: r } }
+  const j = (v: unknown) => model.stableJSON(v)
+  const results = new Set([
+    mergeTrust(mergeTrust(A, B), C), mergeTrust(A, mergeTrust(B, C)), mergeTrust(mergeTrust(A, C), B), mergeTrust(B, mergeTrust(A, C)),
+    mergeTrust(mergeTrust(C, B), A), mergeTrust(C, mergeTrust(A, B)),
+  ].map(j))
+  assert.equal(results.size, 1, [...results].join('\n'))
+  const merged = mergeTrust(mergeTrust(A, B), C)
+  assert.equal(Object.keys(merged.grants).length, 0, 'the newer generation is the floor, and it was revoked: nothing is trusted')
+  assert.equal(merged.floors?.[subject.instance], 7)
+})
+test('a grant fragment carries the revocations it saw and its floor, so it is closed on its own', () => {
+  const r = newRevocation(subject.instance, uuid(), 1)
+  const g = newGrant({ grants: {}, revoked: { [r.id]: r } }, { ...subject, installation: JSON.stringify([3, DIGEST]) }, uuid(), 2, [r.id])
+  const fragment: TrustState = { grants: { [g.id]: g }, revoked: { [r.id]: r }, floors: { [subject.instance]: 3 } }
+  assert.equal(live(normalizeTrust(fragment), { installation: JSON.stringify([3, DIGEST]) }), true)
+  assert.ok(g.after.every(id => fragment.revoked[id]))
+})
 test('revocation and grants on other instances do not interfere', () => {
   const t = add(emptyTrust(), grantNow(emptyTrust()))
   assert.equal(live(revoke(t, 2000, 'custom-ffff0000').trust), true)

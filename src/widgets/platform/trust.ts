@@ -20,7 +20,10 @@ import { record, sourceIdentityOf, type SourceIdentity } from './package.ts'
  */
 export type TrustGrant = { id: string; instance: string; package: string; source: SourceIdentity; digest: string; installation: string; at: number; after: string[] }
 export type TrustRevocation = { id: string; instance: string; revokedAt: number }
-export type TrustState = { grants: Record<string, TrustGrant>; revoked: Record<string, TrustRevocation> }
+/** `floors`: per instance, the highest installation generation any grant was ever made for (a max
+ * register). Grants below it are for installations that can never come back; keeping the floor
+ * (rather than only dropping grants) makes pruning the same whichever order fragments merge in. */
+export type TrustState = { grants: Record<string, TrustGrant>; revoked: Record<string, TrustRevocation>; floors?: Record<string, number> }
 
 export const TRUST_LIMITS = Object.freeze({ grants: 64, revocationsPerInstance: 64, after: 64 })
 const TRUST_ID = /^[a-f0-9-]{36}$/
@@ -32,6 +35,7 @@ const own = (v: object, key: string) => Object.hasOwn(v, key)
 const put = <T>(out: Record<string, T>, key: string, value: T) => Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true })
 
 export const emptyTrust = (): TrustState => ({ grants: {}, revoked: {} })
+const generation = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) > 0
 /** Where a trusted package lives inside its storage: home's own `.local/share/mvlos/widgets/<package id>`. */
 export const trustedSourcePath = (packageId: string) => `/.local/share/mvlos/widgets/${packageId}`
 
@@ -64,6 +68,7 @@ export function normalizeTrust(raw: unknown): TrustState {
     const g = grantOf(id, v)
     if (g) put(out.grants, id, g)
   }
+  if (record(raw.floors)) for (const [id, v] of Object.entries(raw.floors)) if (INSTANCE.test(id) && generation(v)) { out.floors ??= {}; put(out.floors, id, v) }
   return prune(out)
 }
 
@@ -85,11 +90,13 @@ export function grantGeneration(g: TrustGrant): number {
  * Both rules depend only on the merged data, so every device prunes the same way.
  */
 function prune(trust: TrustState): TrustState {
-  const newest = new Map<string, number>()
-  for (const g of Object.values(trust.grants)) if (grantLive(trust, g)) newest.set(g.instance, Math.max(newest.get(g.instance) ?? 0, grantGeneration(g)))
+  // The floor folds in every grant's generation, live or not, before anything is dropped.
+  const floors: Record<string, number> = {}
+  for (const [id, n] of Object.entries(trust.floors ?? {})) put(floors, id, n)
+  for (const g of Object.values(trust.grants)) { const n = grantGeneration(g); if (n > (own(floors, g.instance) ? floors[g.instance] : 0)) put(floors, g.instance, n) }
   const grants: Record<string, TrustGrant> = {}
-  for (const [id, g] of Object.entries(trust.grants)) if (grantLive(trust, g) && grantGeneration(g) === newest.get(g.instance)) put(grants, id, g)
-  return { grants, revoked: trust.revoked }
+  for (const [id, g] of Object.entries(trust.grants)) if (grantLive(trust, g) && grantGeneration(g) >= (own(floors, g.instance) ? floors[g.instance] : 0)) put(grants, id, g)
+  return { grants, revoked: trust.revoked, ...(Object.keys(floors).length ? { floors } : {}) }
 }
 
 const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable).join(',')}]` : record(v) ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}` : JSON.stringify(v) ?? 'null'
@@ -101,9 +108,11 @@ export function mergeTrust(a: TrustState, b: TrustState): TrustState {
     // The same revocation seen twice: keep the earliest informational time, deterministically.
     if (!own(revoked, id) || r.revokedAt < revoked[id].revokedAt || r.revokedAt === revoked[id].revokedAt && stable(r) > stable(revoked[id])) put(revoked, id, r)
   }
-  return prune({ grants, revoked })
+  const floors: Record<string, number> = { ...b.floors }
+  for (const [id, n] of Object.entries(a.floors ?? {})) if (!own(floors, id) || n > floors[id]) put(floors, id, n)
+  return prune({ grants, revoked, floors })
 }
-export const trustEmpty = (t: TrustState) => !Object.keys(t.grants).length && !Object.keys(t.revoked).length
+export const trustEmpty = (t: TrustState) => !Object.keys(t.grants).length && !Object.keys(t.revoked).length && !Object.keys(t.floors ?? {}).length
 
 /** What a grant is checked against: the live installation, as the installation layer sees it now. */
 export type TrustSubject = { instance: string; kind: string; package: string; source: SourceIdentity; digest: string; installation: string; account: number | null }
@@ -120,8 +129,11 @@ export function effectiveGrant(trust: TrustState, subject: TrustSubject): TrustG
 }
 
 /** A new grant made from what this device has observed now. */
-export function newGrant(trust: TrustState, subject: Omit<TrustSubject, 'kind' | 'account'>, id: string, at: number): TrustGrant {
-  const after = revocationsOf(trust, subject.instance)
+/** `observed`: the revocations of the instance the person had seen when they clicked (captured at the
+ * click, before any waiting). The grant records exactly those; one made meanwhile and not seen keeps
+ * defeating it. Defaults to what `trust` holds, for callers that are the click itself. */
+export function newGrant(trust: TrustState, subject: Omit<TrustSubject, 'kind' | 'account'>, id: string, at: number, observed?: readonly string[]): TrustGrant {
+  const after = observed ? [...observed] : revocationsOf(trust, subject.instance)
   if (after.length > TRUST_LIMITS.after) throw new Error('This widget was revoked too many times to trust it again; remove it and make a new one')
   // This instance's own earlier grants are for older installations and are dropped when this one merges.
   if (Object.values(trust.grants).filter(g => g.instance !== subject.instance).length >= TRUST_LIMITS.grants) throw new Error('Too many trusted widgets; revoke one first')

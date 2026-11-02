@@ -262,14 +262,22 @@ export const canonicalInstallations = facade<InstallationRecords>(() => installa
   }
 })
 
-/** Trust is only ever added to: a set queues the grants and revocations that are new, as a delta.
- * Only installations.ts writes here, from a person's own gesture (see trustInstallation/revokeTrust). */
-export const canonicalTrust = facade<TrustState>(() => trust, next => {
-  const grants = Object.fromEntries(Object.entries(next.grants).filter(([id, g]) => stableJSON(g) !== stableJSON(trust.grants[id])))
-  const revoked = Object.fromEntries(Object.entries(next.revoked).filter(([id, r]) => stableJSON(r) !== stableJSON(trust.revoked[id])))
-  queue({ ...emptyDelta(), trust: { grants, revoked } })
+/** Trust is read here; it is written only through updateTrust, from installations.ts. */
+export const canonicalTrust = facade<TrustState>(() => trust, () => { throw new Error('Trust changes go through updateTrust') })
+/**
+ * Trust is only ever added to. `change` sees the freshest view (this tab's pending changes and every
+ * other tab's journal applied) and returns the delta to queue verbatim, or null for none. A grant's
+ * delta carries the revocation records it lists as seen (and its generation floor), so every fragment
+ * that holds a grant also holds what it observed and merges the same in any grouping.
+ */
+export function updateTrust(change: (current: TrustState) => TrustState | null) {
+  if (!accountGuard()) throw new Error('Account changed')
+  refresh(pendingView())
+  const delta = change(trust)
+  if (!delta) return
+  queue({ ...emptyDelta(), trust: delta })
   commit()
-})
+}
 
 state.onRemote(next => {
   if (next && ready) try { refresh(pendingView(), true) } catch (error) { reportSyncFailure(error) }

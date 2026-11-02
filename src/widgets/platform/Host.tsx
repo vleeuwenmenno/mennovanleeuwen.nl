@@ -124,13 +124,17 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   }, [current, kind, retry])
   // Whether the consent banner may also offer "Trust always": the same canonical gate the click runs again.
   const offerKey = custom && !permitted && trust.state !== 'checking' && revision ? JSON.stringify([id, account.user?.id, revision.source, revision.snapshot.digest, version.identity]) : ''
+  // Storage changes (here or, for Seafile, elsewhere) can make a refused offer eligible again: a refused
+  // offer is looked at again every 10 s. (Not on every storage event: the check's own reads are events.)
+  const [offerTick, setOfferTick] = useState(0)
   useEffect(() => {
     if (!offerKey || !revision) return
     let live = true
     void trustEligibility(id, revision).then(result => { if (live) setTrustOffer({ key: offerKey, ok: result.ok, reason: result.ok ? '' : result.reason }) })
     return () => { live = false }
-  }, [offerKey, retry]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [offerKey, retry, offerTick]) // eslint-disable-line react-hooks/exhaustive-deps
   const offer = trustOffer?.key === offerKey ? trustOffer : null
+  useEffect(() => { if (!offerKey || offer?.ok !== false) return; const timer = setTimeout(() => setOfferTick(n => n + 1), 10_000); return () => clearTimeout(timer) }, [offerKey, offer])
   // The clock's one timer: the next minute (or second) boundary, only while the widget is eligible. Hidden, covered, minimized or off a phone: no timer at all.
   useEffect(() => {
     if (!clock || !visible) return

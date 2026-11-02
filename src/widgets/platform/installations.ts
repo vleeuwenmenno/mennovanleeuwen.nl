@@ -4,12 +4,12 @@ import { subscribeMounts } from '../../data/mounts'
 import { subscribeDirs, subscribeLibraries } from '../../data/seafile'
 import { defaultBuild, isBuiltin } from './defaults'
 import type { Synced } from '../../os/synced'
-import { canonicalInstallations, canonicalInstallationBytes, canonicalTrust, widgetsHydrated } from './canonicalState'
+import { canonicalInstallations, canonicalInstallationBytes, canonicalTrust, updateTrust, widgetsHydrated } from './canonicalState'
 import { getAccount, subscribeAccount } from '../../os/account'
 import { accountGuard } from '../../os/accountSpace'
 import { CUSTOM_KIND, isInstanceKind, supportsCapabilities, record, verifySnapshot, type InstanceKind } from './package'
 import { assertSource, sightTrustedSource, trustGate, TrustRefusal } from './sources'
-import { effectiveGrant, grantLive, newGrant, newRevocation, type TrustGrant } from './trust'
+import { effectiveGrant, grantGeneration, grantLive, newGrant, newRevocation, revocationsOf, type TrustGrant } from './trust'
 import { admission, INSTANCE_ID, isTombstone, mergeInstallations as mergeRecords, normalizeInstallations as normalize, tombstone, type Installation, type Installations, type Revision } from './records'
 export type { Installation, Revision }
 /** Why an activation or recovery did not happen, so the UI can offer the right action. Messages stay user-readable. */
@@ -155,15 +155,25 @@ export const useRetainsTrust = (instance: string) => retainsTrust(instance, cano
 //
 // Every device checks, with its own storage, that the trusted folder is still exactly there: the
 // canonical path on home's own storage, the same source identity, plain entries only, and a rebuild
-// that gives the pinned digest (trustGate). The check leaves evidence: what it saw of the mounts, the
-// folder and its entries. Evidence counts only while what this device sees now is the same (checked
-// synchronously on every render and on every execution and callback), and for Seafile, whose files
-// can change elsewhere, only for SEAFILE_FRESH_MS before it is checked again. Anything else, a missing
-// or changed folder, another mount, a read-only library, an unknown entry type, a source that is
-// not on this device at all, fails closed: the widget asks (Allow once) like any revision.
+// that gives the pinned digest (trustGate, which reads the folder again from IndexedDB or Seafile, not
+// from this tab's memory). The check leaves evidence: what it saw of the mounts, the folder and its
+// entries (with browser-files mutation numbers). Evidence counts only while what this tab sees now is
+// the same (checked synchronously on every render and on every execution and callback), while no
+// other tab has announced a change there, and for at most TRUST_FRESH_MS on the monotonic clock; a
+// hidden, frozen or resumed tab drops it. It is checked again halfway, while it still counts.
+// Anything else, a missing or changed folder, another mount, a read-only library, an unknown entry
+// type, a source that is not on this device, a check that stalls, fails closed: the widget asks
+// (Allow once) like any revision. A passing re-check only restores an existing grant; it never makes one.
 
-/** How long a Seafile check counts before it is repeated (a browser-files check counts while nothing in the folder changes). */
-export const SEAFILE_FRESH_MS = 20_000
+/** How long a check counts before it is repeated from storage (browser files too: another tab may
+ * change them, and its announcement can be missed). */
+export const TRUST_FRESH_MS = 20_000
+/** A check that has not finished by then counts as failed (and nothing runs meanwhile). */
+const CHECK_TIMEOUT_MS = 15_000
+/** Evidence times come from the monotonic clock: setting the wall clock back cannot stretch them. A
+ * device that was suspended, or a tab that was hidden or frozen, drops its Seafile evidence (the
+ * monotonic clock may not count a suspension) and checks again. */
+const clock = () => performance.now()
 type Evidence = { seen: string; at: number }
 const evidence = new Map<string, Evidence>()
 const failures = new Map<string, { seen: string | null; at: number; reason: string }>()
@@ -174,14 +184,14 @@ const evidenceKey = (instance: string, revision: Revision, grant: TrustGrant) =>
 /** `deleted`: this device sees the trusted folder gone from its own storage (the full check then confirms and revokes). */
 export type TrustStatus = { state: 'none' } | { state: 'checking' } | { state: 'trusted' } | { state: 'refused'; reason: string; deleted?: true }
 /** The persistent trust of exactly this revision on this device now, without I/O. Only `trusted` runs it. */
-export function trustStatus(instance: string, revision: Revision | null, now = Date.now()): TrustStatus {
+export function trustStatus(instance: string, revision: Revision | null, now = clock()): TrustStatus {
   const grant = persistentTrust(instance, revision)
   if (!grant || !revision) return { state: 'none' }
   const sight = sightTrustedSource(revision.source, revision.snapshot.manifest.id)
   if (sight.state === 'refused') return { state: 'refused', reason: sight.reason, ...(sight.definitive ? { deleted: true as const } : {}) }
   const key = evidenceKey(instance, revision, grant)
   const seen = sight.state === 'ok' ? sight.seen : null
-  const fresh = (at: number) => revision.source.kind === 'browser' || now - at < SEAFILE_FRESH_MS
+  const fresh = (at: number) => now >= at && now - at < TRUST_FRESH_MS
   const proof = evidence.get(key)
   if (proof && seen !== null && proof.seen === seen && fresh(proof.at)) return { state: 'trusted' }
   const failed = failures.get(key)
@@ -196,13 +206,14 @@ export function checkTrust(instance: string, revision: Revision): Promise<void> 
   const running = checking.get(key)
   if (running) return running
   const run = (async () => {
-    const result = await trustEligibility(instance, revision)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const result = await Promise.race([trustEligibility(instance, revision), new Promise<TrustEligibility>(resolve => { timer = setTimeout(() => resolve({ ok: false, reason: 'Checking the widget folder took too long; it is checked again shortly' }), CHECK_TIMEOUT_MS) })]).finally(() => clearTimeout(timer))
     if (persistentTrust(instance, revision)?.id !== grant.id || evidenceKey(instance, revision, grant) !== key) return
-    if (result.ok) { evidence.set(key, { seen: result.seen, at: Date.now() }); failures.delete(key) }
+    if (result.ok) { evidence.set(key, { seen: result.seen, at: clock() }); failures.delete(key) }
     else {
       evidence.delete(key)
       const sight = sightTrustedSource(revision.source, revision.snapshot.manifest.id)
-      failures.set(key, { seen: sight.state === 'ok' ? sight.seen : null, at: Date.now(), reason: result.reason })
+      failures.set(key, { seen: sight.state === 'ok' ? sight.seen : null, at: clock(), reason: result.reason })
       // The package's folder is gone from its own storage: that ends the trust for good, on every
       // device, so a stale copy of the account state (or the same bytes put back) cannot restore it.
       if (result.deleted) await revokeTrust(instance).catch(() => {})
@@ -225,10 +236,9 @@ export function useTrustStatus(instance: string, revision: Revision | null): Tru
   useEffect(() => {
     if (!revision || status.state === 'none') return
     if (status.state === 'checking' || status.state === 'refused' && status.deleted) { void checkTrust(instance, revision); return }
-    if (revision.source.kind !== 'seafile') return
-    // Re-check halfway through the evidence's life, and wake up when it would run out.
-    const timer = setTimeout(() => { void checkTrust(instance, revision).finally(() => setTick(n => n + 1)) }, SEAFILE_FRESH_MS / 2)
-    const expiry = setTimeout(() => setTick(n => n + 1), SEAFILE_FRESH_MS + 50)
+    // Re-check halfway through the evidence's life (it keeps counting meanwhile), and wake up when it would run out.
+    const timer = setTimeout(() => { void checkTrust(instance, revision).finally(() => setTick(n => n + 1)) }, TRUST_FRESH_MS / 2)
+    const expiry = setTimeout(() => setTick(n => n + 1), TRUST_FRESH_MS + 50)
     return () => { clearTimeout(timer); clearTimeout(expiry) }
   }, [json, tick, instance, revision])
   return status
@@ -267,6 +277,9 @@ export async function trustBuildEligibility(revision: Revision): Promise<TrustEl
     return { ok: true, installation: '', seen }
   } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : 'This widget cannot be trusted' } }
 }
+/** The revocations of an instance this tab has seen now. Captured at the person's click and pinned
+ * into the grant, so nothing that arrives while the check runs counts as seen. */
+export const trustFrontier = (instance: string) => revocationsOf(canonicalTrust.get(), instance)
 /** A gesture is a real click or key press by the person, delivered by the browser (`isTrusted`),
  * never a synthetic event from script, an agent, activation, build, recovery or sync. */
 function genuine(gesture: unknown) {
@@ -274,8 +287,9 @@ function genuine(gesture: unknown) {
 }
 /** "Trust always": the person's own click on an eligible, installed custom widget. Re-checks the
  * canonical gate and the built bytes now, then records a grant pinned to this exact installation. */
-export async function trustInstallation(instance: string, revision: Revision, gesture: Event) {
+export async function trustInstallation(instance: string, revision: Revision, gesture: Event, observed: readonly string[] = trustFrontier(instance)) {
   if (!genuine(gesture)) throw new Error('Trust needs your own click')
+  const seen = [...observed].sort()
   if (!accountGuard() || getAccount().status !== 'user' || !getAccount().user) throw new Error('Sign in to trust a widget')
   const account = getAccount().user!.id
   if (!widgetsHydrated()) throw new InstallFailure('unhydrated', 'Widget state is not hydrated; retry after sync')
@@ -284,17 +298,21 @@ export async function trustInstallation(instance: string, revision: Revision, ge
   if (!eligibility.ok) throw new Error(eligibility.reason)
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   if (installationVersion(instance).identity !== version.identity || version.identity !== eligibility.installation) throw new InstallFailure('conflict', 'Installation changed; build and trust again')
-  canonicalTrust.set(trust => {
-    if (persistentTrust(instance, revision, trust)) return trust
-    const made = newGrant(trust, { instance, package: revision.snapshot.manifest.id, source: revision.source, digest: revision.snapshot.digest, installation: version.identity }, crypto.randomUUID(), Date.now())
-    return { ...trust, grants: { ...trust.grants, [made.id]: made } }
+  let revokedMeanwhile = false
+  updateTrust(trust => {
+    // A revocation that arrived after the click was not seen by the person: no grant, they decide again.
+    if (JSON.stringify(revocationsOf(trust, instance)) !== JSON.stringify(seen)) { revokedMeanwhile = true; return null }
+    if (persistentTrust(instance, revision, trust)) return null
+    const made = newGrant(trust, { instance, package: revision.snapshot.manifest.id, source: revision.source, digest: revision.snapshot.digest, installation: version.identity }, crypto.randomUUID(), Date.now(), seen)
+    return { grants: { [made.id]: made }, revoked: Object.fromEntries(seen.map(id => [id, trust.revoked[id]])), floors: { [instance]: grantGeneration(made) } }
   })
+  if (revokedMeanwhile) throw new Error('Trust was revoked on another device while this was being checked; look again, then choose Trust always again')
   await canonicalTrust.flush?.()
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   const grant = persistentTrust(instance, revision)
   if (!grant) throw new Error('Trust was not kept: it was revoked on another device meanwhile, or the widget changed')
   // The gate just ran on this device: its evidence counts until what it saw changes (or, for Seafile, runs out).
-  evidence.set(evidenceKey(instance, revision, grant), { seen: eligibility.seen, at: Date.now() })
+  evidence.set(evidenceKey(instance, revision, grant), { seen: eligibility.seen, at: clock() })
   notifyGrants(); notifyEvidence()
 }
 /** Revoke trust: one revocation for the instance (defeats every grant it has, here and on any
@@ -303,9 +321,9 @@ export async function revokeTrust(instance: string) {
   if (!accountGuard()) throw new Error('Account revoked')
   revokeSessionGrants(instance)
   try {
-    canonicalTrust.set(trust => {
+    updateTrust(() => {
       const r = newRevocation(instance, crypto.randomUUID(), Date.now())
-      return { ...trust, revoked: { ...trust.revoked, [r.id]: r } }
+      return { grants: {}, revoked: { [r.id]: r } }
     })
   } catch (error) { throw new Error(`Trust was not revoked: ${error instanceof Error ? error.message : 'storage failure'}. Allow once was ended; try again.`) }
   notifyGrants()
@@ -313,6 +331,12 @@ export async function revokeTrust(instance: string) {
 }
 
 if (typeof window !== 'undefined') for (const event of ['mvlos:forget', 'mvlos:account-changed']) window.addEventListener(event, () => { grants.clear(); notifyGrants() })
+if (typeof document !== 'undefined') {
+  const dropTimedEvidence = () => { evidence.clear(); failures.clear(); notifyEvidence() }
+  for (const event of ['visibilitychange', 'freeze', 'resume']) document.addEventListener(event, dropTimedEvidence)
+  window.addEventListener('pageshow', dropTimedEvidence)
+  window.addEventListener('online', dropTimedEvidence)
+}
 // A revocation this tab has not seen before (made here or synced from another device) also ends
 // this tab's Allow once grants for that widget: Revoke trust stops it everywhere, at once.
 const seenRevocations = new Set(Object.keys(canonicalTrust.get().revoked))

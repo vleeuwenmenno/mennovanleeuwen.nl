@@ -1,4 +1,4 @@
-import { browserFilesReady, browserStoreIdentity, listBrowser, mkdirBrowser, readBrowserText, realBrowserEntry, writeBrowserFile } from '../../data/browserfs'
+import { browserChangedElsewhere, browserEntrySeq, browserFilesReady, browserStoreIdentity, listBrowser, mkdirBrowser, readBrowserText, realBrowserEntry, refreshBrowserTree, writeBrowserFile } from '../../data/browserfs'
 import { browserMountPoint, isBind, isBrowserType, isSeafileType, mounts, posixOf, whereIs } from '../../data/mounts'
 import { cachedListing, listDir, mkdir, parseSf, readText, sfPath, writeText } from '../../data/seafile'
 import { getAccount } from '../../os/account'
@@ -180,22 +180,29 @@ export function sightTrustedSource(source: SourceIdentity, packageId: string): S
 }
 /** Each step from the store root is a stored folder; every entry inside is a stored plain file or
  * folder (never a launcher entry projected from the synced list). The store has no links. */
-function browserEntries(identity: Stored): unknown[] {
+function browserEntries(identity: Stored): unknown[] | undefined {
   const parts = identity.path.split('/').filter(Boolean)
+  // Another tab changed something on the way to the folder or in it: this tab's memory is stale until
+  // the folder is read again from the store (unknown: nothing runs until the full check has done that).
+  for (const changed of browserChangedElsewhere().keys()) {
+    if (changed === identity.path || changed.startsWith(`${identity.path}/`) || identity.path.startsWith(changed === '/' ? '/' : `${changed}/`)) return undefined
+  }
+  const out: unknown[] = []
   for (let i = 0; i <= parts.length; i++) {
     const at = `/${parts.slice(0, i).join('/')}`
     const entry = realBrowserEntry(at)
     if (!entry) throw new TrustRefusal(i === parts.length ? 'The widget folder was deleted' : `${at} was deleted`, true)
     if (!entry.dir) throw new TrustRefusal(`${at} is not a stored folder`, true)
+    // Every write here gets a new number, whatever size and time say (same-size writes, clock rollback).
+    out.push([at, browserEntrySeq(at)])
   }
-  const out: unknown[] = []
   const walk = (dir: string, depth: number) => {
     if (depth > 8) throw new TrustRefusal('Source nesting limit')
     for (const e of [...listBrowser(dir)].sort((a, b) => a.path < b.path ? -1 : 1)) {
       const real = realBrowserEntry(e.path)
       if (out.length >= LIMITS.files * 2) throw new TrustRefusal('Source file limit')
       if (!real || real.dir !== e.dir) throw new TrustRefusal(`${e.path} is not a stored file or folder`)
-      out.push([real.path, real.dir, real.size, real.mtime, real.type])
+      out.push([real.path, real.dir, real.size, real.mtime, real.type, browserEntrySeq(real.path)])
       if (real.dir) walk(real.path, depth + 1)
     }
   }
@@ -234,6 +241,11 @@ function seafileEntries(identity: Extract<Stored, { kind: 'seafile' }>): unknown
   walk(identity.path, 0)
   return unknown ? undefined : out
 }
+/** Reads the folder, its ancestors and its entries again from the browser's IndexedDB store. */
+async function refreshFromStore(identity: Stored) {
+  try { await refreshBrowserTree(identity.path) } catch (error) { throw new TrustRefusal(`The widget folder cannot be read again: ${error instanceof Error ? error.message : 'browser storage unavailable'}`) }
+  assertSource(identity)
+}
 /** Lists the path down to the folder and everything inside it again, from Seafile itself. */
 async function listFresh(identity: Extract<Stored, { kind: 'seafile' }>) {
   const guard = { check: () => assertSource(identity) }
@@ -266,7 +278,9 @@ export async function trustGate(source: SourceIdentity, snapshot: Snapshot): Pro
   await browserFilesReady()
   const id = snapshot.manifest.id
   const identity = locate(source, id)
+  // Never from this tab's memory alone: the folder is read again from where it is stored.
   if (identity.kind === 'seafile') await listFresh(identity)
+  else await refreshFromStore(identity)
   const before = sightTrustedSource(source, id)
   if (before.state === 'refused') throw new TrustRefusal(before.reason, before.definitive)
   if (before.state === 'unknown') throw new TrustRefusal('The widget folder could not be listed')
@@ -274,6 +288,7 @@ export async function trustGate(source: SourceIdentity, snapshot: Snapshot): Pro
   try { built = await buildPackage(await readSource(identity)) } catch (error) { throw new TrustRefusal(`The widget folder does not build: ${error instanceof Error ? error.message : 'build failed'}`) }
   if (built.digest !== snapshot.digest) throw new TrustRefusal('The folder changed since this revision was built; build and activate it again')
   if (identity.kind === 'seafile') await listFresh(identity)
+  else await refreshFromStore(identity)
   const after = sightTrustedSource(source, id)
   if (after.state !== 'ok' || after.seen !== before.seen) throw new TrustRefusal(after.state === 'refused' ? after.reason : 'The widget folder changed while it was being checked; try again', after.state === 'refused' && after.definitive)
   assertSource(identity)
