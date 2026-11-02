@@ -214,6 +214,89 @@ g.fetch = async (path: string, init: RequestInit = {}) => {
   throw new Error(`Unexpected network access: ${path}`)
 }
 try {
+  // A cold signed-in phone must not snapshot an unknown desktop on its first mobile edit.
+  const coldMobile = new Page('81', 'cold-mobile')
+  coldMobile.innerWidth = 390
+  coldMobile.innerHeight = 780
+  servers.get('81')!.set(KEY, { value: { ...emptyWidgetState(), placements: { places: { inherited: entry('inherited'), removedLater: entry('removedLater') }, removed: '' } }, updatedAt: ++tick })
+  await coldMobile.init()
+  const mobilePagehideListeners = coldMobile.listeners.get('pagehide')?.length ?? 0
+  assert.equal(coldMobile.canonical.widgetsHydrated(), false)
+  assert.deepEqual(coldMobile.wp.widgetPlaces.get().places, {})
+  coldMobile.run(() => coldMobile.wp.changeScreenWidgets(true, set => set))
+  assert.equal(coldMobile.wp.mobileWidgetPlaces.get(), null, 'a no-op does not initialize the mobile set')
+  assert.equal(coldMobile.listeners.get('pagehide')?.length ?? 0, mobilePagehideListeners)
+  let mobileEdits = 0
+  coldMobile.run(() => coldMobile.wp.changeScreenWidgets(true, set => { mobileEdits++; return coldMobile.wp.changeSet(set, { added: entry('added') }) }))
+  coldMobile.run(() => coldMobile.wp.changeScreenWidgets(true, set => { mobileEdits++; return coldMobile.wp.changeSet(set, { added: { ...set.places.added, x: 54, y: 160, homeGrid: true } }, ['removedLater']) }))
+  assert.ok(coldMobile.wp.screenWidgets(true).places.added, 'pending mobile addition stays visible')
+  assert.equal(coldMobile.wp.screenWidgets(true).places.added.x, 54, 'optimistic moves compose before hydration')
+  assert.equal(coldMobile.wp.mobileWidgetPlaces.get(), null, 'unknown inherited set is not snapshotted')
+  assert.equal(coldMobile.meta('widgets:placed:mobile'), null, 'no premature mobile snapshot reaches storage')
+  await coldMobile.login()
+  coldMobile.failPull = true
+  await coldMobile.pull()
+  assert.equal(coldMobile.wp.mobileWidgetPlaces.get(), null, 'failed account hydration keeps the first edit pending')
+  coldMobile.failPull = false
+  await coldMobile.pull()
+  await coldMobile.flush()
+  const hydratedMobile = coldMobile.wp.mobileWidgetPlaces.get()!
+  assert.ok(hydratedMobile.places.inherited, 'first mobile snapshot inherits widgets discovered during hydration')
+  assert.equal(hydratedMobile.places.added.x, 54, 'first mobile snapshot replays optimistic movement')
+  assert.equal(hydratedMobile.places.added.y, 160)
+  assert.equal(hydratedMobile.places.removedLater, undefined, 'pending removal also applies to a later inherited entry')
+  assert.ok(coldMobile.wp.widgetPlaces.get().places.removedLater, 'mobile intent never mutates desktop selection')
+  assert.equal(coldMobile.wp.widgetPlaces.get().places.added, undefined)
+  assert.equal(mobileEdits, 2, 'delayed replay stores data, not user callbacks')
+  assert.equal(coldMobile.listeners.get('pagehide')?.length ?? 0, mobilePagehideListeners, 'settlement removes pending lifecycle listeners')
+  await coldMobile.pull()
+  assert.deepEqual(coldMobile.wp.mobileWidgetPlaces.get(), hydratedMobile, 'quiet hydration cannot replay an edit twice')
+  coldMobile.closed = true
+
+  const returningMobile = new Page('86', 'returning-mobile')
+  servers.get('86')!.set(KEY, { value: { ...emptyWidgetState(), placements: { places: { desktopOnly: entry('desktopOnly') }, removed: '' } }, updatedAt: ++tick })
+  servers.get('86')!.set('widgets:placed:mobile', { value: { places: { mobileOnly: entry('mobileOnly') }, removed: 'previousRemoval' }, updatedAt: ++tick })
+  await returningMobile.init()
+  returningMobile.run(() => returningMobile.wp.changeScreenWidgets(true, set => returningMobile.wp.changeSet(set, { early: entry('early') })))
+  await returningMobile.login()
+  await returningMobile.pull()
+  await returningMobile.flush()
+  const returningSet = returningMobile.wp.mobileWidgetPlaces.get()!
+  assert.ok(returningSet.places.mobileOnly && returningSet.places.early, 'late independent mobile set receives queued edits')
+  assert.equal(returningSet.places.desktopOnly, undefined, 'known independent mobile selection never inherits desktop entries')
+  assert.ok(returningSet.removed.includes('previousRemoval'))
+  returningMobile.closed = true
+
+  // A late hydration callback must not write after account replacement or page disposal.
+  for (const scenario of ['switch', 'dispose', 'bfcache'] as const) {
+    const phone = new Page(scenario === 'switch' ? '82' : scenario === 'dispose' ? '84' : '85', 'mobile-' + scenario)
+    servers.get(phone.accountId)!.set(KEY, { value: { ...emptyWidgetState(), placements: { places: { inherited: entry('inherited') }, removed: '' } }, updatedAt: ++tick })
+    await phone.init()
+    const onSynced = phone.wp.widgetPlaces.onSynced
+    let late: (() => void) | undefined
+    phone.wp.widgetPlaces.onSynced = listener => { late = listener; return onSynced(listener) }
+    phone.run(() => phone.wp.changeScreenWidgets(true, set => phone.wp.changeSet(set, { early: entry('early') })))
+    if (scenario === 'switch') {
+      phone.cookie = 'mvlos_uid=83; mvlos_login=fixture'
+      phone.run(() => late!())
+    } else {
+      phone.run(() => phone.listeners.get('pagehide')?.forEach(listener => listener({ persisted: scenario === 'bfcache' })))
+      await phone.login()
+      await phone.pull()
+    }
+    if (scenario === 'bfcache') {
+      assert.ok(phone.wp.mobileWidgetPlaces.get()?.places.early && phone.wp.mobileWidgetPlaces.get()?.places.inherited, 'bfcache suspension retains pending intent')
+    } else {
+      phone.run(() => late!())
+      assert.equal(phone.wp.mobileWidgetPlaces.get(), null, 'late callback cannot commit after ' + scenario)
+      assert.equal(phone.meta('widgets:placed:mobile'), null)
+      assert.equal(phone.wp.screenWidgets(true).places.early, undefined, 'disposal clears optimistic pending projection')
+    }
+    phone.closed = true
+  }
+  puts.length = 0
+  console.log('mobile first-edit hydration, optimistic replay, removal, failed pull, account/disposal and bfcache fixtures passed')
+
   // Account metadata alone, failed hydration and absent keys must be distinguishable.
   const first = new Page('11', 'first')
   first.seed('widgets', { note: { tilt: 4.5 }, local: { units: 'c' } })

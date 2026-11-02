@@ -1,7 +1,8 @@
 import { mobileHomeGeometry } from './homeLayout'
 import { synced } from './synced'
 import { viewH, viewW } from './uiScale'
-import { canonicalPlacements, hasWidgetCutover } from '../widgets/platform/canonicalState'
+import { accountGuard } from './accountSpace'
+import { canonicalPlacements, hasWidgetCutover, widgetsHydrated } from '../widgets/platform/canonicalState'
 import { changeSet, newKey, nextAt, importPlaces, num, normalizeSet, mergeSets, liveWidgets as liveSet, type WidgetPlace, type WidgetSet } from '../widgets/platform/placementSet'
 export { changeSet, entriesOf, mergeSets, newKey, nextAt, normalizeSet, placedOnPhone, removedKeys, wins } from '../widgets/platform/placementSet'
 export type { WidgetPlace, WidgetSet } from '../widgets/platform/placementSet'
@@ -34,7 +35,7 @@ export function placeWidgets(found: Omit<WidgetPlace,'at'>[]) {
 }
 
 const imported = new Set<() => void>()
-/** Called after widgets were moved over from a window layout (the window manager shows them). */
+/** Reproject widget windows after legacy import or deferred mobile initialization. */
 export function onImport(l: () => void) {
   imported.add(l)
   return () => {
@@ -99,11 +100,81 @@ export const mobileWidgetPlaces = synced<WidgetSet | null>('widgets:placed:mobil
 })
 export const widgetsForScreen = (desktop: WidgetSet, mobile: WidgetSet | null, phone: boolean): WidgetSet =>
   phone ? mobile ?? desktop : desktop
-export const screenWidgets = (phone: boolean): WidgetSet => widgetsForScreen(widgetPlaces.get(), mobileWidgetPlaces.get(), phone)
-export function changeScreenWidgets(phone: boolean, fn: (set: WidgetSet) => WidgetSet) {
-  if (phone) mobileWidgetPlaces.set((current) => fn(migrateMobileWidgets(current ?? widgetPlaces.get(), viewW(), viewH())))
-  else widgetPlaces.set(fn)
+// Until canonical hydration, the inherited desktop is unknown. Keep only explicit edits,
+// never an empty snapshot or a callback that could later close over a different account/view.
+type PendingMobile = { delta: WidgetSet; width: number; height: number; stop: (() => void)[] }
+let pendingMobile: PendingMobile | undefined
+let mobileDisposed = false
+const EMPTY_MOBILE: WidgetSet = { places: {}, removed: '' }
+const applyMobile = (base: WidgetSet, delta: WidgetSet, rebase = false) => changeSet(base,
+  rebase ? Object.fromEntries(Object.entries(delta.places).map(([key, place]) => [key, { ...place, at: Math.max(place.at, (base.places[key]?.at ?? -1) + 1) }])) : delta.places,
+  delta.removed ? delta.removed.split(' ') : [])
+export const screenWidgets = (phone: boolean): WidgetSet => {
+  if (!phone) return widgetPlaces.get()
+  const base = mobileWidgetPlaces.get() ?? widgetPlaces.get()
+  return pendingMobile ? applyMobile(migrateMobileWidgets(base, pendingMobile.width, pendingMobile.height), pendingMobile.delta) : base
 }
+function clearPendingMobile() {
+  const pending = pendingMobile
+  pendingMobile = undefined
+  pending?.stop.forEach(stop => stop())
+}
+function disposeMobile() {
+  mobileDisposed = true
+  clearPendingMobile()
+}
+function finishPendingMobile() {
+  const pending = pendingMobile
+  if (!pending || mobileDisposed) return
+  if (!accountGuard()) { disposeMobile(); return }
+  // A separate mobile set from another tab is also a complete base; it needs no desktop seed.
+  if (!widgetsHydrated() && mobileWidgetPlaces.get() === null) return
+  mobileWidgetPlaces.set(current => applyMobile(migrateMobileWidgets(current ?? widgetPlaces.get(), pending.width, pending.height), pending.delta, true))
+  clearPendingMobile()
+  // A local commit is not an onRemote event. Reconcile the WM even when hydration's desktop
+  // projection was unchanged (for example an empty inherited account).
+  imported.forEach(listener => listener())
+}
+export function changeScreenWidgets(phone: boolean, fn: (set: WidgetSet) => WidgetSet) {
+  if (!phone) { widgetPlaces.set(fn); return }
+  if (mobileDisposed || !accountGuard()) return
+  if (!pendingMobile && (widgetsHydrated() || mobileWidgetPlaces.get() !== null)) {
+    mobileWidgetPlaces.set(current => fn(migrateMobileWidgets(current ?? widgetPlaces.get(), viewW(), viewH())))
+    return
+  }
+  const width = pendingMobile?.width ?? viewW(), height = pendingMobile?.height ?? viewH()
+  const before = migrateMobileWidgets(screenWidgets(true), width, height)
+  const after = fn(before)
+  const put = Object.fromEntries(Object.entries(after.places).filter(([key, place]) => JSON.stringify(place) !== JSON.stringify(before.places[key])))
+  const beforeRemoved = new Set(before.removed.split(' '))
+  const remove = [...new Set([
+    ...after.removed.split(' ').filter(key => key && !beforeRemoved.has(key)),
+    ...Object.keys(before.places).filter(key => !after.places[key]),
+  ])]
+  if (!Object.keys(put).length && !remove.length) return
+  const delta = changeSet(pendingMobile?.delta ?? EMPTY_MOBILE, put, remove)
+  if (!pendingMobile) {
+    const pending: PendingMobile = { delta, width, height, stop: [] }
+    pendingMobile = pending
+    if (typeof window !== 'undefined') {
+      const hide = (event: PageTransitionEvent) => { if (!event.persisted) disposeMobile() }
+      window.addEventListener('pagehide', hide)
+      window.addEventListener('mvlos:forget', disposeMobile)
+      window.addEventListener('mvlos:account-changed', disposeMobile)
+      pending.stop.push(() => {
+        window.removeEventListener('pagehide', hide)
+        window.removeEventListener('mvlos:forget', disposeMobile)
+        window.removeEventListener('mvlos:account-changed', disposeMobile)
+      })
+    }
+    // onSynced can call synchronously when already ready; don't leak the unsubscribe it returns.
+    const watch = (stop: () => void) => { if (pendingMobile === pending) pending.stop.push(stop); else stop() }
+    watch(mobileWidgetPlaces.onRemote(finishPendingMobile))
+    watch(widgetPlaces.onSynced(finishPendingMobile))
+  } else pendingMobile.delta = delta
+  finishPendingMobile()
+}
+if (import.meta.hot) import.meta.hot.dispose(disposeMobile)
 
 /** Freeze the old column's ordered starting coordinates on first edit, without touching its source.
  * Otherwise deleting an earlier legacy entry would change every later entry's row on reload. */

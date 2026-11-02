@@ -5376,7 +5376,9 @@ accounts and data; it starts and stops its own server.
 A big screen puts a widget where it was put, moved along when its own screen is another size (a
 widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
 added on a phone gets the usual spot for a new widget there. Phones initially inherit the existing widgets. Their first addition, removal, minimization or
-move saves an independent mobile set (`widgets:placed:mobile`); desktop selection and positions
+move saves an independent mobile set (`widgets:placed:mobile`). If account hydration is still
+pending, edits remain optimistic and the first snapshot waits for canonical hydration, then
+applies those edits to the complete inherited set. Desktop selection and positions
 stay intact. An intentionally empty mobile set stays empty. Both sets follow the account and
 merge entries independently. Until that first edit, desktop changes still appear on mobile.
 
