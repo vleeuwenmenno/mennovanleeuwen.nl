@@ -106,6 +106,13 @@ export const TOOL_GROUPS: { id: ToolGroup; name: string; detail: string; seafile
   { id: 'files', name: 'Work folder', detail: "Read, search and edit files in the thread's work folder" },
   { id: 'terminal', name: 'Terminal', detail: 'Run msh commands, from the agents command in the terminal' },
 ]
+/** How the Tools menu files the groups: one submenu each. Every group in TOOL_GROUPS is in exactly one. */
+export const TOOL_CATEGORIES: { name: string; groups: ToolGroup[] }[] = [
+  { name: 'Context', groups: ['threads', 'memory', 'projects'] },
+  { name: 'Images', groups: ['images', 'gpt_images'] },
+  { name: 'Personal', groups: ['notes', 'calendar', 'mail'] },
+  { name: 'Files & code', groups: ['code', 'seafile', 'seafile_write', 'files', 'terminal'] },
+]
 /** The groups a thread can switch: every one but the always-on ones. */
 export const ALL_TOOLS = TOOL_GROUPS.map((g) => g.id)
 /** A thread's switchable groups out of its tools (which always carry the always-on ones). */
