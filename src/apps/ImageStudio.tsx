@@ -322,7 +322,7 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
 
   // --- the sections ---
   const modelSection = <ModelSection form={form} catalog={catalog} details={details} resolved={resolved} model={model} offer={offer?.key === recipeKey ? offer : null} onAccept={acceptOffer} onKeep={keepCurrent} onAssets={changeAssets} onSet={set} discovering={discovering} catalogError={catalogError} onRefresh={discover} assist={assist} />
-  const promptSection = <PromptSection form={form} onSet={set} assist={assist} />
+  const promptSection = <PromptSection form={form} catalog={catalog} onSet={set} assist={assist} />
   const loraSection = <LoraSection form={form} catalog={catalog} onSet={set} assist={assist} />
   const sourceSection = <SourceSection form={form} onSet={set} assist={assist} onError={(e) => update({ error: e })} />
   const sizeSection = <SizeSection form={form} onSet={set} batchMax={studio?.batchMax ?? STUDIO_LIMITS.batch[1]} assist={assist} />
@@ -457,7 +457,7 @@ function ModelSection({ form, catalog, details, resolved, model, offer, onAccept
   </section>
 }
 
-function PromptSection({ form, onSet, assist }: { form: StudioForm; onSet: (patch: Partial<StudioForm>, edit?: boolean) => void; assist?: (field: StudioField) => ReactNode }) {
+function PromptSection({ form, catalog, onSet, assist }: { form: StudioForm; catalog: StudioCatalog | null; onSet: (patch: Partial<StudioForm>, edit?: boolean) => void; assist?: (field: StudioField) => ReactNode }) {
   const rules = presetRules(form.preset)
   const id = useId()
   const count = (text: string) => {
@@ -472,7 +472,26 @@ function PromptSection({ form, onSet, assist }: { form: StudioForm; onSet: (patc
     {rules.negative ? <Field label="Negative prompt" field="negative" assist={assist} id={`${id}-n`} hint={count(form.negative)}>
       <textarea id={`${id}-n`} className="studio-prompt is-negative" rows={3} maxLength={STUDIO_LIMITS.prompt} value={form.negative} placeholder="What to keep out" onChange={(e) => onSet({ negative: e.target.value })} />
     </Field> : <p className="studio-hint muted">This workflow has no negative prompt: it runs at CFG 1 with the positive prompt only.</p>}
+    {rules.enhancer && <PromptEnhancer form={form} unavailable={catalog?.promptEnhancer?.[form.preset] ?? ''} onSet={onSet} />}
   </section>
+}
+
+/** The optional native prompt enhancer: ComfyUI's TextGenerate step on the model's own text encoder. Off unless chosen. */
+function PromptEnhancer({ form, unavailable, onSet }: { form: StudioForm; unavailable: string; onSet: (patch: Partial<StudioForm>, edit?: boolean) => void }) {
+  const id = useId()
+  const [seedText, setSeedText] = useState(String(form.enhanceSeed))
+  useEffect(() => setSeedText(String(form.enhanceSeed)), [form.enhanceSeed])
+  return <div className="studio-field">
+    <label className="studio-check"><input type="checkbox" checked={form.enhance} onChange={(e) => onSet({ enhance: e.target.checked })} /> Enhance prompt: ComfyUI expands it into a fuller caption first</label>
+    <p className="studio-hint muted">Uses the model’s own text encoder, so it takes extra time and memory. Only the prompt is enhanced, not the negative prompt.{unavailable && form.enhance ? '' : unavailable ? ` Not available here: ${unavailable}` : ''}</p>
+    {form.enhance && unavailable && <p className="studio-hint t-red">{unavailable}</p>}
+    {form.enhance && <span className="studio-row">
+      <label htmlFor={`${id}-es`}>Enhancer seed</label>
+      <input id={`${id}-es`} className="studio-seed" type="number" min={-1} step={1} value={seedText} onChange={(e) => setSeedText(e.target.value)} onBlur={() => { const n = Math.trunc(Number(seedText)); onSet({ enhanceSeed: Number.isFinite(n) ? Math.max(-1, Math.min(STUDIO_LIMITS.seed[1], n)) : -1 }) }} />
+      <button type="button" className="btn btn-small" title="A random enhancer seed, kept" aria-label="Random enhancer seed" onClick={() => onSet({ enhanceSeed: Math.floor(Math.random() * 2 ** 32) })}>Roll</button>
+      <button type="button" className={`btn btn-small ${form.enhanceSeed < 0 ? 'btn-primary' : ''}`} aria-pressed={form.enhanceSeed < 0} onClick={() => onSet({ enhanceSeed: form.enhanceSeed < 0 ? Math.floor(Math.random() * 2 ** 32) : -1 })}>Random</button>
+    </span>}
+  </div>
 }
 
 function LoraSection({ form, catalog, onSet, assist }: { form: StudioForm; catalog: StudioCatalog | null; onSet: (patch: Partial<StudioForm>, edit?: boolean) => void; assist?: (field: StudioField) => ReactNode }) {

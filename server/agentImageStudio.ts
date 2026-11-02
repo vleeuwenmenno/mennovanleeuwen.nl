@@ -124,11 +124,12 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   res.on('close', () => { if (!res.writableEnded) ctl.abort() })
   const mine = runs.get(user.id) ?? new Set<AbortController>()
   runs.set(user.id, mine.add(ctl))
+  const enhancerSeed = input.prompt_enhancer_seed
   let plan: Awaited<ReturnType<typeof prepareImageGeneration>>
   try { plan = await prepareImageGeneration(user, thread, input, ctl.signal) } catch (e) { forget(user.id, ctl); throw e }
   // A batch stays on the host its first picture was planned for, even if the default changes meanwhile.
   const pinned = plan.parameters.host?.id
-  const runInput = (i: number): ImageInput => ({ ...input, ...(typeof seed === 'number' && i > 0 ? { seed: seed + i } : {}), ...(pinned ? { host: pinned } : {}) })
+  const runInput = (i: number): ImageInput => ({ ...input, ...(typeof seed === 'number' && i > 0 ? { seed: seed + i } : {}), ...(typeof enhancerSeed === 'number' && i > 0 ? { prompt_enhancer_seed: enhancerSeed + i } : {}), ...(pinned ? { host: pinned } : {}) })
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   // Commit point: planning only reads, running uploads, queues a job and saves. The session that
   // asked must still be good after the planning, and again before each picture of a batch.

@@ -4,7 +4,7 @@
 // scripts/agents-image-studio.ts checks the same functions the Studio runs.
 
 import { applyPresetRules, isTurbo, presetFamily, presetRules, SIZE_LIMITS, type Recommended } from './modelFamilies.ts'
-import { IMAGE_PRESETS, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, imagePresetSpec, presetModels, recommendedImageSampling, resolveImageAssets, type DiffusionImageSettings, type ImageAssetCatalog, type ImageGenerationSettings, type ImagePreset } from './imageModels.ts'
+import { IMAGE_PRESETS, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, imagePresetSpec, presetModels, loraBaseMismatch, recommendedImageSampling, resolveImageAssets, type DiffusionImageSettings, type ImageAssetCatalog, type ImageGenerationSettings, type ImagePreset } from './imageModels.ts'
 
 /** The live catalog as /api/agents/images/catalog sends it: the asset lists plus the node checks. */
 export type StudioCatalog = ImageAssetCatalog & { nodes?: string[]; clipTypes?: string[]; img2img?: boolean }
@@ -28,6 +28,10 @@ export type StudioForm = {
   embeddings: StudioEmbedding[]
   prompt: string
   negative: string
+  /** Native ComfyUI prompt enhancer (MOSS Image, Krea2): off unless chosen. */
+  enhance: boolean
+  /** The enhancer's own seed; -1 is a new random one for every picture. */
+  enhanceSeed: number
   width: number
   height: number
   aspectLock: boolean
@@ -54,7 +58,7 @@ export const STEP_PRESETS = [10, 25, 40, 80] as const
 
 export function defaultStudioForm(preset: ImagePreset = 'sdxl'): StudioForm {
   const spec = imagePresetSpec(preset), edge = presetRules(preset).edge
-  return { preset, variant: 'auto', model: '', clip: '', vae: '', checkpointVae: '', loras: [], embeddings: [], prompt: '', negative: '', width: edge, height: edge, aspectLock: false, batch: 1, seed: -1, seedLock: false, steps: spec.steps, cfg: spec.cfg, sampler: spec.sampler, scheduler: spec.scheduler, denoise: 0.6, clipSkip: 1, source: null, hires: { on: false, scale: 1.5, denoise: presetRules(preset).hiresDenoise, steps: 15, upscaleModel: '' }, edited: false, recipe: null }
+  return { preset, variant: 'auto', model: '', clip: '', vae: '', checkpointVae: '', loras: [], embeddings: [], prompt: '', negative: '', enhance: false, enhanceSeed: -1, width: edge, height: edge, aspectLock: false, batch: 1, seed: -1, seedLock: false, steps: spec.steps, cfg: spec.cfg, sampler: spec.sampler, scheduler: spec.scheduler, denoise: 0.6, clipSkip: 1, source: null, hires: { on: false, scale: 1.5, denoise: presetRules(preset).hiresDenoise, steps: 15, upscaleModel: '' }, edited: false, recipe: null }
 }
 
 const clamp = (v: unknown, [min, max]: readonly [number, number], fallback: number, step = 0) => {
@@ -81,6 +85,8 @@ export function normalizeStudioForm(v: unknown): StudioForm {
     loras: list(o.loras, (i) => (typeof i.name === 'string' && i.name ? { name: i.name.slice(0, 2048), weight: clamp(i.weight, STUDIO_LIMITS.loraWeight, 1) } : null), STUDIO_LIMITS.loras),
     embeddings: list(o.embeddings, (i) => (typeof i.name === 'string' && i.name ? { name: i.name.slice(0, 1024), weight: clamp(i.weight, STUDIO_LIMITS.embeddingWeight, 1), negative: i.negative === true } : null), 20),
     prompt: text(o.prompt, STUDIO_LIMITS.prompt), negative: text(o.negative, STUDIO_LIMITS.prompt),
+    // Saved forms from before the enhancer have neither field: off, random seed.
+    enhance: o.enhance === true, enhanceSeed: clamp(o.enhanceSeed, STUDIO_LIMITS.seed, -1, 1),
     width: sized(o.width, d.width), height: sized(o.height, d.height), aspectLock: o.aspectLock === true,
     batch: clamp(o.batch, STUDIO_LIMITS.batch, 1, 1), seed: clamp(o.seed, STUDIO_LIMITS.seed, -1, 1), seedLock: o.seedLock === true,
     steps: clamp(o.steps, STUDIO_LIMITS.steps, d.steps, 1), cfg: clamp(o.cfg, STUDIO_LIMITS.cfg, d.cfg), sampler: text(o.sampler, 60) || d.sampler, scheduler: text(o.scheduler, 60) || d.scheduler,
@@ -156,6 +162,7 @@ export function studioRunInput(form: StudioForm): RunInput {
     negative_prompt: promptWithEmbeddings(form.negative, embeddings, true),
     width: form.width, height: form.height,
     ...(form.seed >= 0 ? { seed: form.seed } : {}),
+    ...(form.enhance ? { enable_prompt_enhancer: true, ...(form.enhanceSeed >= 0 ? { prompt_enhancer_seed: form.enhanceSeed } : {}) } : {}),
     steps: form.steps, cfg: form.cfg, sampler: form.sampler, scheduler: form.scheduler,
     ...(form.clipSkip > 1 ? { clip_skip: form.clipSkip } : {}),
     loras: form.loras.map((l) => ({ name: l.name, weight: Number(l.weight.toFixed(2)) })),
@@ -195,8 +202,13 @@ export function studioProblems(form: StudioForm, ctx: { configured: boolean; cat
   if (form.loras.length) {
     const modelOnly = spec.clipType === 'krea2' || spec.clipType === 'moss_image'
     if (nodes && !nodes.includes('LoraLoaderModelOnly') && (modelOnly || !nodes.includes('LoraLoader'))) out.push(modelOnly ? `${IMAGE_PRESETS.find((p) => p.id === form.preset)!.title} needs a model-only LoRA loader (LoraLoaderModelOnly).` : 'This ComfyUI has no LoRA loader.')
+    for (const l of form.loras) { const why = loraBaseMismatch(form.preset, catalog.loraHints?.find((h) => h.name === l.name)); if (why) out.push(why) }
     const missing = form.loras.filter((l) => catalog.loras && !catalog.loras.includes(l.name))
     if (missing.length) out.push(`Not installed: ${missing.map((l) => l.name).join(', ')}.`)
+  }
+  if (form.enhance && rules.enhancer) {
+    const why = catalog.promptEnhancer?.[form.preset]
+    if (why) out.push(why)
   }
   if (form.clipSkip > 1 && rules.clipSkip && nodes && !nodes.includes('CLIPSetLastLayer')) out.push('This ComfyUI lacks CLIPSetLastLayer, so clip skip must be 1.')
   if (form.width * form.height > SIZE_LIMITS.area) out.push(`The size is over the ${SIZE_LIMITS.area.toLocaleString('en')}-pixel limit (1536 × 1024).`)
@@ -231,6 +243,8 @@ export function formFromSettings(form: StudioForm, recorded: ImageGenerationSett
     width: hires ? hires.base_width : settings.width ?? form.width,
     height: hires ? hires.base_height : settings.height ?? form.height,
     seed: form.seedLock ? form.seed : settings.seed ?? form.seed,
+    enhance: settings.enable_prompt_enhancer === true,
+    enhanceSeed: settings.enable_prompt_enhancer ? settings.prompt_enhancer_seed ?? -1 : -1,
     steps: settings.steps ?? form.steps, cfg: settings.cfg ?? form.cfg, sampler: settings.sampler ?? form.sampler, scheduler: settings.scheduler ?? form.scheduler,
     clipSkip: settings.clip_skip ?? 1,
     denoise: settings.source ? settings.denoise ?? form.denoise : form.denoise,
