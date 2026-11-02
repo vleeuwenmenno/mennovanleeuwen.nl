@@ -155,6 +155,8 @@
     "check:widget-clock": "node scripts/widget-clock-check.ts",
     "check:widget-clock-ui": "node scripts/widget-clock-e2e.ts",
     "check:widget-custom-ui": "node scripts/widget-custom-e2e.ts",
+    "check:widget-trust": "node scripts/widget-trust-check.ts",
+    "check:widget-trust-ui": "node scripts/widget-trust-e2e.ts",
 "check:widget-agent": "node scripts/widget-agent-check.ts",
 "check:widget-agent-ui": "node scripts/widget-agent-e2e.ts",
     "check:widgets-sync-ui": "node scripts/widgets-sync-e2e.ts",

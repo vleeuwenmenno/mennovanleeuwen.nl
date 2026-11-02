@@ -25,7 +25,8 @@ export const browserHost: WidgetHost = {
   identity: sourceIdentity,
   readSource,
   signedIn: () => getAccount().status === 'user',
-  activate,
+  // Never trust: an agent's activation is always `trust: false`, whatever it passes.
+  activate: (instance, kind, revision, generation, identity) => activate(instance, kind, revision, generation, identity, { trust: false }),
   allow: allowRevision,
   approve: (request, signal) => {
     const row = (label: string, value: string, code = false) => createElement('li', { key: label }, `${label}: `, code ? createElement('code', null, value) : value)

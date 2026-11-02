@@ -7,7 +7,7 @@ import { useWM, type WinState } from '../../os/wm'
 import { useAccount } from '../../os/account'
 import { ask } from '../../os/Dialogs'
 import { defaultBuild } from './defaults'
-import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, useInstallationPresence, type Revision } from './installations'
+import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, trustBuildEligibility, trustFrontier, trustInstallation, useInstallationPresence, useTrustStatus, type Revision, type TrustObserved, type TrustEligibility } from './installations'
 import { CUSTOM_KIND, isInstanceKind, buildPackage, descriptor, supportsCapabilities, type Descriptor } from './package'
 import { cloneDefault, cloneTemplate, readSource, sourceIdentity, sourcePath, WIDGET_HOME } from './sources'
 import { execute } from './runtime'
@@ -15,6 +15,7 @@ import { Renderer } from './Renderer'
 import { MOCK_INPUT } from './mocks'
 import { dropWidgetConfig, randomTilt, setWidgetConfig, unsetWidgetConfig } from '../config'
 import { closeWidget, openWidget } from '../windows'
+import { prettyPath } from '../../terminal/vfs'
 import './platform.css'
 const access = (kind: string) => kind === 'sticky' ? 'note and edit it through explicit interactions' : kind === 'weather' ? 'host-selected forecast' : kind === CUSTOM_KIND ? 'small saved state (up to 4 KiB, replaced only by explicit button actions) and the clock' : kind === 'clock' ? 'formatted clock and date' : kind + ' data and explicit actions'
 export function Workshop({ win }: { win: WinState }) {
@@ -41,6 +42,10 @@ export function Workshop({ win }: { win: WinState }) {
   const sync = useSyncStatus()
   const unavailable = useInstallationPresence(instance ?? '') && !!instance && !current
   const [optIn, setOptIn] = useState(false)
+  // "Trust always", offered for a successful build that passes the canonical gate; checked by the person only.
+  const [trustChoice, setTrustChoice] = useState(false)
+  const [trustCheck, setTrustCheck] = useState<{ digest: string; result: TrustEligibility } | null>(null)
+  const trustedNow = useTrustStatus(instance ?? '', current ? current.active : null).state === 'trusted'
   const [busy, setBusy] = useState(false)
   const generation = useRef(instance ? installationVersion(instance).generation : 0)
   const expectedIdentity = useRef(instance ? installationVersion(instance).identity : '')
@@ -63,8 +68,27 @@ export function Workshop({ win }: { win: WinState }) {
     if (!mounted.current) return
     generation.current = instance ? installationVersion(instance).generation : 0
     expectedIdentity.current = instance ? installationVersion(instance).identity : ''
-    setRevision(value); setView(result); setOptIn(false)
+    setRevision(value); setView(result); setOptIn(false); setTrustChoice(false)
     setMessage(`Mock preview passed. Built ${value.snapshot.digest}. Source saves do not activate.`)
+  }
+  const trustable = custom && !!revision && revision.source.kind !== 'system'
+  const trustKey = trustable ? JSON.stringify([revision!.source, revision!.snapshot.digest, account.user?.id]) : ''
+  useEffect(() => {
+    if (!trustKey || !revision) return
+    let live = true
+    void trustBuildEligibility(revision).then(result => { if (live) setTrustCheck({ digest: trustKey, result }) })
+    return () => { live = false }
+  }, [trustKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const trustResult = trustCheck?.digest === trustKey ? trustCheck.result : null
+  /** What the person decided at their click, captured before activation waits for anything: whether
+   * to trust, the click itself, and the revocations of that widget they had seen then. */
+  type TrustIntent = { want: boolean; gesture: Event; observed: TrustObserved }
+  const intentAt = (id: string, gesture: Event): TrustIntent => ({ want: trustChoice, gesture, observed: trustFrontier(id) })
+  /** After an activation: trust it too when the person ticked the box (their click is the gesture). */
+  const trustAfter = async (id: string, value: Revision, intent: TrustIntent) => {
+    if (!intent.want) return ''
+    try { await trustInstallation(id, value, intent.gesture, intent.observed) } catch (error) { return ` Not trusted: ${error instanceof Error ? error.message : 'trust failed'}. It runs after Allow, as before.` }
+    return ' Trusted: it runs without asking until you revoke trust or edit it.'
   }
   const verified = async (value: Revision) => {
     const latest = await buildPackage(await readSource(value.source))
@@ -130,26 +154,31 @@ export function Workshop({ win }: { win: WinState }) {
     {view && <div className="wp-preview" aria-label="Mock widget preview"><Renderer view={view} note={kind === 'sticky' ? MOCK_INPUT.note!.text : undefined} event={() => setMessage('Mock preview: no real writes.')} /></div>}
     {instance || custom ? <>
       <label><input type="checkbox" checked={optIn} onChange={e => setOptIn(e.target.checked)} />Allow this built revision to access {custom && !instance ? 'its own' : "this instance's"} {access(kind)}.</label>
+      {trustable && <label className="wp-trust-option" data-trust-option><input type="checkbox" aria-label="Trust this widget, so it runs without asking" checked={trustChoice && !!trustResult?.ok} disabled={!trustResult?.ok || busy} onChange={e => setTrustChoice(e.target.checked)} />Trust this widget, so it runs without asking
+        <small>{trustResult?.ok ? `On activation, for your account on every device: only these exact bytes (digest ${revision!.snapshot.digest.slice(0, 16)}…) from ${prettyPath(`${WIDGET_HOME}/${revision!.snapshot.manifest.id}`)}. Any edit asks again. Revoke trust from the widget's toolbar.` : trustResult ? `Not available: ${trustResult.reason}` : 'Checking whether this build can be trusted…'}</small>
+      </label>}
+      {custom && instance && trustedNow && <p data-trusted>The active revision is trusted: it runs without asking. Revoke trust from the widget's toolbar.</p>}
       <div className="wp-controls">
-        {custom && !instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={() => void run(async () => {
+        {custom && !instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={event => { const id = `custom-${crypto.randomUUID().slice(0, 8)}`, intent = intentAt(id, event.nativeEvent); void run(async () => {
           if (!revision) return
           await verified(revision)
-          const id = `custom-${crypto.randomUUID().slice(0, 8)}`
           await activate(id, CUSTOM_KIND, revision, 0, installationVersion(id).identity)
           allowRevision(id, revision)
           setWidgetConfig(id, { tilt: randomTilt() })
           setMade(id); adopt(id)
           openWidget(wm, CUSTOM_KIND, id)
-          setMessage(`New widget "${revision.snapshot.manifest.name}" activated and placed on the desktop.`); setOptIn(false)
-        })}>Activate as new widget</button>}
-        {instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={() => void run(async () => {
+          const trusted = await trustAfter(id, revision, intent)
+          setMessage(`New widget "${revision.snapshot.manifest.name}" activated and placed on the desktop.${trusted}`); setOptIn(false); setTrustChoice(false)
+        }) }}>Activate as new widget</button>}
+        {instance && <button disabled={busy || !revision || !optIn || account.status !== 'user'} onClick={event => { const intent = intentAt(instance, event.nativeEvent); void run(async () => {
           if (!revision) return
           await verified(revision)
           await activate(instance, kind, revision, generation.current, expectedIdentity.current)
           allowRevision(instance, revision)
           adopt(instance)
-          setMessage('Revision activated. The desktop now loads this immutable snapshot.'); setOptIn(false)
-        })}>Activate built revision</button>}
+          const trusted = kind === CUSTOM_KIND ? await trustAfter(instance, revision, intent) : ''
+          setMessage(`Revision activated. The desktop now loads this immutable snapshot.${trusted}`); setOptIn(false); setTrustChoice(false)
+        }) }}>Activate built revision</button>}
         {instance && <button disabled={busy || !current?.previous || !optIn || account.status !== 'user'} onClick={() => void run(async () => {
           await recover(instance, current?.generation ?? 0, installationIdentity(current))
           const active = installation(instance)!.active

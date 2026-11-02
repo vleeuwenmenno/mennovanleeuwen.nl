@@ -28,7 +28,8 @@ export type IoGuard = {
 export const SF = 'seafile://'
 
 export type Library = { id: string; name: string; type: 'mine' | 'shared' | 'group' | 'public'; owner: string | null; encrypted: boolean; permission: 'r' | 'rw'; size: number; mtime: number }
-export type Entry = { name: string; dir: boolean; size: number; mtime: number; id: string; locked?: boolean }
+/** `type`: Seafile's dirent type as the server reports it ('other' for anything but a plain file or folder; absent from older servers). */
+export type Entry = { name: string; dir: boolean; size: number; mtime: number; id: string; locked?: boolean; type?: 'file' | 'dir' | 'other' }
 export type Listing = { perm: 'r' | 'rw'; entries: Entry[] }
 
 /** seafile://<repo>/a/b → { repo, p: '/a/b' }; null for any other path. */
@@ -287,7 +288,9 @@ export function useDir(path: string | null, maxAge = 30_000): DirState & { reloa
 export async function listDir(path: string, maxAge = 30_000, guard?: IoGuard): Promise<Listing> {
   const hit = dirCache.get(path)
   guard?.check()
-  if (hit?.listing && !hit.loading && Date.now() - hit.at < maxAge) {
+  // maxAge 0 always asks Seafile. A cached listing from "the future" (the clock was set back) is never fresh.
+  const age = hit ? Date.now() - hit.at : -1
+  if (maxAge > 0 && hit?.listing && !hit.loading && age >= 0 && age < maxAge) {
     await guard?.snapshot?.(hit.listing)
     guard?.check()
     return hit.listing
@@ -310,6 +313,13 @@ export async function listDir(path: string, maxAge = 30_000, guard?: IoGuard): P
 export function cachedDir(path: string): { listing: Listing | null; status: number | null } | null {
   const hit = dirCache.get(path)
   return hit && !hit.loading ? { listing: hit.listing, status: hit.status } : null
+}
+
+/** The last listing kept for a folder, also while it is being fetched again; undefined when nothing is
+ * cached (never listed, or dropped by refreshDirs after a change made here). */
+export function cachedListing(path: string): Listing | null | undefined {
+  const hit = dirCache.get(path)
+  return hit ? hit.listing : undefined
 }
 
 /** The status a Seafile call failed with (423: locked), if it kept one. */

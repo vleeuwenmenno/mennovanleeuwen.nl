@@ -43,7 +43,47 @@ const parentOf = (p: string) => p.replace(/\/[^/]*$/, '') || '/'
 const nameOf = (p: string) => p.split('/').pop() || ''
 const join = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`)
 const isTextName = (name: string) => ['text', 'markdown', 'link'].includes(kindOfName(name))
+/**
+ * Mutation evidence, for checks that must notice any change to a path (widget trust): every entry
+ * and folder gets a fresh number from one counter on each write, removal or move here, whatever its
+ * size or time say. This tab's memory does not follow writes made in other tabs of this browser, so
+ * those tabs announce the paths they changed and they are recorded here as changed elsewhere.
+ */
+let mutations = 0
+const entrySeq = new Map<string, number>()
+const changedElsewhere = new Map<string, number>()
+const outgoing = new Set<string>()
+let quiet = false
+/** `self`: the entry at `path` was written, removed or moved. `child`: the folder's list of entries
+ * changed (an entry in it came or went); the entry that changed is announced as `self` too. */
+export type BrowserChange = 'self' | 'child'
+const touch = (path: string, kind: BrowserChange) => {
+  entrySeq.set(path, ++mutations)
+  if (state === 'ready' && !quiet) outgoing.add(`${kind}:${path}`)
+}
+/** This tab's mutation number of a path (0: unchanged since the store was loaded). */
+export const browserEntrySeq = (path: string) => entrySeq.get(path) ?? 0
+/** Changes another tab of this browser announced and this tab has not read again from the store
+ * (keys `self:<path>` and `child:<path>`, see BrowserChange). */
+export const browserChangedElsewhere = (): ReadonlyMap<string, number> => changedElsewhere
+/** Whether an announced change can affect a folder `path` and what is in it: the folder or any folder
+ * on the way to it was itself written, removed or moved, or something inside it changed. A list change
+ * of a folder above it (a sibling came or went) cannot: that sibling is announced on its own. */
+export const browserChangeAffects = (marker: string, path: string) => {
+  const kind = marker.slice(0, marker.indexOf(':')), at = marker.slice(marker.indexOf(':') + 1)
+  const inside = at === path || at.startsWith(path === '/' ? '/' : `${path}/`)
+  return kind === 'self' ? inside || path.startsWith(at === '/' ? '/' : `${at}/`) : inside
+}
+const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('mvlos-browserfs') : null
+channel?.addEventListener('message', (event: MessageEvent) => {
+  const data = event.data as { store?: unknown; paths?: unknown }
+  if (!storeUUID || data?.store !== storeUUID || !Array.isArray(data.paths)) return
+  for (const p of data.paths) if (typeof p === 'string' && /^(self|child):\//.test(p)) changedElsewhere.set(p, ++mutations)
+  version++
+  listeners.forEach((l) => l())
+})
 const emit = () => {
+  if (outgoing.size && storeUUID) { channel?.postMessage({ store: storeUUID, paths: [...outgoing] }); outgoing.clear() }
   version++
   listeners.forEach((l) => l())
 }
@@ -109,14 +149,18 @@ function writeError(e: unknown): BrowserFsError {
 
 function index(e: BrowserEntry) {
   nodes.set(e.path, e)
+  touch(e.path, 'self')
   if (e.path === '/') return
   const parent = parentOf(e.path)
+  touch(parent, 'child')
   let set = children.get(parent)
   if (!set) children.set(parent, (set = new Set()))
   set.add(e.path)
 }
 
 function unindex(path: string) {
+  touch(path, 'self')
+  touch(parentOf(path), 'child')
   nodes.delete(path)
   texts.delete(path)
   children.get(parentOf(path))?.delete(path)
@@ -137,6 +181,7 @@ async function load(userId: number) {
   if (owner !== userId) return
   storeUUID = uuid
   nodes.clear()
+  changedElsewhere.clear()
   children.clear()
   texts.clear()
   const tx = db.transaction([NODES, BLOBS], 'readonly')
@@ -160,6 +205,7 @@ function openFor(userId: number | null) {
   db = null
   storeUUID = null
   nodes.clear()
+  changedElsewhere.clear()
   children.clear()
   texts.clear()
   if (userId === null || typeof indexedDB === 'undefined') {
@@ -241,6 +287,9 @@ export const subscribeBrowserFiles = (l: () => void) => {
 /** Re-renders whenever anything in the store changes. */
 export const useBrowserFiles = () => useSyncExternalStore(subscribeBrowserFiles, () => version)
 
+/** A stored entry only: never a launcher file projected from the synced launcher list. The store has
+ * no links or aliases; every stored path is a plain file or folder written through this module. */
+export const realBrowserEntry = (path: string): BrowserEntry | null => (state === 'ready' ? nodes.get(path) ?? null : null)
 export const statBrowser = (path: string): BrowserEntry | null => nodes.get(path) ?? (state === 'ready' ? (virtual?.stat(path) ?? null) : null)
 export function listBrowser(dir: string): BrowserEntry[] {
   const real = [...(children.get(dir) ?? [])].map((p) => nodes.get(p)!).filter(Boolean)
@@ -249,6 +298,56 @@ export function listBrowser(dir: string): BrowserEntry[] {
 }
 /** A small text file's contents, from memory; null when it is not kept there. */
 export const browserText = (path: string): string | null => texts.get(path) ?? (isVirtual(path) ? virtual!.text(path) : null)
+
+/**
+ * Re-reads one folder, its ancestors and everything inside it from IndexedDB (the store itself, which
+ * other tabs write to) into this tab's memory. Entries whose stored metadata or small text differ are
+ * re-indexed (and get new mutation numbers); entries gone from the store are dropped; the paths it
+ * covered are no longer marked as changed elsewhere. Unchanged entries keep their numbers.
+ */
+export async function refreshBrowserTree(path: string) {
+  await opening
+  const current = db
+  if (!current || state !== 'ready') throw new BrowserFsError('Files in this browser are not available')
+  const parts = path.split('/').filter(Boolean)
+  const ancestors = parts.map((_, i) => `/${parts.slice(0, i + 1).join('/')}`)
+  // Announcements that arrive while this reads may describe writes it did not see: those stay marked.
+  const startedAt = mutations
+  const tx = current.transaction([NODES, BLOBS], 'readonly')
+  const store = tx.objectStore(NODES)
+  const fetched = new Map<string, BrowserEntry>()
+  for (const at of ancestors) {
+    const e = await result(store.get(at) as IDBRequest<BrowserEntry | undefined>)
+    if (e) fetched.set(at, e)
+  }
+  if (path !== '/') for (const e of await result(store.getAll(IDBKeyRange.bound(`${path}/`, `${path}/\uffff`)) as IDBRequest<BrowserEntry[]>)) fetched.set(e.path, e)
+  const small = [...fetched.values()].filter((e) => !e.dir && e.size <= TEXT_IN_MEMORY && isTextName(nameOf(e.path)))
+  const blobs = await Promise.all(small.map((e) => result(tx.objectStore(BLOBS).get(e.path) as IDBRequest<Blob | undefined>)))
+  const fresh = new Map(await Promise.all(small.map(async (e, i) => [e.path, (await blobs[i]?.text()) ?? ''] as const)))
+  if (db !== current || state !== 'ready') throw new BrowserFsError('The browser account changed')
+  const inScope = (p: string) => p === path || p.startsWith(`${path}/`) || ancestors.includes(p)
+  const same = (a: BrowserEntry | undefined, b: BrowserEntry) => !!a && JSON.stringify([a.path, a.dir, a.size, a.mtime, a.type, a.mode ?? null]) === JSON.stringify([b.path, b.dir, b.size, b.mtime, b.type, b.mode ?? null])
+  let changed = false
+  quiet = true
+  try {
+    for (const p of [...nodes.keys()]) if (p !== '/' && inScope(p) && !fetched.has(p)) { unindex(p); changed = true }
+    for (const e of [...fetched.values()].sort((a, b) => a.path.length - b.path.length)) {
+      const text = fresh.get(e.path)
+      if (same(nodes.get(e.path), e) && (text === undefined ? !texts.has(e.path) : texts.get(e.path) === text)) continue
+      index(e)
+      if (text === undefined) texts.delete(e.path)
+      else texts.set(e.path, text)
+      changed = true
+    }
+    // Every change this read covers is settled: the folder, the folders on the way to it, and everything inside.
+    for (const [p, n] of [...changedElsewhere]) if (n <= startedAt && browserChangeAffects(p, path)) { changedElsewhere.delete(p); changed = true }
+  } finally { quiet = false }
+  // Only a real difference notifies (a check that re-reads must not wake every listener into another check).
+  if (changed) {
+    version++
+    listeners.forEach((l) => l())
+  }
+}
 
 export async function readBrowserBlob(path: string): Promise<Blob> {
   if (isVirtual(path)) return new Blob([virtual!.text(path) ?? ''], { type: 'text/plain' })
@@ -417,6 +516,7 @@ export async function wipeBrowserFiles(userId = owner) {
     db?.close()
     db = null
     nodes.clear()
+    changedElsewhere.clear()
     children.clear()
     texts.clear()
     owner = null
