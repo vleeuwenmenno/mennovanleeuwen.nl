@@ -17,7 +17,8 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http'
 import { deflateSync } from 'node:zlib'
 
-type Node = { dir: boolean; data: Buffer; mtime: number }
+/** `type`: the dirent type to report instead of file/dir (checks use it for entries Seafile itself would never list as a plain file or folder). */
+type Node = { dir: boolean; data: Buffer; mtime: number; type?: string }
 export type MockRepo = { id: string; name: string; files: Map<string, Node>; trash: { path: string; node: Node; deleted: number }[] }
 
 export const MY_LIBRARY = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -75,7 +76,7 @@ function png(r: number, g: number, b: number): Buffer {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))])
 }
 
-export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { videoThumbs?: boolean } = {}): Promise<{ base: string; repos: Map<string, MockRepo>; server: Server; close: () => Promise<void> }> {
+export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { videoThumbs?: boolean } = {}): Promise<{ base: string; repos: Map<string, MockRepo>; server: Server; control: { listDelay: number; readOnly: string[] }; close: () => Promise<void> }> {
   const repos = new Map<string, MockRepo>([
     [MY_LIBRARY, repo(MY_LIBRARY, 'My Library', ['/Desktop', '/Documents', '/Downloads', '/Music', '/Pictures', '/Videos'])],
     [PHOTOS, repo(PHOTOS, 'Photos', ['/2024'])],
@@ -111,9 +112,13 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { vid
     }
   }
 
+  // Checks can slow folder listings down (ms) to hold a request open while something else happens.
+  // readOnly: folders (path prefixes) this account may only read, as Seafile's user_perm 'r' says for a share.
+  const control = { listDelay: 0, readOnly: [] as string[] }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.pathname
+    if (control.listDelay && req.method === 'GET' && /\/dir\/$/.test(path)) await new Promise((r) => setTimeout(r, control.listDelay))
     const p = url.searchParams.get('p') ?? '/'
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Headers', '*')
@@ -142,8 +147,8 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { vid
         if (!node?.dir) return fail(res, 404, 'Folder not found')
         const dirent_list = [...r.files.entries()]
           .filter(([k]) => k !== '/' && parentOf(k) === p)
-          .map(([k, n]) => ({ type: n.dir ? 'dir' : 'file', name: nameOf(k), id: `${k.length}${n.mtime}`, size: n.data.length, mtime: n.mtime }))
-        return json(res, 200, { user_perm: 'rw', dirent_list })
+          .map(([k, n]) => ({ type: n.type ?? (n.dir ? 'dir' : 'file'), name: nameOf(k), id: `${k.length}${n.mtime}`, size: n.data.length, mtime: n.mtime }))
+        return json(res, 200, { user_perm: control.readOnly.some((d) => p === d || p.startsWith(`${d}/`)) ? 'r' : 'rw', dirent_list })
       }
       const form = await formOf(req)
       if (form.get('operation') === 'mkdir') {
@@ -269,7 +274,7 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { vid
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve))
   base = `http://${host}:${(server.address() as { port: number }).port}`
-  return { base, repos, server, close: () => new Promise((r) => server.close(() => r())) }
+  return { base, repos, server, control, close: () => new Promise((r) => server.close(() => r())) }
 }
 
 /** Puts a text file in a library (making its folders). */

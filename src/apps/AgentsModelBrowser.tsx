@@ -1,6 +1,6 @@
 import { getModelDetails, getModelMetadata, saveImageIntelSettings, type ModelCategory, type ModelDetails, type ModelMetadata, type PredictionSetting } from '../data/agentImages'
 import { recommendedLine, recommendedSourceLabel, type Recommended } from '../data/modelFamilies'
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type KeyboardEvent, type RefObject } from 'react'
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode, type KeyboardEvent, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { IMAGE_PRESETS, imagePresetSpec, presetModels, resolveImageAssets, recommendedImageSampling, type ImageAssetCatalog, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
 import { useIsMobile } from '../os/useIsMobile'
@@ -70,8 +70,11 @@ export function PresetPicker({ value, onChange, disabled }: { value: ImagePreset
   </>
 }
 
+const ModelHost = createContext<string | undefined>(undefined)
+
 /** Model metadata, fetched only once the element is on screen and cancelled when it leaves the UI. */
 function useModelMetadata(ref: RefObject<HTMLElement | null>, category: ModelCategory | undefined, name: string, revision = 0) {
+  const host = useContext(ModelHost)
   const [metadata, setMetadata] = useState<ModelMetadata | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -82,12 +85,12 @@ function useModelMetadata(ref: RefObject<HTMLElement | null>, category: ModelCat
     const start = () => {
       if (started) return
       started = true
-      void getModelMetadata(category, name, abort.signal).then((value) => { if (!abort.signal.aborted) setMetadata(value) }, (e: Error) => { if (!abort.signal.aborted) setError(e.message) })
+      void getModelMetadata(category, name, abort.signal, host).then((value) => { if (!abort.signal.aborted) setMetadata(value) }, (e: Error) => { if (!abort.signal.aborted) setError(e.message) })
     }
     const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) { start(); observer.disconnect() } })
     if (ref.current) observer.observe(ref.current)
     return () => { abort.abort(); observer.disconnect() }
-  }, [category, name, revision, ref])
+  }, [category, name, revision, ref, host])
   return { metadata, error }
 }
 
@@ -116,6 +119,7 @@ function ModelDetails({ category, name, revision }: { category?: ModelCategory; 
 
 /** What model_details knows about the selected checkpoint: family, tags, trained words, and the recipe with its source. */
 function ModelIntel({ name, checkpoint }: { name: string; checkpoint: boolean }) {
+  const host = useContext(ModelHost)
   const [details, setDetails] = useState<ModelDetails | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -124,9 +128,9 @@ function ModelIntel({ name, checkpoint }: { name: string; checkpoint: boolean })
     setDetails(null); setError('')
     const abort = new AbortController()
     // A short pause, so arrowing through the list does not ask about every file.
-    const timer = setTimeout(() => void getModelDetails(name, 'checkpoint', abort.signal).then((d) => { if (!abort.signal.aborted) setDetails(d) }, (e: Error) => { if (!abort.signal.aborted) setError(e.message) }), 350)
+    const timer = setTimeout(() => void getModelDetails(name, 'checkpoint', abort.signal, host).then((d) => { if (!abort.signal.aborted) setDetails(d) }, (e: Error) => { if (!abort.signal.aborted) setError(e.message) }), 350)
     return () => { clearTimeout(timer); abort.abort() }
-  }, [name, revision])
+  }, [name, revision, host])
   // The owner's own word on the file's prediction type, for when automatic detection is wrong.
   const setPrediction = (value: PredictionSetting) => {
     setSaving(true)
@@ -274,7 +278,7 @@ function AssetField({ field, label, category, values, value, selection, onChange
 
 export function ImageModelFields({ value, catalog, onChange, disabled, loading, error, onRefresh, extra }: {
   value: Assets
-  catalog: ImageAssetCatalog | null
+  catalog: (ImageAssetCatalog & { host?: { id: string } }) | null
   onChange: (patch: Partial<Assets>) => void
   disabled?: boolean; loading?: boolean; error?: string; onRefresh: () => void
   extra?: (field: 'preset' | Field) => ReactNode
@@ -283,7 +287,7 @@ export function ImageModelFields({ value, catalog, onChange, disabled, loading, 
   const resolved = catalog ? resolveImageAssets(value, catalog) : null
   const sampling = recommendedImageSampling(value.preset, resolved?.effective.model ?? value.model, catalog ?? undefined)
   const field = (name: Field, label: string, category: ModelCategory, values: string[]) => <AssetField field={name} label={label} category={category} values={values} value={value[name]} selection={resolved?.selection[name]} onChange={onChange} disabled={disabled} loading={loading} error={error} onRefresh={onRefresh} extra={extra?.(name)} />
-  return <div className="image-config-fields">
+  return <ModelHost.Provider value={catalog?.host?.id}><div className="image-config-fields">
     <div className="image-config-field"><div className="image-config-label"><strong>Workflow</strong>{extra?.('preset')}</div><PresetPicker value={value.preset} onChange={(preset) => onChange({ preset })} disabled={disabled} /></div>
     {/* MOSS Image also runs diffusion-only files from models/checkpoints, so its list joins both folders. */}
     {field('model', diffusion ? 'Diffusion model' : 'Checkpoint', diffusion ? 'diffusion_models' : 'checkpoints', catalog ? presetModels(value.preset, catalog) : [])}
@@ -292,5 +296,5 @@ export function ImageModelFields({ value, catalog, onChange, disabled, loading, 
       <span className="muted" title="Ask the agent to tune a single generation; saved defaults stay unchanged.">Recommended sampling: {sampling.steps} steps · CFG {sampling.cfg} · {sampling.sampler || 'no supported sampler'} / {sampling.scheduler || 'no supported scheduler'}</span>
       <button type="button" className="btn btn-small" disabled={disabled || (!value.model && !value.clip && !value.vae)} onClick={() => onChange({ model: '', clip: '', vae: '' })}>Use recommended assets</button>
     </div>
-  </div>
+  </div></ModelHost.Provider>
 }

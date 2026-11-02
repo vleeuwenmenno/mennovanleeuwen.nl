@@ -187,6 +187,16 @@ the installation and its saved state. A custom revision never runs until you gra
 revision for that instance (per session, like every other fork). A custom widget whose
 installation is missing or unreadable stays on the desktop and says so.
 
+Trust always: the person can trust a custom widget so it runs without asking, per account on every
+device. Only for the active revision built from exactly ~/.local/share/mvlos/widgets/<manifest id>
+in home's own storage (signed-in browser files on home, or a writable Seafile library mounted on
+home; no bind or read-only mount, no other path, no link or unknown entry type). Trust is pinned
+to the digest: any edit is a new digest and asks again. Every device checks its own storage for
+that exact folder before it runs a trusted widget, on every render and action; a missing or
+changed source, another mount or a read-only one makes it ask instead, and a deleted folder
+revokes the trust. It is revocable (Revoke trust in the widget's toolbar, on every device). Only the person's own click grants it; `widget activate`
+never does, so a widget built in a work folder or any other path always asks.
+
 The manifest id and name are the package's own (id: a-z, 0-9, -). The only capability is
 custom.state, optional. input.custom is always {now, today} (host clock in milliseconds, and the local
 date as YYYY-MM-DD). With custom.state it also holds state (any JSON, null until first saved)

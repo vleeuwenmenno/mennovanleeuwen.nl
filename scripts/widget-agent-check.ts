@@ -111,7 +111,7 @@ try {
     const r = records.get(instance)
     return { generation: r?.generation ?? 0, identity: JSON.stringify([r?.generation ?? 0, r?.active.snapshot.digest, r?.active.source]) }
   }
-  const log = { approvals: [] as { name: string; digest: string; instance: string; isNew: boolean; capabilities: { id: string; text: string }[]; dir: string; generation: number }[], placed: [] as string[], previews: [] as string[], allowed: [] as string[], writes: 0 }
+  const log = { approvals: [] as { name: string; digest: string; instance: string; isNew: boolean; capabilities: { id: string; text: string }[]; dir: string; generation: number }[], placed: [] as string[], previews: [] as string[], allowed: [] as string[], writes: 0, options: [] as unknown[] }
   let answer: 'allow' | 'deny' | 'hang' | 'allow-late' = 'allow'
   let during: (() => void) | null = null
   let hold = false
@@ -135,7 +135,8 @@ try {
     identity: async (path: string) => ({ kind: 'seafile' as const, account: 1, repo: 'repo', path }),
     readSource: async (identity: { path: string }) => readBack(identity.path),
     signedIn: () => true,
-    activate: async (instance: string, kind: string, revision: Revision, expected: number, expectedIdentity: string) => {
+    activate: async (instance: string, kind: string, revision: Revision, expected: number, expectedIdentity: string, options?: unknown) => {
+      log.options.push(options)
       const current = records.get(instance)
       if (current?.active.snapshot.digest === revision.snapshot.digest && JSON.stringify(current.active.source) === JSON.stringify(revision.source)) return
       const now = version(instance)
@@ -280,6 +281,14 @@ try {
   const [id] = [...records.keys()]
   check(ok(approved) && records.size === 1 && /^custom-[0-9a-f]{8}$/.test(id) && records.get(id)!.generation === 1 && records.get(id)!.kind === 'custom' && records.get(id)!.active.snapshot.digest === goodBuild.digest, 'activate --new, approved: one custom installation at generation 1 with the digest that was approved', approved.stdout + approved.stderr)
   check(log.placed.join() === id && log.allowed.join() === id && /activated/.test(approved.stdout), 'activate: the widget is granted and placed once')
+  eq(log.options, [{ trust: false }], 'activate --new passes exactly { trust: false }: an agent activation never trusts')
+  check(!Object.keys(host).some((k) => /trust/i.test(k)), 'the widget host has no trust operation')
+  const trustSub = await call(`widget trust ${id}`)
+  check(trustSub.exit_code === 1 && /unknown subcommand trust/.test(trustSub.stderr), 'there is no `widget trust` subcommand', trustSub.stderr)
+  const trustFlag = await call('widget activate good --new --trust')
+  check(trustFlag.exit_code === 1 && /unknown option --trust/.test(trustFlag.stderr) && records.size === 1, 'activate has no --trust option', trustFlag.stderr)
+  const agentHostSource = readFileSync(new URL('../src/widgets/platform/agentHost.ts', import.meta.url), 'utf8')
+  check(!/trustInstallation|revokeTrust|canonicalTrust/.test(agentHostSource) && /trust: false/.test(agentHostSource), 'the browser host for agents imports no trust operation and forces trust: false')
   const approvals = log.approvals.length
   const retry = await call(activate('good'))
   check(ok(retry) && /already active/.test(retry.stdout) && records.size === 1 && records.get(id)!.generation === 1 && log.writes === 1 && log.approvals.length === approvals && log.placed.length === 1, 'lost-result retry: the same call again is a no-op (no second instance, no generation bump, no new prompt)', retry.stdout + retry.stderr)

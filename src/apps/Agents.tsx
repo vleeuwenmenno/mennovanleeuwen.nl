@@ -12,7 +12,7 @@ import { PhotoPicker } from './photos/PhotoPicker'
 import { checkPhotoAttachmentBudget } from '../data/photoAttachments'
 import { mentionAt, mentionText } from '../data/agentMentions'
 import { openSessionImages } from './AgentsSessionImages'
-import { agentMasks, generatedImage, getLoraDetails, upscaleImage, refineImage, inpaintImage, type MaskedEditInput, type RefineImageInput, type UpscaleImageInput, type LoraDetail } from '../data/agentImages'
+import { agentMasks, generatedImage, getLoraDetails, IMAGE_SETTINGS_EVENT, upscaleImage, refineImage, inpaintImage, type MaskedEditInput, type RefineImageInput, type UpscaleImageInput, type LoraDetail } from '../data/agentImages'
 import { LoraDetailPane, LoraRow } from './AgentsLoraPicker'
 import { useIsMobile } from '../os/useIsMobile'
 import { useMediaQuery } from '../os/useMediaQuery'
@@ -1133,6 +1133,12 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
   const [draftSkillsOff, setDraftSkillsOff] = useState<string[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const [mentionTools, setMentionTools] = useState<MentionTool[]>([])
+  const [loraRevision, setLoraRevision] = useState(0)
+  useEffect(() => {
+    const changed = () => setLoraRevision((n) => n + 1)
+    window.addEventListener(IMAGE_SETTINGS_EVENT, changed)
+    return () => window.removeEventListener(IMAGE_SETTINGS_EVENT, changed)
+  }, [])
   const [loras, setLoras] = useState<LoraDetail[] | null>(null)
   const [loraManager, setLoraManager] = useState(false)
   const phone = useIsMobile()
@@ -2031,10 +2037,15 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
   const slashAt = /^\/([\w.-]*)$/.exec(text.slice(0, caret))
   const completion = activeMention ?? (slashAt ? { start: 0, sigil: '/', query: slashAt[1].toLowerCase() } : null)
   useEffect(() => {
-    if (activeMention?.sigil !== '#' || loras !== null || loraLoading || loraError) return
+    setLoras(null); setLoraError(''); setLoraLoading(false)
+    if (activeMention?.sigil !== '#') return
+    const abort = new AbortController()
     setLoraLoading(true)
-    getLoraDetails().then((result) => { setLoras(result.loras); setLoraManager(result.manager) }, () => setLoraError('Connect ComfyUI in Settings → Agents → Images.')).finally(() => setLoraLoading(false))
-  }, [activeMention?.sigil, loras, loraLoading, loraError])
+    getLoraDetails(thread?.id, abort.signal).then((result) => {
+      if (!abort.signal.aborted) { setLoras(result.loras); setLoraManager(result.manager) }
+    }, () => { if (!abort.signal.aborted) setLoraError('Connect ComfyUI in Settings → Agents → Images.') }).finally(() => { if (!abort.signal.aborted) setLoraLoading(false) })
+    return () => abort.abort()
+  }, [activeMention?.sigil, thread?.id, loraRevision])
   useEffect(() => { setSuggestionIndex(0); setSuggestionsDismissed(false) }, [text, caret])
   const suggestions: { name: string; hint: string; lora?: LoraDetail }[] = !completion ? [] : (completion.sigil === '#'
     ? (loras ?? []).map((l) => ({ name: l.name, hint: l.title, lora: l }))

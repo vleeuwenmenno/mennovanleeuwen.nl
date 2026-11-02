@@ -59,7 +59,8 @@ export type ImagePreset = 'sd15' | 'sdxl' | 'z_image' | 'z_image_turbo' | 'krea2
 export type ImageLora = { name: string; weight: number }
 export type ImageLoraHint = { name: string; baseModel: string; triggers: string[] }
 export type ImageConfig = { loras: ImageLora[]; preset: ImagePreset; model: string; clip: string; vae: string; width: number; height: number; seed: number | null }
-export type ImageOverrides = Partial<ImageConfig>
+/** host: the id of the ComfyUI host a thread prefers (Settings → Apps → Image & Video Studio lists them). */
+export type ImageOverrides = Partial<ImageConfig> & { host?: string }
 export const IMAGE_PRESETS: { id: ImagePreset; title: string; detail: string; requirements: string; size: number }[] = [
   { id: 'sd15', title: 'SD 1.5', detail: '512 px · 20 steps · CFG 7 · DPM++ 2M / Karras', requirements: 'A complete SD 1.5 checkpoint with its text encoder and VAE.', size: 512 },
   { id: 'sdxl', title: 'SDXL', detail: '1024 px · 25 steps · CFG 7 · DPM++ 2M / Karras', requirements: 'A complete SDXL checkpoint with its text encoder and VAE.', size: 1024 },
@@ -201,7 +202,10 @@ export type DiffusionImageSettings = ImageAssets & ImageSampling & { clip_skip?:
 export type UpscaleImageSettings = { operation: 'upscale'; upscale_model: string; width: number; height: number; input_width: number; input_height: number; source: { id: string; name: string; url: string; width: number; height: number; resize: 'lanczos' } }
 /** LaMa object removal: the source's full size, a mask, and no prompt, model or sampler. */
 export type RemoveImageSettings = { operation: 'remove'; width: number; height: number; mask: { id: string; url: string; width: number; height: number; semantics: 'white-edits-black-preserves' }; source: { id: string; name: string; url: string; width: number; height: number; resize: 'none' } }
-export type ImageGenerationSettings = DiffusionImageSettings | UpscaleImageSettings | RemoveImageSettings
+/** A ComfyUI host as pictures record it: its stable id and name, never its address or credentials. */
+export type ImageHostLabel = { id: string; name: string }
+/** host: the ComfyUI host the picture was made on (absent on pictures from before hosts). */
+export type ImageGenerationSettings = (DiffusionImageSettings | UpscaleImageSettings | RemoveImageSettings) & { host?: ImageHostLabel }
 /**
  * What an inpaint of a generated picture carries over from its recorded settings: the same
  * components (a checkpoint's custom VAE too), LoRAs, clip skip and sampling. The server inherits

@@ -291,8 +291,9 @@ export const seafPath = (v: unknown) => {
   return p
 }
 
-export type Entry = { name: string; dir: boolean; size: number; mtime: number; id: string; locked?: boolean }
-type ApiDirent = { type: 'dir' | 'file'; name: string; id: string; size?: number; mtime: number; is_locked?: boolean }
+/** `type` is Seafile's own dirent type, kept as reported: anything but a plain file or folder is `other` (never shown as a file to trust checks). */
+export type Entry = { name: string; dir: boolean; size: number; mtime: number; id: string; locked?: boolean; type?: 'file' | 'dir' | 'other' }
+type ApiDirent = { type: string; name: string; id: string; size?: number; mtime: number; is_locked?: boolean }
 
 // Encrypted libraries. Seafile encrypts file contents only: their folders list fine without the
 // password, and Seafile keeps an unlocked library open for an hour after the password is given.
@@ -388,7 +389,7 @@ export async function listDir(user: User, repo: unknown, path: unknown, signal?:
   const body = await seafile<{ user_perm?: string; dirent_list: ApiDirent[] }>(user, `/api/v2.1/repos/${id}/dir/?p=${encodeURIComponent(p)}`, { signal })
   return {
     perm: body.user_perm === 'rw' ? 'rw' : 'r',
-    entries: body.dirent_list.map((d) => ({ name: d.name, dir: d.type === 'dir', size: d.size ?? 0, mtime: (d.mtime ?? 0) * 1000, id: d.id, ...(d.is_locked ? { locked: true } : {}) })),
+    entries: body.dirent_list.map((d) => ({ name: d.name, dir: d.type === 'dir', type: d.type === 'dir' || d.type === 'file' ? d.type : 'other', size: d.size ?? 0, mtime: (d.mtime ?? 0) * 1000, id: d.id, ...(d.is_locked ? { locked: true } : {}) })),
   }
 }
 

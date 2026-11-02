@@ -16,7 +16,7 @@ export function StudioSettings() {
   }, [])
   return (
     <>
-      <p className="muted set-help">The Image Studio and the Video Studio run on your own ComfyUI server. Its address and token are stored encrypted with your account and used only by this site's server; your browser never talks to ComfyUI directly. Agents generates pictures with the same connection.</p>
+      <p className="muted set-help">The Image Studio and the Video Studio run on your own ComfyUI server, or on one of several. Their addresses and tokens are stored encrypted with your account and used only by this site's server; your browser never talks to ComfyUI directly. Agents generates pictures with the same hosts.</p>
       <AgentsImageSettings />
       <VideoSettings connected={connected} />
     </>

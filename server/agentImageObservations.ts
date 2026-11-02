@@ -3,7 +3,7 @@ import type { User } from './auth.ts'
 import { database } from './db.ts'
 import { json } from './http.ts'
 import { imageProfiles } from './agentImageProfiles.ts'
-import { imageBackendScope } from './agentImages.ts'
+import { imageBackendScope, imageHosts } from './agentImages.ts'
 import { readObservation, type ObservationsView } from '../src/data/imageObservations.ts'
 
 // Read-only overview of the account's image observations and style profiles, for the
@@ -22,12 +22,13 @@ export function imageObservations(user: User): ObservationsView {
   const db = database()
   const rows = db.prepare('SELECT id, text, image_learning, thread_id, created_at, updated_at FROM agent_memories WHERE user_id = ? AND image_learning IS NOT NULL ORDER BY COALESCE(updated_at, created_at) DESC, id DESC LIMIT ?').all(user.id, OBSERVATIONS_LIMIT) as MemoryRow[]
   const total = (db.prepare('SELECT COUNT(*) AS n FROM agent_memories WHERE user_id = ? AND image_learning IS NOT NULL').get(user.id) as { n: number }).n
-  let scope = ''
-  try { scope = imageBackendScope(user) } catch { /* no ComfyUI settings readable: every row says "unknown" */ }
+  // Every configured host's scope: an observation is "current" when it was made on any of them.
+  let scopes = new Set<string>()
+  try { const hosts = imageHosts(user); scopes = new Set(hosts.length ? hosts.map((h) => imageBackendScope(user, h)) : [imageBackendScope(user)]) } catch { /* no ComfyUI settings readable: every row says "unknown" */ }
   const read = rows.map((r) => readObservation({ id: r.id, threadId: r.thread_id, createdAt: r.created_at, updatedAt: r.updated_at }, r.text, r.image_learning))
   const ids = [...new Set(read.flatMap((o) => (o.imageId ? [o.imageId] : [])))]
   const present = new Set(ids.length ? (db.prepare(`SELECT i.id FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE t.user_id = ? AND i.id IN (${ids.map(() => '?').join(',')})`).all(user.id, ...ids) as { id: string }[]).map((r) => r.id) : [])
-  const observations = read.map(({ scope: own, ...o }) => ({ ...o, currentBackend: own && scope ? own === scope : null, imageAvailable: o.imageId ? present.has(o.imageId) : null }))
+  const observations = read.map(({ scope: own, ...o }) => ({ ...o, currentBackend: own && scopes.size ? scopes.has(own) : null, imageAvailable: o.imageId ? present.has(o.imageId) : null }))
 
   // Counts and last activity over every observation, not just the newest LIMIT.
   const stats = new Map((db.prepare("SELECT json_extract(image_learning, '$.profileId') AS profile, COUNT(*) AS n, MAX(COALESCE(updated_at, created_at)) AS at FROM agent_memories WHERE user_id = ? AND image_learning IS NOT NULL GROUP BY profile").all(user.id) as { profile: number | null; n: number; at: number }[]).map((r) => [r.profile, r]))
