@@ -69,7 +69,12 @@ export type GoogleIdentity = { sub: string; email: string | null; emailVerified:
 const part = (s: string) => JSON.parse(Buffer.from(s, 'base64url').toString('utf8')) as Record<string, unknown>
 
 /** The checked identity in a Google ID token, or an Error saying which check failed. */
-export async function verifyGoogleIdToken(token: string, opts: { clientId: string; nonce: string; now?: number }): Promise<GoogleIdentity> {
+/**
+ * `androidClients`: the stricter policy for ID tokens from the Android app's native Google sign-in
+ * (server/appLogin.ts): `aud` must be exactly the web client id (a string, no lists) and `azp`, the
+ * party it was issued to, one of these Android OAuth client ids. The browser flow leaves it out.
+ */
+export async function verifyGoogleIdToken(token: string, opts: { clientId: string; nonce: string; now?: number; androidClients?: string[] }): Promise<GoogleIdentity> {
   const pieces = token.split('.')
   if (pieces.length !== 3 || pieces.some((p) => !/^[A-Za-z0-9_-]*$/.test(p))) throw new Error('malformed token')
   let header: Record<string, unknown>
@@ -89,7 +94,10 @@ export async function verifyGoogleIdToken(token: string, opts: { clientId: strin
   const now = Math.floor((opts.now ?? Date.now()) / 1000)
   if (typeof claims.iss !== 'string' || !ISSUERS.has(claims.iss)) throw new Error('wrong issuer')
   const aud = claims.aud
-  if (Array.isArray(aud) ? !aud.includes(opts.clientId) || (aud.length > 1 && claims.azp !== opts.clientId) : aud !== opts.clientId) throw new Error('wrong audience')
+  if (opts.androidClients) {
+    if (aud !== opts.clientId) throw new Error('wrong audience')
+    if (typeof claims.azp !== 'string' || !opts.androidClients.includes(claims.azp)) throw new Error('wrong authorized party')
+  } else if (Array.isArray(aud) ? !aud.includes(opts.clientId) || (aud.length > 1 && claims.azp !== opts.clientId) : aud !== opts.clientId) throw new Error('wrong audience')
   if (typeof claims.exp !== 'number' || claims.exp + SKEW_S < now) throw new Error('expired')
   if (typeof claims.iat !== 'number' || claims.iat - SKEW_S > now) throw new Error('issued in the future')
   if (typeof claims.nonce !== 'string' || !sameText(claims.nonce, opts.nonce)) throw new Error('wrong nonce')

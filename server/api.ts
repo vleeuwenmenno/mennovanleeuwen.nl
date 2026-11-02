@@ -50,7 +50,7 @@ import { suggest } from './suggest.ts'
 import { readState, writeState } from './state.ts'
 import { deleteUser, unlinkIdentity } from './users.ts'
 import { finishGoogleSignIn, startGoogleLink, startGoogleSignIn } from './googleSignIn.ts'
-import { appLoginInfo, redeemAppLogin, startAppLogin } from './appLogin.ts'
+import { appLoginInfo, redeemAppLogin, redeemNativeGoogle, startAppLogin, startNativeGoogle } from './appLogin.ts'
 import { createShare, deleteShare, isShareToken, listShares, serveShare } from './shares.ts'
 import { handleMailApi } from './jmap.ts'
 
@@ -114,6 +114,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (read && path === '/api/auth/app') return appLoginInfo(res), true
     if (read && path === '/api/auth/app/start') return startAppLogin(req, res, url), true
     if (method === 'POST' && path === '/api/auth/app/redeem') return await redeemAppLogin(req, res), true
+    if (method === 'POST' && path === '/api/auth/app/google/start') return await startNativeGoogle(req, res), true
+    if (method === 'POST' && path === '/api/auth/app/google/redeem') return await redeemNativeGoogle(req, res), true
     if (read && path === '/api/auth/google/callback') return await finishGoogleSignIn(req, res, url), true
     if (read && path === '/api/me') {
       const user = currentUser(req)

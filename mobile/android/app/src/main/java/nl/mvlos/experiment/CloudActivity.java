@@ -154,6 +154,7 @@ public class CloudActivity extends AppCompatActivity {
         String next = checkedOrigin(intent.getStringExtra(EXTRA_ORIGIN));
         if (next != null && !next.equals(origin)) {
             origin = next;
+            authOp++;
             freshStart = true;
             web.loadUrl(origin + "/");
         }
@@ -175,6 +176,7 @@ public class CloudActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        authOp++;
         if (web != null) {
             web.stopLoading();
             web.destroy();
@@ -184,14 +186,38 @@ public class CloudActivity extends AppCompatActivity {
 
     // ---- Sign-in through the system browser ----
 
+    /**
+     * The sign-in under way (browser or native): each new attempt, a cancel, a server change or the
+     * end of this screen moves it on, and every step checks it still holds, so a late answer never
+     * replaces a newer sign-in.
+     */
+    private int authOp;
+
+    /**
+     * The sign-in whose session cookies are being put in (0: none). No other sign-in starts until
+     * that has settled, and only that sign-in can release it.
+     */
+    private int installingOp;
+
     private void startLogin(String provider) {
+        if (installingOp != 0) return;
+        final int op = ++authOp;
+        // A new sign-in replaces any browser sign-in still waiting: its return no longer counts,
+        // also while this one is still asking the server what it supports.
+        CloudLogin.clear(this);
+        final String server = origin;
         new Thread(() -> {
-            CloudLogin.Support support = CloudLogin.support(origin, provider);
+            CloudLogin.Info info = CloudLogin.support(server, provider);
+            CloudLogin.Support support = info.support;
             runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
+                if (isFinishing() || isDestroyed() || op != authOp || !server.equals(origin)) return;
                 switch (support) {
                     case SUPPORTED:
-                        openBrowser(CloudLogin.begin(this, origin, provider));
+                        if ("google".equals(provider) && info.nativeGoogleClientId != null && NativeGoogle.allowedOrigin(server)) {
+                            askNativeGoogle(op, server, info.nativeGoogleClientId);
+                        } else {
+                            openBrowser(CloudLogin.begin(this, server, provider));
+                        }
                         break;
                     case OLD_SERVER:
                         message(R.string.login_old_server_title, getString(R.string.login_old_server_body, origin));
@@ -210,6 +236,126 @@ public class CloudActivity extends AppCompatActivity {
                 }
             });
         }).start();
+    }
+
+    // ---- Native Google sign-in (Android's account picker) ----
+
+    /**
+     * Asks first, naming the server: the Google sheet itself only shows the Google project's name.
+     * Choosing an account is the deliberate step; the browser stays one tap away.
+     */
+    private void askNativeGoogle(int op, String server, String clientId) {
+        // This replaces any browser sign-in still waiting: its return no longer counts.
+        CloudLogin.clear(this);
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.native_google_title)
+            .setMessage(getString(R.string.native_google_body, server))
+            .setPositiveButton(R.string.native_google_choose, (d, w) -> nativeGoogle(op, server, clientId))
+            .setNeutralButton(R.string.native_google_browser, (d, w) -> {
+                if (op == authOp && server.equals(origin)) openBrowser(CloudLogin.begin(this, server, "google"));
+            })
+            .setNegativeButton(android.R.string.cancel, (d, w) -> authOp++)
+            .setOnCancelListener(d -> authOp++)
+            .show();
+    }
+
+    private boolean current(int op, String server) {
+        return !isFinishing() && !isDestroyed() && op == authOp && server.equals(origin);
+    }
+
+    private void nativeGoogle(int op, String server, String clientId) {
+        progress.setVisibility(View.VISIBLE);
+        new Thread(() -> {
+            String challenge = NativeGoogle.start(server);
+            runOnUiThread(() -> {
+                if (!current(op, server)) return;
+                if (challenge == null) {
+                    progress.setVisibility(View.GONE);
+                    offerBrowser(op, server, getString(R.string.native_google_failed));
+                    return;
+                }
+                // The account chooser every time (no automatic choice), with every Google account on
+                // the phone and "add account". The nonce binds the token to this server.
+                androidx.credentials.GetCredentialRequest request = new androidx.credentials.GetCredentialRequest.Builder()
+                    .addCredentialOption(new com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption.Builder(clientId)
+                        .setNonce(NativeGoogle.nonce(challenge, server)).build())
+                    .build();
+                androidx.credentials.CredentialManager.create(this).getCredentialAsync(this, request, new android.os.CancellationSignal(),
+                    androidx.core.content.ContextCompat.getMainExecutor(this),
+                    new androidx.credentials.CredentialManagerCallback<androidx.credentials.GetCredentialResponse, androidx.credentials.exceptions.GetCredentialException>() {
+                        @Override
+                        public void onResult(androidx.credentials.GetCredentialResponse result) {
+                            if (!current(op, server)) return;
+                            String idToken = googleIdToken(result.getCredential());
+                            if (idToken == null) {
+                                progress.setVisibility(View.GONE);
+                                offerBrowser(op, server, getString(R.string.native_google_failed));
+                                return;
+                            }
+                            redeemNative(op, server, challenge, idToken);
+                        }
+
+                        @Override
+                        public void onError(androidx.credentials.exceptions.GetCredentialException e) {
+                            progress.setVisibility(View.GONE);
+                            if (!current(op, server)) return;
+                            // Cancelled: the person said no; nothing else opens by itself.
+                            if (e instanceof androidx.credentials.exceptions.GetCredentialCancellationException) {
+                                authOp++;
+                                return;
+                            }
+                            offerBrowser(op, server, getString(e instanceof androidx.credentials.exceptions.NoCredentialException
+                                ? R.string.native_google_no_account : R.string.native_google_failed));
+                        }
+                    });
+            });
+        }).start();
+    }
+
+    /** The Google ID token from Credential Manager's answer, or null if it is anything else. */
+    private static String googleIdToken(androidx.credentials.Credential credential) {
+        if (!(credential instanceof androidx.credentials.CustomCredential)) return null;
+        androidx.credentials.CustomCredential custom = (androidx.credentials.CustomCredential) credential;
+        if (!com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL.equals(custom.getType())) return null;
+        try {
+            return com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.createFrom(custom.getData()).getIdToken();
+        } catch (Exception e) {
+            // GoogleIdTokenParsingException is a checked exception (thrown from Kotlin): anything unreadable means no token.
+            return null;
+        }
+    }
+
+    private void redeemNative(int op, String server, String challenge, String idToken) {
+        final String oldCookie = CookieManager.getInstance().getCookie(server + "/");
+        new Thread(() -> {
+            NativeGoogle.Result r = NativeGoogle.redeem(server, challenge, idToken, oldCookie);
+            runOnUiThread(() -> {
+                if (!current(op, server)) return;
+                if (r.cookies == null) {
+                    progress.setVisibility(View.GONE);
+                    // The server's own refusals (banned, sign-up closed or full) are final; other failures can try the browser.
+                    if ("banned".equals(r.error) || "closed".equals(r.error) || "full".equals(r.error)) {
+                        message(R.string.login_failed_title, errorText(r.error, r.reason));
+                    } else {
+                        offerBrowser(op, server, getString(R.string.native_google_failed));
+                    }
+                    return;
+                }
+                install(server, r.cookies, 0, op);
+            });
+        }).start();
+    }
+
+    /** Native sign-in didn't work: say so, and offer the browser as an explicit choice. */
+    private void offerBrowser(int op, String server, String why) {
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.login_failed_title)
+            .setMessage(why)
+            .setPositiveButton(R.string.native_google_browser, (d, w) -> {
+                if (op == authOp && server.equals(origin)) openBrowser(CloudLogin.begin(this, server, "google"));
+            })
+            .setNegativeButton(android.R.string.cancel, (d, w) -> authOp++)
+            .show();
     }
 
     /** The provider's sign-in, in the system browser (a Custom Tab where available): never in this WebView. */
@@ -253,28 +399,44 @@ public class CloudActivity extends AppCompatActivity {
         // The app redeems it itself (not the WebView), then puts the checked session cookies into
         // the WebView and loads the desktop.
         final String server = origin;
+        // Another sign-in is putting its cookies in right now: this return waits for nothing, it is dropped.
+        if (installingOp != 0) {
+            message(R.string.login_failed_title, getString(R.string.login_expired));
+            return;
+        }
+        // The return is a sign-in of its own now: anything older no longer lands.
+        final int op = ++authOp;
         final String verifier = pending.verifier;
         final String oldCookie = CookieManager.getInstance().getCookie(server + "/");
         progress.setVisibility(View.VISIBLE);
         new Thread(() -> {
             java.util.List<String> cookies = CloudLogin.redeem(server, code, verifier, oldCookie);
             runOnUiThread(() -> {
-                // Nothing late lands: the desktop closed or moved to another server meanwhile.
-                if (isFinishing() || isDestroyed() || !server.equals(origin)) return;
+                // Nothing late lands: the desktop closed, moved to another server or started another sign-in meanwhile.
+                if (!current(op, server)) return;
                 if (cookies == null) {
                     progress.setVisibility(View.GONE);
                     message(R.string.login_failed_title, getString(R.string.login_error));
                     return;
                 }
-                install(server, cookies, 0);
+                install(server, cookies, 0, op);
             });
         }).start();
     }
 
     /** Puts the cookies in one by one (each confirmed), then opens the signed-in desktop. */
-    private void install(String server, java.util.List<String> cookies, int i) {
-        if (isFinishing() || isDestroyed() || !server.equals(origin)) return;
+    private void install(String server, java.util.List<String> cookies, int i, int op) {
+        if (i == 0) {
+            if (installingOp != 0 || !current(op, server)) return;
+            installingOp = op;
+        }
+        if (!current(op, server)) {
+            // Cancelled or replaced while the cookies went in: the ones already written go again.
+            undoInstall(server, cookies, i, op);
+            return;
+        }
         if (i == cookies.size()) {
+            installingOp = 0;
             CookieManager.getInstance().flush();
             errorView.setVisibility(View.GONE);
             freshStart = true;
@@ -282,9 +444,24 @@ public class CloudActivity extends AppCompatActivity {
             return;
         }
         CookieManager.getInstance().setCookie(server, cookies.get(i), ok -> {
-            if (ok) install(server, cookies, i + 1);
-            else message(R.string.login_failed_title, getString(R.string.login_error));
+            if (ok) {
+                install(server, cookies, i + 1, op);
+                return;
+            }
+            undoInstall(server, cookies, i, op);
+            if (current(op, server)) message(R.string.login_failed_title, getString(R.string.login_error));
         });
+    }
+
+    /** Expires the first `count` of these cookies (MvL OS's own names, Path=/), so a sign-in that didn't finish leaves no session behind. */
+    private void undoInstall(String server, java.util.List<String> cookies, int count, int op) {
+        for (int k = 0; k < count && k < cookies.size(); k++) {
+            String name = cookies.get(k).substring(0, cookies.get(k).indexOf('='));
+            CookieManager.getInstance().setCookie(server, name + "=; Path=/; Max-Age=0; Secure");
+        }
+        CookieManager.getInstance().flush();
+        if (installingOp == op) installingOp = 0;
+        progress.setVisibility(View.GONE);
     }
 
     private String errorText(String error, String reason) {

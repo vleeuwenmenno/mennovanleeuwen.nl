@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { admission, backTo, backWith, beginFlow, completeSignIn, failSignIn, currentUser, finishFlow, googleSignInClient, identityOwner, requireUser, sessionKey, type Flow } from './auth.ts'
 import { database, nextUserId } from './db.ts'
 import { cookies, HttpError, json, publicOrigin, redirect, setCookie } from './http.ts'
-import { verifyGoogleIdToken } from './oidc.ts'
+import { verifyGoogleIdToken, type GoogleIdentity } from './oidc.ts'
 
 // "Sign in with Google": OpenID Connect's authorization code flow with PKCE (S256), a one-time
 // state and a nonce, asking for `openid email profile` only. It is a way in, nothing more: no
@@ -122,25 +122,37 @@ export async function finishGoogleSignIn(req: IncomingMessage, res: ServerRespon
     return redirect(res, backWith('/', 'linked-google'), { 'Set-Cookie': clear })
   }
 
-  if (owner?.banned_at) return failSignIn(res, flow, home, 'banned', [clear], owner.ban_reason)
-  let id: number
+  const outcome = googleAccountFor(who)
+  if ('refused' in outcome) return outcome.refused === 'banned' ? failSignIn(res, flow, home, 'banned', [clear], outcome.reason) : fail(outcome.refused)
+  completeSignIn(req, res, flow, outcome.id, [clear], { provider: 'google', subject: who.sub })
+}
+
+/**
+ * The account a verified Google identity signs in as: the one its `sub` belongs to (never by email),
+ * or a new one within the registration limits (never an admin). Shared by the browser round trip
+ * and the Android app's native sign-in (server/appLogin.ts).
+ */
+export function googleAccountFor(who: GoogleIdentity): { id: number } | { refused: 'banned' | 'closed' | 'full' | 'error'; reason?: string | null } {
+  const db = database()
+  const now = Date.now()
+  const owner = identityOwner('google', who.sub)
+  if (owner?.banned_at) return { refused: 'banned', reason: owner.ban_reason }
   if (owner) {
-    id = owner.id
     db.prepare("UPDATE identities SET email = ?, last_used_at = ? WHERE provider = 'google' AND subject = ?").run(who.email, now, who.sub)
-    db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now, id)
-  } else {
-    const admit = admission()
-    if (admit !== 'ok') return fail(admit)
-    id = nextUserId()
-    db.exec('BEGIN IMMEDIATE')
-    try {
-      db.prepare('INSERT INTO users (id, github_id, login, name, avatar, github_token, github_scopes, created_at, updated_at, last_seen_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, newLogin(who.email, who.name), who.name, who.picture, '', '', now, now, now)
-      db.prepare("INSERT INTO identities (provider, subject, user_id, email, created_at, last_used_at) VALUES ('google', ?, ?, ?, ?, ?)").run(who.sub, id, who.email, now, now)
-      db.exec('COMMIT')
-    } catch {
-      db.exec('ROLLBACK')
-      return fail('error')
-    }
+    db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now, owner.id)
+    return { id: owner.id }
   }
-  completeSignIn(req, res, flow, id, [clear], { provider: 'google', subject: who.sub })
+  const admit = admission()
+  if (admit !== 'ok') return { refused: admit }
+  const id = nextUserId()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    db.prepare('INSERT INTO users (id, github_id, login, name, avatar, github_token, github_scopes, created_at, updated_at, last_seen_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, newLogin(who.email, who.name), who.name, who.picture, '', '', now, now, now)
+    db.prepare("INSERT INTO identities (provider, subject, user_id, email, created_at, last_used_at) VALUES ('google', ?, ?, ?, ?, ?)").run(who.sub, id, who.email, now, now)
+    db.exec('COMMIT')
+  } catch {
+    db.exec('ROLLBACK')
+    return { refused: 'error' }
+  }
+  return { id }
 }

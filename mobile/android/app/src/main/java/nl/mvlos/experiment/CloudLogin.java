@@ -124,8 +124,19 @@ final class CloudLogin {
         return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
     }
 
+    /** What GET /api/auth/app said: whether it signs in the app with this provider, and its web client id for native Google sign-in if it offers that. */
+    static final class Info {
+        final Support support;
+        final String nativeGoogleClientId;
+
+        Info(Support support, String nativeGoogleClientId) {
+            this.support = support;
+            this.nativeGoogleClientId = nativeGoogleClientId;
+        }
+    }
+
     /** Asks the server (GET /api/auth/app) whether it signs in the app with this provider. Off the main thread. */
-    static Support support(String origin, String provider) {
+    static Info support(String origin, String provider) {
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL(origin + "/api/auth/app").openConnection();
@@ -136,21 +147,24 @@ final class CloudLogin {
             c.setUseCaches(false);
             int status = c.getResponseCode();
             // Older servers answer 401 or 404 here (or the desktop page); a server error is something else.
-            if (status >= 500) return Support.SERVER_ERROR;
-            if (status != 200) return Support.OLD_SERVER;
+            if (status >= 500) return new Info(Support.SERVER_ERROR, null);
+            if (status != 200) return new Info(Support.OLD_SERVER, null);
             String type = c.getContentType();
-            if (type == null || !type.startsWith("application/json")) return Support.OLD_SERVER;
+            if (type == null || !type.startsWith("application/json")) return new Info(Support.OLD_SERVER, null);
             JSONObject body = new JSONObject(read(c.getInputStream(), 16 * 1024));
             int version = body.optInt("app", -1);
             // 0: a current server without an https PUBLIC_URL; 1: an earlier, unbound protocol.
-            if (version == 0) return Support.NOT_CONFIGURED;
-            if (version < PROTOCOL) return Support.OLD_SERVER;
+            if (version == 0) return new Info(Support.NOT_CONFIGURED, null);
+            if (version < PROTOCOL) return new Info(Support.OLD_SERVER, null);
             // The server's own idea of its address must be the one the app connects to.
-            if (!origin.equals(body.optString("origin", ""))) return Support.NOT_CONFIGURED;
+            if (!origin.equals(body.optString("origin", ""))) return new Info(Support.NOT_CONFIGURED, null);
             JSONObject providers = body.optJSONObject("providers");
-            return providers != null && providers.optBoolean(provider, false) ? Support.SUPPORTED : Support.PROVIDER_OFF;
+            if (providers == null || !providers.optBoolean(provider, false)) return new Info(Support.PROVIDER_OFF, null);
+            JSONObject nativeGoogle = body.optJSONObject("googleNative");
+            String clientId = nativeGoogle == null ? "" : nativeGoogle.optString("clientId", "");
+            return new Info(Support.SUPPORTED, clientId.matches("[A-Za-z0-9._-]{10,200}") ? clientId : null);
         } catch (Exception e) {
-            return Support.UNREACHABLE;
+            return new Info(Support.UNREACHABLE, null);
         } finally {
             if (c != null) c.disconnect();
         }
