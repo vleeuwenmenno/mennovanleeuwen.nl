@@ -22,6 +22,8 @@ public final class CloudPolicy {
         LOGIN_GOOGLE,
         /** Back to the app's on-device / cloud chooser (mvlosapp://chooser). */
         CHOOSER,
+        /** The app's push notification opt-in (exactly mvlosapp://push): a native screen, after a tap. */
+        PUSH,
         /** A provider's sign-in page (for example linking a sign-in): never inside the app. */
         PROVIDER_PAGE,
         /** Another site or app (https, mailto, tel): handed to the system, after a tap. */
@@ -44,7 +46,10 @@ public final class CloudPolicy {
         }
         String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.ROOT);
         if (scheme.equals("mvlosapp")) {
-            return "chooser".equals(u.getHost()) || "//chooser".equals(u.getRawSchemeSpecificPart()) ? Action.CHOOSER : Action.BLOCK;
+            if ("chooser".equals(u.getHost()) || "//chooser".equals(u.getRawSchemeSpecificPart())) return Action.CHOOSER;
+            // Only the bare address: no path, query, fragment, user or port that could carry anything.
+            if ("//push".equals(u.getRawSchemeSpecificPart()) && "push".equals(u.getHost()) && u.getRawQuery() == null && u.getRawFragment() == null && u.getRawUserInfo() == null && u.getPort() == -1) return Action.PUSH;
+            return Action.BLOCK;
         }
         if (scheme.equals("mailto") || scheme.equals("tel")) return Action.EXTERNAL;
         if (!scheme.equals("https") || u.getHost() == null || u.getRawUserInfo() != null) return Action.BLOCK;

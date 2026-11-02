@@ -75,4 +75,17 @@ public class CloudPolicyTest {
         assertEquals(Action.STAY, CloudPolicy.classify("https://[2001:db8::1]", "https://[2001:0db8:0:0:0:0:0:1]/"));
         assertEquals(Action.STAY, CloudPolicy.classify("https://[::ffff:102:304]", "https://[::ffff:1.2.3.4]/"));
     }
+
+    @Test
+    public void pushOptInIsOnlyTheBareAddress() {
+        assertEquals(Action.PUSH, c("mvlosapp://push"));
+        assertEquals(Action.BLOCK, c("mvlosapp://push/"));
+        assertEquals(Action.BLOCK, c("mvlosapp://push?origin=https://evil.example"));
+        assertEquals(Action.BLOCK, c("mvlosapp://push#x"));
+        assertEquals(Action.BLOCK, c("mvlosapp://user@push"));
+        assertEquals(Action.BLOCK, c("mvlosapp://push:1"));
+        assertEquals(Action.BLOCK, c("mvlosapp://pushy"));
+        assertEquals(Action.BLOCK, c("mvlosapp://other"));
+        assertEquals(Action.CHOOSER, c("mvlosapp://chooser"));
+    }
 }

@@ -3,6 +3,9 @@ apply plugin: 'com.android.application'
 // -PmvlosTest: a build for the emulator checks only (trusts user CAs in debug, cloud WebView
 // debuggable). The APK handed to users is built without it.
 def mvlosTest = project.hasProperty('mvlosTest')
+// -PmvlosPush: native push notifications (Firebase Cloud Messaging) compiled in. Needs google-services.json
+// to do anything at run time; without it the code stays inert. The plain build has inert stand-ins.
+def mvlosPush = project.hasProperty('mvlosPush')
 
 android {
     namespace = "nl.mvlos.experiment"
@@ -18,6 +21,9 @@ android {
         // Servers whose sign-in may use Android's own Google account picker (comma-separated origins).
         // Their Google Cloud project must have an Android OAuth client for this package and signing
         // key; every other server keeps the browser flow.
+        // Servers this build may register for push with (comma-separated origins; checked before anything is sent).
+        buildConfigField "String", "PUSH_ORIGINS", "\"" + (project.findProperty('mvlosPushOrigins') ?: 'https://mennovanleeuwen.nl') + "\""
+        buildConfigField "boolean", "PUSH_COMPILED", mvlosPush ? "true" : "false"
         buildConfigField "String", "NATIVE_GOOGLE_ORIGINS", "\"" + (project.findProperty('mvlosNativeGoogleOrigins') ?: 'https://mennovanleeuwen.nl') + "\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
@@ -31,6 +37,7 @@ android {
     }
     // The test-only network config (user CAs in debug) exists only in -PmvlosTest builds.
     if (mvlosTest) sourceSets.main.res.srcDirs += 'src/mvlosTest/res'
+    sourceSets.main.java.srcDirs += mvlosPush ? 'src/push/java' : 'src/nopush/java'
     buildTypes {
         release {
             minifyEnabled false
@@ -50,6 +57,12 @@ dependencies {
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.webkit:webkit:$androidxWebkitVersion"
+    if (mvlosPush) {
+        // Push: Firebase Cloud Messaging only (no Analytics) and WorkManager for the content fetch.
+        implementation platform('com.google.firebase:firebase-bom:33.16.0')
+        implementation 'com.google.firebase:firebase-messaging'
+        implementation 'androidx.work:work-runtime:2.10.2'
+    }
     // Native Google sign-in: Android Credential Manager with Sign in with Google.
     implementation "androidx.credentials:credentials:1.6.0"
     implementation "androidx.credentials:credentials-play-services-auth:1.6.0"

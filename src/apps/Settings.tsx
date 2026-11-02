@@ -16,7 +16,7 @@ import { addLauncher, cleanUrl, faviconOf, launcherImage, launchersAreFiles, mov
 import { golinksSite, golinksTemplate, maskGolinks, parseGolinks, setGolinks } from '../data/golinks'
 import { setSwing, useSwingPrefs } from '../os/swing'
 import { ask } from '../os/Dialogs'
-import { CLOUD_APP_CHOOSER, inCloudApp, inNativeApp, openAppChooser } from '../os/nativeApp'
+import { APP_PUSH_SETTINGS, CLOUD_APP_CHOOSER, appPushOffered, inCloudApp, inNativeApp, openAppChooser } from '../os/nativeApp'
 import { SignInButtons } from '../os/SignInButtons'
 import { UsersSettings } from './UsersSettings'
 import { openAlert, useAlerts } from '../os/alerts'
@@ -30,7 +30,7 @@ import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, u
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasGithub, hasOrgScope, hasRepoScope, linkSignIn, orgAccess, signInWithRepos, signOut, unlinkSignIn, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
+import { api, addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasGithub, hasOrgScope, hasRepoScope, linkSignIn, orgAccess, signInWithRepos, signOut, unlinkSignIn, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import type { OrgAccess, OrgsResponse } from '../data/code'
 import { APP_META } from '../os/apps'
@@ -480,6 +480,51 @@ function PushRow() {
   )
 }
 
+/**
+ * Push notifications on the Android app (server/nativepush.ts). The page only shows what the
+ * server knows and removes a phone; turning it on happens in the app's own screen (the link opens
+ * it, after a tap), which asks for the account and for Android's permission.
+ */
+function AppPushRow() {
+  type Info = { enabled: boolean; devices: { rid: string; name: string; lastSeen: number | null }[] }
+  const [info, setInfo] = useState<Info | null>(null)
+  const [busy, setBusy] = useState(false)
+  const load = () => api<Info>('/api/push/native').then(setInfo, () => setInfo(null))
+  useEffect(() => {
+    void load()
+    // Back from the app's screen: look again.
+    const again = () => document.visibilityState === 'visible' && void load()
+    document.addEventListener('visibilitychange', again)
+    return () => document.removeEventListener('visibilitychange', again)
+  }, [])
+  const remove = (rid: string) => {
+    setBusy(true)
+    api<Info>('/api/push/native', { method: 'DELETE', json: { rid } })
+      .then(setInfo, () => {})
+      .finally(() => setBusy(false))
+  }
+  return (
+    <li className="set-row">
+      <span className="set-row-text">
+        <strong>Notifications on the Android app</strong>
+        <span className="muted set-row-wrap">
+          {info === null ? 'Checking…' : !info.enabled ? 'This server is not set up to send notifications to the app' : info.devices.length ? `On for ${info.devices.map((d) => d.name).join(', ')}. Each shows only what is meant for it, and stops when you sign out or disconnect.` : 'Off. The app asks which account and for Android\'s permission before anything is turned on'}
+        </span>
+      </span>
+      {info?.devices.map((d) => (
+        <button key={d.rid} className="btn btn-small" disabled={busy} onClick={() => remove(d.rid)} aria-label={`Turn off notifications on ${d.name}`}>
+          Turn off {d.name}
+        </button>
+      ))}
+      {info?.enabled && (
+        <a className="btn btn-small" href={APP_PUSH_SETTINGS}>
+          {info.devices.length ? 'Set up again…' : 'Turn on in the app…'}
+        </a>
+      )}
+    </li>
+  )
+}
+
 function Notifications() {
   const prefs = useNotifyPrefs()
   const account = useAccount()
@@ -497,6 +542,7 @@ function Notifications() {
             <Toggle on={prefs.popups} onChange={(on) => setNotifyPrefs({ popups: on })} label="Show pop-ups" />
           </li>
           {signedIn && <PushRow />}
+          {signedIn && appPushOffered() && <AppPushRow />}
         </ul>
       </SetGroup>
 

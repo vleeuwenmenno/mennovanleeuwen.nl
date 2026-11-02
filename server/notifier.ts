@@ -6,6 +6,7 @@ import { database, onUserGone } from './db.ts'
 import { HttpError, SECURITY } from './http.ts'
 import { readState } from './state.ts'
 import { pushToUser } from './webpush.ts'
+import { pushNative, setNativePolicy } from './nativepush.ts'
 
 // The notification hub: one place every app tells about something worth knowing, so all of them
 // follow the same rules. A notification for an account
@@ -37,6 +38,11 @@ export type Notice = {
 type AccountRef = Pick<User, 'id'>
 
 const prefsOf = (user: AccountRef): NotifyPrefs => normalizePrefs(readState(user as User).notify?.value)
+// Asked again when the app fetches a notification's content: what the account has switched off since counts.
+setNativePolicy((userId, source) => {
+  const prefs = prefsOf({ id: userId })
+  return prefs.popups && allows(prefs, source)
+})
 const MAX_KEPT = 200
 /** Remembered "once" keys per account. */
 const MAX_ONCE = 5000
@@ -198,6 +204,8 @@ export function notify(user: AccountRef, n: Notice, { watched = false }: { watch
     // On devices the brand wins over a picture (a player's head): it says where the news is from.
     const logo = brand ? { icon: brandIcon(brand), badge: brandBadge(brand) } : {}
     void pushToUser(user as User, { title: entry.title, body: entry.body, ...logo, tag: n.tag ?? entry.id, url: actionUrl(n.action), thread: n.action?.app === 'agents' ? n.action.props?.thread : undefined }).catch(() => {})
+    // The Android app: ids only go through Google; the content waits here until the app asks (server/nativepush.ts).
+    void pushNative(user, { source: n.source, title: entry.title, body: entry.body, action: n.action }).catch(() => {})
   }
   return entry
 }

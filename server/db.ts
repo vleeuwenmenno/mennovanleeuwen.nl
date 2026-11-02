@@ -246,6 +246,38 @@ export function database(): DatabaseSync {
   // Added later: the session that made the subscription (sessions.id). Messages only go to
   // subscriptions whose session is still valid, and signing out removes them (server/webpush.ts).
   if (!cols('push_subscriptions').includes('session_id')) db.exec('ALTER TABLE push_subscriptions ADD COLUMN session_id TEXT')
+  // Push for the Android app (server/nativepush.ts). A registration belongs to one session (it ends
+  // with it, ON DELETE CASCADE); its secrets are kept as hashes only; the notification content waits
+  // here under an opaque id until the app fetches it once.
+  db.exec(`CREATE TABLE IF NOT EXISTS native_push_regs (
+    id INTEGER PRIMARY KEY,
+    rid TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    install_id TEXT NOT NULL,
+    device TEXT,
+    state TEXT NOT NULL,
+    cap_hash TEXT NOT NULL,
+    rev_hash TEXT NOT NULL,
+    replaces_rid TEXT,
+    token_enc TEXT,
+    token_digest TEXT UNIQUE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    last_seen INTEGER
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS native_push_regs_user ON native_push_regs (user_id, install_id)')
+  db.exec(`CREATE TABLE IF NOT EXISTS native_push_content (
+    nid TEXT PRIMARY KEY,
+    reg_id INTEGER NOT NULL REFERENCES native_push_regs(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT,
+    path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`)
+  db.exec('CREATE INDEX IF NOT EXISTS native_push_content_reg ON native_push_content (reg_id, created_at)')
   // A quick answer asked from Spotlight: kept out of the Agents app until it is continued there.
   if (!cols('agent_threads').includes('quick')) db.exec('ALTER TABLE agent_threads ADD COLUMN quick INTEGER NOT NULL DEFAULT 0')
   // Added later: open sign-up. When someone was last seen, whether (and why) they were banned, and

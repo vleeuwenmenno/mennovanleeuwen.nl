@@ -52,6 +52,8 @@ public class CloudResetActivity extends androidx.activity.ComponentActivity {
         String cookie = origin == null ? null : cookies.getCookie(origin + "/");
         hadSession = cookie != null && cookie.contains("mvlos_sid=");
         new Thread(() -> {
+            // The main process has already revoked push; this makes sure it is acknowledged before the cookies go.
+            PushController.revokeBlocking(this);
             signedOut = origin != null && cookie != null && signOut(origin, cookie);
             runOnUiThread(this::wipe);
         }).start();

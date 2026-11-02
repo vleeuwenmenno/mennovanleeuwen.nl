@@ -4297,6 +4297,86 @@ once into `DATA_DIR/vapid.json` (keep it: new keys mean every device has to turn
 `VAPID_SUBJECT` (a `mailto:` or `https:` address) defaults to `PUBLIC_URL`. Subscriptions are only
 accepted for the browsers' push services (Google, Mozilla, Apple, Microsoft).
 
+**Push notifications on the Android app** (experimental, off until provisioned;
+[`server/nativepush.ts`](server/nativepush.ts), [`server/fcm.ts`](server/fcm.ts), `mobile/android`
+`Push*.java`). The cloud desktop runs in a plain WebView with no Push API and no bridge, so the
+app's own native side receives Firebase Cloud Messaging (FCM) messages. Design (reviewed twice by a
+second model family; the invariants below are what must not be weakened):
+
+- **Opt-in, per phone and account.** Nothing happens until the user taps *Turn on in the app…* in
+  Settings → Notifications (a link to exactly `mvlosapp://push`, honoured only after a tap, with no
+  redirect, on the saved origin). The app's own screen names the server and the account (from the
+  server, not the page), asks, then asks Android for the notification permission (13+; on older
+  versions the native opt-in still gates everything and `areNotificationsEnabled()` is checked).
+  Firebase's auto-init is off in the manifest and only turned on by that opt-in; no Analytics.
+- **Bound to origin, account and session.** The app only ever contacts its saved server, and only
+  if that origin is on the build's allow-list (`-PmvlosPushOrigins`, default
+  `https://mennovanleeuwen.nl`; checked before any token or credential is sent). A registration
+  is one row tied to one session (`native_push_regs.session_id`, `ON DELETE CASCADE`): signing out,
+  a replaced session, sign-out-everywhere, a ban, account deletion and an expired session all end
+  it, and every use re-checks that the session is alive and the account not banned.
+- **Two steps.** `prepare` (the cloud process, with the session cookie, header `X-MvL-App-Push: 1`
+  and the account header) is inert: it changes nothing. After the user confirmed, `activate`
+  swaps in a new registration only if the one it was prepared against is still the current one
+  (compare-and-swap; a stalled older preparation gets 409). It returns two secrets, kept on the
+  server only as hashes: a **capability** (set the device token, fetch this registration's
+  content) and a **revocation key** (delete this registration, nothing else).
+- **Only ids go through Google.** The FCM data message is `{v, rid, nid, k}` (opaque ids and a
+  coarse kind), data-only, high priority, 15-minute time to live. The title, text and address wait
+  on the server under `nid` and are handed out **once**, to the registration's capability, after
+  the account's notification settings (do not disturb, sources switched off) are asked again.
+  Unknown, used, expired or suppressed is one and the same 404, and the app shows **nothing**
+  (never a generic fallback: a missing answer cannot prove the session still exists). A 401 revokes
+  push on the phone. Content already shown cannot be recalled.
+- **One owner of the state.** Firebase, the messaging service, the state (`PushState`: generation,
+  registration id, capability and revocation key sealed with an Android Keystore AES-GCM key
+  bound to origin and registration) live in the **main process** only; the cloud process (the
+  WebView and its cookies) only talks to it through a non-exported, same-uid bound Messenger
+  service. Every asynchronous step (token callback, content fetch, registration answer) re-checks
+  the **generation** before it does anything, and posting a notification happens under the same
+  lock as a revoke, so a late result can never undo a revoke or show a cancelled message. A refresh
+  or a rotated token (`onNewToken`) only updates an existing registration; it can never create one.
+  A secret that cannot be opened ends the registration (no plaintext fallback). Messages from
+  another sender, with another registration id or any extra field are dropped without changing
+  anything.
+- **Revocation.** Page logout and every server-side session end remove the row. *Disconnect* and a
+  new sign-in revoke on the phone first and wait for the owner's acknowledgement
+  (`PushController.revokeBlocking`, before cookies are replaced or deleted): state cleared,
+  auto-init off, token deleted, notifications cancelled, work cancelled. Only the **revocation key**
+  is kept (at most 30 days, sealed) so a server row can still be deleted after an offline Disconnect.
+  Settings lists the account's phones and removes one (the app notices on the next call, a 401, and
+  turns itself off).
+- **Safe deep links.** The server builds the address from a short list (`/`, or `/?open=` agents
+  with `thread`/`task`/`run`, tasks with `task`, mail and calendar: ids are UUIDs, anything else is
+  dropped); `PushDeepLink` checks it again and rebuilds it in a fixed order (no decoding, no `%`, no
+  `@`, no fragments, no repeats). A tap goes through a non-exported activity in the main process
+  that re-checks the registration and passes the **saved** origin, never one from the intent, to
+  `CloudActivity`, which validates the path once more. Pending intents are immutable and carry the
+  registration and notification id in their data, so two never share one.
+- **Server limits.** At most 10 phones per account, 5 pending preparations, content kept 15
+  minutes (≤ 30 per phone, ≤ 5000 total), per-account and per-address rate limits, bounded bodies,
+  a token belongs to exactly one registration (digest), and only the structured FCM error
+  `UNREGISTERED` removes a token (never `INVALID_ARGUMENT` or a plain `NOT_FOUND`), and only the
+  token that was sent. Nothing sensitive is logged; the sending key is read from a file
+  (`FCM_SERVICE_ACCOUNT_FILE`), never the environment or the database. Without that file the
+  server answers `enabled: false` and the app never offers push.
+- **Backup.** `allowBackup` is off and the data extraction rules exclude everything; a restored
+  install starts signed out with push off.
+
+*Build and test.* The plain build has inert stand-ins (`src/nopush`); `-PmvlosPush` compiles Firebase
+and WorkManager (`firebase-messaging`, no Analytics) and the real classes (`src/push`).
+`pnpm check:native-push` runs the server against a fake Google (registration, capability scoping,
+content once, cascades, UNREGISTERED handling, rate limits) and `./gradlew testDebugUnitTest` the
+pure Android rules (`PushState`, `PushDeepLink`, `PushPayload`, `PushOrigins`, the `mvlosapp://push`
+policy). **Not tested on a device or with real Firebase**: delivery, the Keystore wrapper, the
+Messenger IPC, the opt-in screen and notification posting need a real phone and a Firebase
+project. *Provisioning still needed* (nothing is committed): a Firebase project for the package
+`nl.mvlos.experiment` and its `google-services.json` placed at `mobile/android/app/` locally; a
+dedicated sender service account (role *Firebase Cloud Messaging API Admin* only) whose JSON key is
+mounted on the server as a file named by `FCM_SERVICE_ACCOUNT_FILE`; then an APK built with
+`-PmvlosPush`. Only the event kind (`k`: mail, agents, tasks, calendar or generic) is visible to
+Google.
+
 **The notification hub** ([`server/notifier.ts`](server/notifier.ts), its watchers in
 [`server/watchers.ts`](server/watchers.ts)): every notification for an account goes through one
 place. It drops what Settings → Notifications switched off (the choices sync, so the server reads
