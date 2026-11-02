@@ -20,7 +20,7 @@ export function LoraRow({ lora }: { lora: LoraDetail }) {
 function Preview({ lora }: { lora: LoraDetail }) {
   const [broken, setBroken] = useState(false)
   if (!lora.hasPreview || broken) return <div className="agt-lora-thumb is-empty" aria-hidden>No preview</div>
-  return <img className="agt-lora-thumb" src={loraPreviewUrl(lora.name)} alt="" loading="lazy" draggable={false} onError={() => setBroken(true)} />
+  return <img className="agt-lora-thumb" src={loraPreviewUrl(lora.name, lora.host)} alt="" loading="lazy" draggable={false} onError={() => setBroken(true)} />
 }
 
 const Chips = ({ list, empty }: { list: string[]; empty: string }) =>
@@ -29,7 +29,7 @@ const Chips = ({ list, empty }: { list: string[]; empty: string }) =>
 /** The highlighted LoRA in full. `manager`: whether LoRA Manager answered at all. */
 export function LoraDetailPane({ lora, manager, onUse }: { lora: LoraDetail; manager: boolean; /** A button to insert it (the phone's expanded row) */ onUse?: () => void }) {
   return <div className="agt-lora-pane" aria-live="polite">
-    <Preview key={lora.name} lora={lora} />
+    <Preview key={`${lora.host}:${lora.name}`} lora={lora} />
     <div className="agt-lora-facts">
       <strong className="agt-lora-pane-title">{lora.title || lora.name}</strong>
       <code className="agt-lora-name">#{lora.name}</code>

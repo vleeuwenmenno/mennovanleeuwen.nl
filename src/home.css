@@ -5864,6 +5864,15 @@ button.cal-day.is-picked:not(.is-today) {
 .image-group > label { max-width: 640px; }
 .image-group > label.image-check { grid-template-columns: 120px auto; justify-content: start; }
 .image-notice { align-self: center; font-size: 12px; }
+/* The ComfyUI host list: one bordered block a host, the default picked with a radio. */
+.image-hosts { display: grid; gap: 10px; max-width: 640px; margin: 0; padding: 0; list-style: none; }
+.image-host { min-width: 0; }
+.image-host-fields { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 10px; border: 1px solid var(--line); }
+.image-host-legend { padding: 0 4px; color: var(--fg-bright); font-weight: 600; overflow-wrap: anywhere; }
+.image-host-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.image-host-fields > label.image-host-default, .image-host-head > label.image-host-default { display: inline-flex; grid-template-columns: none; align-items: center; gap: 6px; color: var(--fg); }
+.image-host-status { flex: 1 1 160px; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.image-host-fields > label.image-check { grid-template-columns: 120px auto; justify-content: start; }
 .image-about { margin-top: 4px; }
 
 /* Settings → Agents → Images, the OpenAI part (AgentsOpenAISettings.tsx) and the icon library. */
@@ -6095,9 +6104,9 @@ button.cal-day.is-picked:not(.is-today) {
 .image-dialog.is-mobile .image-presets, .image-dialog.is-mobile .image-numbers { grid-template-columns: minmax(0, 1fr); }
 .image-dialog.is-mobile .image-model-row { min-height: 48px; }
 @container (max-width: 520px) { .image-profile-list .set-row { flex-wrap: wrap; } }
-@media (max-width: 560px) { .image-profile-list .set-row { flex-wrap: wrap; } .image-group > label { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+@media (max-width: 560px) { .image-profile-list .set-row { flex-wrap: wrap; } .image-group > label, .image-host-fields > label { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
 @media (pointer: coarse) {
-  .image-mode button, .image-recommendations button, .image-breadcrumbs button, .image-folders button, .image-model-row, .image-dialog .btn, .image-group .btn, .image-source .btn { min-height: 40px; }
+  .image-mode button, .image-recommendations button, .image-breadcrumbs button, .image-folders button, .image-model-row, .image-dialog .btn, .image-group .btn, .image-host-default, .image-source .btn { min-height: 40px; }
   .image-pick { min-height: 56px; }
 }
 

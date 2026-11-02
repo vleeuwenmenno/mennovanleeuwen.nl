@@ -92,6 +92,7 @@ export const TASK_TOOLS: Record<string, TaskTool> = {
   list_image_masks: { group: 'images', class: 'read', label: 'List masks', default: 'block', unavailable: NO_IMAGES },
   list_image_attachments: { group: 'images', class: 'read', label: 'List pictures', default: 'block', unavailable: NO_IMAGES },
   list_image_models: { group: 'images', class: 'read', label: 'List image models', default: 'block', unavailable: NO_IMAGES },
+  list_image_hosts: { group: 'images', class: 'read', label: 'List ComfyUI hosts', default: 'block', unavailable: NO_IMAGES },
   model_details: { group: 'images', class: 'read', label: 'Image model details', default: 'block', unavailable: NO_IMAGES },
   list_generated_images: { group: 'images', class: 'read', label: 'List generated pictures', default: 'block', unavailable: NO_IMAGES },
   view_generated_image: { group: 'images', class: 'read', label: 'Look at a picture', default: 'block', unavailable: NO_IMAGES },

@@ -3282,6 +3282,60 @@ stored encrypted and are never returned to the browser or model. Internal/LAN Co
 are allowed only for admins, using the same DNS-pinned network guard as other integrations for
 non-admin accounts. The server must be able to reach ComfyUI; browsers never connect to it directly.
 
+**Several ComfyUI hosts.** The same settings hold up to 8 named hosts, each with its own URL and
+optional bearer token (empty keeps the saved token, **Remove saved token** clears it), and one marked
+**Default**. **Add host**, edit or **Remove** them and press **Save & discover models**; removing the
+default makes the first remaining host the default, and removing the last one disconnects. Each
+host shows whether it answers and how many models and LoRAs it has, checked on its own, so an
+offline host shows its error while the others still list. Hosts have stable opaque ids: renaming
+one, changing its URL or switching the default keeps its id. A single URL saved before hosts
+existed becomes a host called “ComfyUI” with the same token, so existing setups keep working, and
+older clients that send one `url` and `token` edit the default host.
+
+Each host keeps its own catalog, nodes, LoRA Manager facts and image observations (an
+observation belongs to the host's address and credentials, so switching the default does not
+orphan it); catalogs are never merged. The default is a preference, not a limit:
+
+- **Choosing a host.** With several hosts, `list_image_models`, `model_details`, `make_image_mask`,
+  `generate_image` and `render_video` take an optional `host` (an id or name of one of the
+  account's hosts; never an address), and `list_image_hosts` lists every host with its status,
+  counts and capabilities, or with `query` the installed files on each host whose names match,
+  per host. A thread can prefer a host in its **Session image settings** (the model lists there are
+  that host's). The agent is told to look on the other hosts when a requested model, LoRA or
+  upscaler is not on the default one, to use exact identifiers only on a host that lists them, and
+  never to swap a requested file for another.
+- **Fallback.** A call without `host` plans on the thread's host (or, for Generate another, the
+  host the picture was made on), then the default, then the other hosts, at most 3, and uses the
+  first one that answers and has everything the call needs (the exact model, LoRAs, nodes,
+  upscaler). Planning only reads catalogs and node schemas, so trying the next host is safe; an
+  input error (a bad size, a missing source) stops at once. A call with `host` uses only that host
+  and its error names the other hosts, so the agent can retry with one of them. The approval card
+  and the result say which host ran the job, and which hosts could not.
+- **Pinned jobs.** Once planned, a job stays on its host for everything: uploads, the prompt, the
+  progress socket, queue and history polling, the download, cleanup and cancellation. It is never
+  moved or resubmitted to another host, not even when that host fails after accepting the prompt
+  (that could run the same job twice); the agent may retry it on another host explicitly. An Image
+  Studio batch keeps the host of its first picture. A video render stores its host's scope: it runs
+  there even when the default changes before it starts, and fails (render again) when that host is
+  edited or removed. A planned picture likewise still runs after a default switch, but asks for a new
+  plan when its host's URL or token changed or the host was removed. One ComfyUI job at a time per
+  account still holds across all hosts.
+- **Same guards per host.** Every request to every host goes through the same egress check
+  (DNS-pinned for non-admins, LAN hosts for admins only). Tokens stay encrypted and never reach the
+  browser, a tool result or an error message, and errors name a host, not its address. The Image
+  Studio, the Video Studio's model lists and the account's default models use the default host's
+  catalog; `GET /api/agents/images/catalog?host=<id>` reads another one, and
+  `GET /api/agents/images/hosts` checks them all.
+
+```sh
+pnpm check:agents-image-hosts   # legacy migration, save/default/removal, token redaction, offline default, a model only on the second host, explicit host errors, separate catalogs and credentials, no resubmit after a prompt is accepted, default switch mid-job, video jobs, unknown hosts, non-admin LAN refusal
+```
+
+Host discovery allows eight seconds per attempt when trying multiple hosts, leaving time
+for fallback within a discovery request. Cancellation still stops all attempts. Session model
+artwork, model details, and the composer's LoRA picker follow the session's selected host;
+changing account or session host settings refreshes the picker.
+
 **Image Studio.** Generating by hand, without an agent, is an app of its own: see
 [Image Studio](#image-studio). **Image Studio** in the Agents sidebar (the rail icon, the
 sidebar's right-click menu) opens it.

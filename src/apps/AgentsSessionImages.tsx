@@ -1,5 +1,5 @@
 import { ImageProfiles } from './AgentsImageProfiles'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { getImageCatalog, getThreadImageSettings, resetThreadImageSettings, saveThreadImageSettings, type ImageCatalog, type ImageConfig, type ImageOverrides, type ThreadImageSettings } from '../data/agentImages'
 import { ImageDialog, ImageModelFields } from './AgentsModelBrowser'
@@ -15,6 +15,7 @@ export function openSessionImages(threadId: string): Promise<void> {
   })
 }
 export function SessionImages({ threadId, onClose }: { threadId: string; onClose: () => void }) {
+  const catalogRequest = useRef(0)
   const [view, setView] = useState<ThreadImageSettings | null>(null)
   const [draft, setDraft] = useState<ImageOverrides>({})
   const [catalog, setCatalog] = useState<ImageCatalog | null>(null)
@@ -23,16 +24,22 @@ export function SessionImages({ threadId, onClose }: { threadId: string; onClose
   const [error, setError] = useState('')
   const [catalogError, setCatalogError] = useState('')
   const [notice, setNotice] = useState('')
-  const refresh = async () => {
+  // The model lists are one host's: the thread's own host, else the default.
+  const refresh = async (host?: string) => {
+    const request = ++catalogRequest.current
     setLoading(true); setCatalogError('')
-    try { setCatalog(await getImageCatalog()) } catch (e) { setCatalogError((e as Error).message) } finally { setLoading(false) }
+    try { const next = await getImageCatalog(host); if (request === catalogRequest.current) setCatalog(next) } catch (e) { if (request === catalogRequest.current) setCatalogError((e as Error).message) } finally { if (request === catalogRequest.current) setLoading(false) }
   }
   useEffect(() => {
     let alive = true
-    getThreadImageSettings(threadId).then((v) => { if (alive) { setView(v); setDraft(v.overrides) } }, (e: Error) => { if (alive) setError(e.message) })
-    void refresh()
-    return () => { alive = false }
+    getThreadImageSettings(threadId).then((v) => { if (alive) { setView(v); setDraft(v.overrides); void refresh(v.overrides.host) } }, (e: Error) => { if (alive) { setError(e.message); void refresh() } })
+    return () => { alive = false; catalogRequest.current++ }
   }, [threadId])
+  const hosts = view?.hosts ?? []
+  const pickHost = (id: string) => {
+    setDraft((d) => { const next = { ...d }; if (id) next.host = id; else delete next.host; return next })
+    setNotice(''); setCatalog(null); void refresh(id || undefined)
+  }
   const change = (patch: ImageOverrides) => { setDraft((d) => ({ ...d, ...patch })); setNotice('') }
   const inherit = (key: keyof ImageConfig) => { setDraft((d) => { const next = { ...d }; delete next[key]; return next }); setNotice('') }
   const source = (key: keyof ImageConfig) => key in draft ? <span className="image-source"><span className="image-source-tag">This thread</span><button type="button" className="btn btn-small" disabled={busy} onClick={() => inherit(key)}>Use default</button></span> : <span className="muted image-source">Default{key === 'width' || key === 'height' ? ' · preset size' : ''}</span>
@@ -40,7 +47,7 @@ export function SessionImages({ threadId, onClose }: { threadId: string; onClose
     setBusy(true); setError(''); setNotice('')
     try {
       const v = reset ? await resetThreadImageSettings(threadId) : await saveThreadImageSettings(threadId, draft)
-      setView(v); setDraft(v.overrides); setNotice(reset ? 'This session now follows account defaults.' : 'Session image settings saved.')
+      setView(v); setDraft(v.overrides); setCatalog(null); void refresh(v.overrides.host); setNotice(reset ? 'This session now follows account defaults.' : 'Session image settings saved.')
     } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
   const preset = draft.preset ?? view?.defaults.preset ?? 'sdxl'
@@ -51,7 +58,15 @@ export function SessionImages({ threadId, onClose }: { threadId: string; onClose
       <p className="muted set-help">Only this thread changes; untouched fields follow your account defaults. A size or seed asked for in a message applies to that image only.</p>
       {!view && !error && <p role="status">Loading session settings…</p>}
       {view && effective && <>
-        <ImageModelFields value={effective} catalog={catalog} onChange={change} disabled={busy} loading={loading} error={catalogError} onRefresh={() => void refresh()} extra={source} />
+        {hosts.length > 1 && <div className="image-config-field">
+          <div className="image-config-label"><label htmlFor="session-image-host">ComfyUI host</label>{draft.host ? <span className="image-source"><span className="image-source-tag">This thread</span></span> : <span className="muted image-source">Default</span>}</div>
+          <select id="session-image-host" value={draft.host ?? ''} disabled={busy} onChange={(e) => pickHost(e.target.value)}>
+            <option value="">Default host{hosts.find((h) => h.default) ? ` (${hosts.find((h) => h.default)!.name})` : ''}</option>
+            {hosts.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+          </select>
+          <p className="muted set-help">Tried first for this thread; when it is offline or lacks a model, the other hosts are tried. The lists below are this host's.</p>
+        </div>}
+        <ImageModelFields value={effective} catalog={catalog} onChange={change} disabled={busy} loading={loading} error={catalogError} onRefresh={() => void refresh(draft.host)} extra={source} />
         <div className="image-config-field">
           <div className="image-config-label"><span>LoRAs</span>{source('loras')}</div>
           <p className="muted set-help">Add installed LoRAs with # in a message. They run in this order; weights range from 0 to 2.</p>
