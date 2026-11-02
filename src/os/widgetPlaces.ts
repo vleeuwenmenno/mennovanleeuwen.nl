@@ -176,6 +176,38 @@ export function changeScreenWidgets(phone: boolean, fn: (set: WidgetSet) => Widg
 }
 if (import.meta.hot) import.meta.hot.dispose(disposeMobile)
 
+/**
+ * A phone page was removed (it was empty): every saved widget on a later page moves down one, as
+ * a whole set: the same widget under two keys, kinds this build does not know, and older places
+ * (frozen here first, pages included). Only the page changes; width, height and the place on the
+ * page stay as saved.
+ */
+export function shiftMobilePagesAfter(set: WidgetSet, removed: number, width: number, height: number): WidgetSet {
+  const frozen = migrateMobileWidgets(set, width, height)
+  const places = { ...frozen.places }
+  phoneOrder(frozen).forEach(([key, p], index) => {
+    const here = p.page === undefined ? mobileWidgetRect(p, index, width, height) : null
+    const page = p.page ?? pageOfX(here!.x)
+    if (p.page !== undefined && page <= removed) return
+    if (p.page === undefined && page <= removed) {
+      places[key] = { ...p, page, x: localX(here!.x), y: here!.y, at: nextAt(p) }
+      return
+    }
+    places[key] = { ...p, ...(here ? { x: localX(here.x), y: here.y } : {}), page: page - 1, at: nextAt(p) }
+  })
+  return { ...frozen, places }
+}
+
+/** Where each saved widget sits on the phone's pages, known kinds or not (for what counts as an empty page). */
+export function mobileWidgetPageCounts(set: WidgetSet, width: number, height: number): number[] {
+  const counts: number[] = []
+  phoneOrder(set).forEach(([, p], index) => {
+    const page = p.page ?? pageOfX(mobileWidgetRect(p, index, width, height).x)
+    counts[page] = (counts[page] ?? 0) + 1
+  })
+  return Array.from(counts, (n) => n ?? 0)
+}
+
 /** Freeze the old column's ordered starting coordinates on first edit, without touching its source.
  * Otherwise deleting an earlier legacy entry would change every later entry's row on reload. */
 export function migrateMobileWidgets(set: WidgetSet, width: number, height: number): WidgetSet {

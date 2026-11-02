@@ -46,6 +46,7 @@ import { setBackFallback, useBackLayer } from './backLayers'
 import { goToPage, homeUi, onPageRemoved, useHomeUi } from './homePager'
 import { MAX_PAGES, pageOfX } from './homePages'
 import { useDesktop } from './desktopStore'
+import { mobileWidgetPageCounts, screenWidgets } from './widgetPlaces'
 import { NoteStackSlot, Window } from './Window'
 import { SINGLE_INSTANCE, useWM, workspaceOf, WORKSPACES, type AppId, type Geometry, type WinState } from './wm'
 
@@ -777,7 +778,11 @@ export function Shell() {
   // (at least one) or as many as hold something; the widgets' share of "holds something" is here.
   const widgetPages = useMemo(() => {
     const counts: number[] = []
-    if (mobile) for (const w of wm.windows) if (NOTE_APPS.has(w.app) && wm.shown(w)) counts[pageOfX(w.x)] = (counts[pageOfX(w.x)] ?? 0) + 1
+    if (mobile) {
+      for (const w of wm.windows) if (NOTE_APPS.has(w.app) && w.app !== 'widget' && wm.shown(w)) counts[pageOfX(w.x)] = (counts[pageOfX(w.x)] ?? 0) + 1
+      // Widgets by what is saved, so the same widget under two keys and kinds this build does not know still hold their page.
+      mobileWidgetPageCounts(screenWidgets(true), viewW(), viewH()).forEach((n, i) => (counts[i] = (counts[i] ?? 0) + n))
+    }
     return Array.from(counts, (n) => n ?? 0)
   }, [wm.windows, mobile])
   const pageCount = mobile ? Math.min(MAX_PAGES, Math.max(desk.mobilePages ?? 1, home.icons.length, widgetPages.length, 1)) : 1

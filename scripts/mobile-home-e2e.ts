@@ -243,7 +243,9 @@ try {
   // Taking an empty page away while the screen is narrow moves the page only: the saved width stays.
   await r.eval(`(async () => {
     const { widgetPlaces } = await import('/src/os/widgetPlaces.ts')
-    widgetPlaces.set(() => ({ places: { wide: { id: 'wide', kind: 'status', x: 14, y: 60, w: 362, h: 200, vw: 390, vh: 844, phone: true, homeGrid: true, page: 3, at: 80 } }, removed: '' }))
+    // The same widget under two keys, and a kind this build does not know: both must move with the page.
+    const put = (id, kind) => ({ id, kind, x: 14, y: 60, w: 362, h: 200, vw: 390, vh: 844, phone: true, homeGrid: true, page: 3, at: 80 })
+    widgetPlaces.set(() => ({ places: { wide: put('wide', 'status'), 'wide~b': put('wide', 'status'), ghost: put('ghost', 'kind-this-build-does-not-know') }, removed: '' }))
     ;(await import('/src/os/desktopStore.ts')).updateDesktop((s) => ({ ...s, mobilePositions: {}, mobilePages: 4 }))
   })()`)
   await r.send('Page.navigate', { url: origin })
@@ -255,12 +257,19 @@ try {
   await sleep(200)
   await click(r, '.home-dot:nth-child(2)')
   await sleep(700)
+  // Page 4 only holds the saved placements, one of a kind this build does not know: it is not empty.
+  await click(r, '.home-dot:nth-child(4)')
+  await sleep(700)
+  check('a page held only by saved widgets (duplicate keys, an unknown kind) is not empty', await r.eval(`[...document.querySelectorAll('.home-edit-bar button')].find((x) => x.textContent.trim() === 'Remove page').disabled`))
+  await click(r, '.home-dot:nth-child(2)')
+  await sleep(700)
   await buttonByText(r, '.home-edit-bar', 'Remove page')
   await sleep(900)
   await r.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
   await sleep(900)
   const shifted = await r.eval<{ page: number; w: number; x: number }>(`(async () => { const p = Object.values((await import('/src/os/widgetPlaces.ts')).screenWidgets(true).places).find((q) => q.id === 'wide'); return { page: p.page, w: p.w, x: p.x } })()`)
-  check('removing an empty page on a narrow screen moves the widget down a page and keeps its saved width and place', shifted.page === 2 && shifted.w === 362 && shifted.x === 14, { shifted, dots: await dots(r), ui: await r.eval(`(async () => JSON.stringify((await import('/src/os/homePager.ts')).homeUi.get()))()`) })
+  const allPages = await r.eval<number[]>(`(async () => Object.values((await import('/src/os/widgetPlaces.ts')).screenWidgets(true).places).map((q) => q.page))()`)
+  check('removing an empty page on a narrow screen moves the widget down a page and keeps its saved width and place', shifted.page === 2 && shifted.w === 362 && shifted.x === 14 && allPages.length === 3 && allPages.every((n) => n === 2), { shifted, dots: await dots(r), ui: await r.eval(`(async () => JSON.stringify((await import('/src/os/homePager.ts')).homeUi.get()))()`) })
   // The first edit freezes old places by an order that does not depend on how the entries were added.
   const frozen = await r.eval<{ a: string; b: string }>(`(async () => {
     const { migrateMobileWidgets } = await import('/src/os/widgetPlaces.ts')

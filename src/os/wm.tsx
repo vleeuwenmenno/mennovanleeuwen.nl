@@ -13,7 +13,7 @@ import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
-import { phoneOrder, changeScreenWidgets, mobileWidgetPlaces, screenWidgets, changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
+import { mobileWidgetPageCounts, shiftMobilePagesAfter, phoneOrder, changeScreenWidgets, mobileWidgetPlaces, screenWidgets, changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { widgetMigrationUnresolved } from './accountSpace'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
@@ -346,7 +346,7 @@ function apply(state: State, action: Action): State {
     case 'shiftPage': {
       // Only the page moves: the saved width, height and place on the page stay as they are.
       const down = (x: number) => (pageOfX(x) > action.removed ? x - PAGE_STRIDE : x)
-      return { ...state, touched: true, windows: state.windows.map((w) => (NOTE_APPS.has(w.app) ? { ...w, x: down(w.x), ...(w.want ? { want: { ...w.want, x: down(w.want.x) } } : {}) } : w)) }
+      return { ...state, touched: true, windows: state.windows.map((w) => (NOTE_APPS.has(w.app) && w.app !== 'widget' ? { ...w, x: down(w.x), ...(w.want ? { want: { ...w.want, x: down(w.want.x) } } : {}) } : w)) }
     }
     case 'restore':
       return { ...restored(action.windows, state.windows, state.ws), away: state.away, unplaced: state.unplaced }
@@ -1067,7 +1067,16 @@ export function WindowManagerProvider({
       },
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
-      shiftPagesAfter: (removed) => dispatch({ type: 'shiftPage', removed }),
+      shiftPagesAfter: (removed) => {
+        // Widgets: the saved set moves as a whole (every key, every kind) and is shown again from it,
+        // which is not a change made by a window. Notes in the window layout: only their page moves.
+        // Only when a widget is on a later page: with none, the phone keeps inheriting the desktop's set.
+        if (stateRef.current.phone && mobileWidgetPageCounts(screenWidgets(true), viewW(), viewH()).some((n, i) => i > removed && n > 0)) {
+          changeScreenWidgets(true, (set) => shiftMobilePagesAfter(set, removed, viewW(), viewH()))
+          showSet(screenWidgets(true))
+        }
+        dispatch({ type: 'shiftPage', removed })
+      },
       setGeometry: (pid, geometry, { automatic = false } = {}) => {
         const shown = displayWindows.find((w) => w.pid === pid)
         if (shown && NOTE_APPS.has(shown.app)) {
