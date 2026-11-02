@@ -343,7 +343,19 @@ const appCodes = new Map<string, AppGrant>()
 /** Every code waiting for this account goes: called wherever its sessions all end or a sign-in is removed. */
 export function forgetAppCodes(userId: number) {
   for (const [k, c] of appCodes) if (c.userId === userId) appCodes.delete(k)
+  revocations++
+  for (const fn of revocationHandlers) fn()
 }
+
+/**
+ * Moves on whenever an account's sessions all end or a sign-in is removed (forgetAppCodes). A
+ * sign-in that has to wait for something (verifying a token) checks it did not move meanwhile.
+ */
+let revocations = 0
+export const revocationGeneration = () => revocations
+const revocationHandlers: (() => void)[] = []
+/** Runs on every revocation: server/appLogin.ts drops the native sign-in challenges waiting (they belong to no account yet). */
+export const onRevocation = (fn: () => void) => void revocationHandlers.push(fn)
 
 /** A fresh one-time code for this account, the sign-in that made it and the app's challenge. */
 function mintAppCode(req: IncomingMessage, userId: number, challenge: string, identity: { provider: string; subject: string }): string {

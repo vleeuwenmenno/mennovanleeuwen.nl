@@ -16,6 +16,9 @@
 //     admin's id; unlinking never removes the last sign-in,
 //   - bans and the registration limits hold for every sign-in,
 //   - removing GitHub from an admin ends admin rights and signs the account out everywhere,
+//   - the Android app's native Google sign-in: a one-time challenge, an ID token for this web
+//     client issued to a listed Android client (azp) with the challenge bound to this server's
+//     address; relays, reuse, other parties and revocations refused; the same account as always,
 //   - a sign-in can't be removed when the only other one is switched off on the server,
 //   - one address starting many sign-ins only pushes out its own pending ones, never another's
 //     (addresses: IPv6 by /64, forwarded only from trusted proxies),
@@ -95,7 +98,7 @@ const MOCK = `http://127.0.0.1:${(mock.address() as { port: number }).port}`
 const server = new Server({
   GITHUB_CLIENT_ID: 'gh-client', GITHUB_CLIENT_SECRET: 'gh-secret', GITHUB_WEB_URL: MOCK, GITHUB_API_URL: MOCK,
   GOOGLE_SIGNIN: 'on', GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: 'g-secret', GOOGLE_AUTH_URL: `${MOCK}/auth`, GOOGLE_TOKEN_URL: `${MOCK}/token`, GOOGLE_JWKS_URL: `${MOCK}/certs`,
-  ADMIN_GITHUB_IDS: '1001', PUBLIC_URL: 'https://mvl-app.example', AUTH_STATE_TTL_MS: '4000', AUTH_APP_CODE_TTL_MS: '3000', NOTIFY_WATCH: 'off',
+  ADMIN_GITHUB_IDS: '1001', PUBLIC_URL: 'https://mvl-app.example', AUTH_STATE_TTL_MS: '4000', AUTH_APP_CODE_TTL_MS: '3000', AUTH_NATIVE_TTL_MS: '3000', GOOGLE_SIGNIN_ANDROID_CLIENT_IDS: 'android-1.apps.googleusercontent.com', NOTIFY_WATCH: 'off',
 })
 {
   const old = new DatabaseSync(join(server.data, 'mvlos.db'))
@@ -546,6 +549,79 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
   round = await appRound('google', p, 'g-app-closed')
   check('registration closed: a new account from the app is turned away, and the app is told', round.error === 'closed' && !round.code)
   db.prepare("UPDATE app_settings SET value = 'open' WHERE key = 'registration'").run()
+}
+
+// ---- Native Google sign-in in the Android app (server/appLogin.ts) ----
+
+{
+  const ANDROID = 'android-1.apps.googleusercontent.com'
+  const info = (await (await fetch(`${ORIGIN}/api/auth/app`)).json()) as { googleNative?: { clientId: string } }
+  check('GET /api/auth/app announces native Google sign-in with the web client id', info.googleNative?.clientId === CLIENT_ID)
+  const post = async (path: string, body: unknown, headers: Record<string, string> = {}, cookie = '') => {
+    const res = await fetch(`${ORIGIN}${path}`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', 'X-MvL-App-Redeem': '1', ...(cookie ? { Cookie: cookie } : {}), ...headers }, body: JSON.stringify(body) })
+    return { status: res.status, body: (await res.json().catch(() => ({}))) as { challenge?: string; error?: string; reason?: string }, cookies: res.headers.getSetCookie() }
+  }
+  const challenge = async () => (await post('/api/auth/app/google/start', {})).body.challenge ?? ''
+  const nonceFor = (c: string, origin = APP_ORIGIN) => createHash('sha256').update(`${c}\n${origin}`).digest('base64url')
+  /** A Google ID token as Credential Manager gives the app: aud = web client, azp = the Android client. */
+  const token = (sub: string, nonce: string, extra: Record<string, unknown> = {}) => idToken({ claims: { ...claims(sub, nonce), azp: ANDROID, ...extra }, challenge: '' })
+  const redeemNative = (c: string, t: string, cookie = '') => post('/api/auth/app/google/redeem', { challenge: c, idToken: t }, {}, cookie)
+  const meWith = async (cookies: string[]) => {
+    const b = new Browser()
+    for (const c of cookies) { const [pair] = c.split(';'); const i = pair.indexOf('='); b.jar.set(pair.slice(0, i), pair.slice(i + 1)) }
+    return (await b.me()).user
+  }
+
+  check('a challenge needs the app header and JSON', (await post('/api/auth/app/google/start', {}, { 'X-MvL-App-Redeem': '' })).status === 400)
+  // An account with GitHub (the admin id) and Google linked: native sign-in keeps it, admin included.
+  const owner = new Browser()
+  await githubSignIn(owner, { id: 1001, login: 'admin-again' })
+  const ownerUser = (await owner.me()).user!
+  if (!ownerUser.identities?.some((i) => i.provider === 'google')) {
+    const l = await googleStart(owner, true)
+    await googleFinish(owner, l, { claims: claims('g-native-owner', l.nonce) })
+  }
+  const ownerSub = (db.prepare("SELECT subject FROM identities WHERE user_id = ? AND provider = 'google'").get(ownerUser.id) as { subject: string }).subject
+  let c = await challenge()
+  let r3 = await redeemNative(c, token(ownerSub, nonceFor(c)))
+  let u = await meWith(r3.cookies)
+  check('native Google sign-in: the account that Google identity belongs to, admin kept, session cookies like any app sign-in', r3.status === 200 && u?.id === ownerUser.id && u.admin === true && r3.cookies.some((x) => /^mvlos_sid=.*HttpOnly/.test(x)))
+  check('the same challenge can not be used again', (await redeemNative(c, token(ownerSub, nonceFor(c)))).status === 400)
+  const reused = token(ownerSub, nonceFor(c))
+  check('a token for an earlier challenge, with a new challenge: refused', (await redeemNative(await challenge(), reused)).status === 400)
+  c = await challenge()
+  check('a nonce bound to another server (a relay): refused', (await redeemNative(c, token(ownerSub, nonceFor(c, 'https://evil.example')))).status === 400)
+  c = await challenge()
+  check('the bare challenge as nonce (no server binding): refused', (await redeemNative(c, token(ownerSub, c))).status === 400)
+  c = await challenge()
+  check('a token issued to another party (azp): refused', (await redeemNative(c, token(ownerSub, nonceFor(c), { azp: 'someone-else.apps.googleusercontent.com' }))).status === 400)
+  c = await challenge()
+  check('a token without azp: refused', (await redeemNative(c, token(ownerSub, nonceFor(c), { azp: undefined }))).status === 400)
+  c = await challenge()
+  check('an audience list instead of exactly the web client: refused', (await redeemNative(c, token(ownerSub, nonceFor(c), { aud: [CLIENT_ID, 'other'] }))).status === 400)
+  c = await challenge()
+  check('a token signed by someone else: refused', (await redeemNative(c, idToken({ claims: { ...claims(ownerSub, nonceFor(c)), azp: ANDROID }, challenge: '', key: rogue.privateKey }))).status === 400)
+  c = await challenge()
+  await sleep(3500)
+  check('an expired challenge: refused', (await redeemNative(c, token(ownerSub, nonceFor(c)))).status === 400)
+
+  c = await challenge()
+  r3 = await redeemNative(c, token('g-native-new', nonceFor(c)))
+  u = await meWith(r3.cookies)
+  check('a new Google account through native sign-in: a new account, not admin', r3.status === 200 && !!u && u.id !== ownerUser.id && !u.admin)
+  db.prepare("UPDATE users SET banned_at = ?, ban_reason = 'native spam' WHERE id = ?").run(Date.now(), u!.id)
+  c = await challenge()
+  r3 = await redeemNative(c, token('g-native-new', nonceFor(c)))
+  check('a banned account: refused with the reason for the app', r3.status === 403 && r3.body.error === 'banned' && r3.body.reason === 'native spam')
+  db.prepare("UPDATE app_settings SET value = 'closed' WHERE key = 'registration'").run()
+  c = await challenge()
+  r3 = await redeemNative(c, token('g-native-closed', nonceFor(c)))
+  check('registration closed: a new account is refused, and the app is told', r3.status === 403 && r3.body.error === 'closed')
+  db.prepare("UPDATE app_settings SET value = 'open' WHERE key = 'registration'").run()
+  // A revocation (here: an admin signs an account out everywhere) drops every waiting challenge.
+  c = await challenge()
+  check('(an admin signs an account out everywhere)', (await owner.send('POST', `/api/admin/users/${u!.id}/signout`)).status === 200)
+  check('a challenge from before a revocation: refused', (await redeemNative(c, token(ownerSub, nonceFor(c)))).status === 400)
 }
 
 // ---- Removing a sign-in when the other one is switched off ----

@@ -80,6 +80,18 @@ public class CloudResetActivity extends androidx.activity.ComponentActivity {
 
     private void wipe() {
         CloudLogin.clear(this);
+        // Android's account picker forgets which Google account this app last used (best effort;
+        // it doesn't revoke the Google consent, and the MvL OS session ends on the server above).
+        try {
+            androidx.credentials.CredentialManager.create(this).clearCredentialStateAsync(new androidx.credentials.ClearCredentialStateRequest(), null,
+                androidx.core.content.ContextCompat.getMainExecutor(this),
+                new androidx.credentials.CredentialManagerCallback<Void, androidx.credentials.exceptions.ClearCredentialException>() {
+                    @Override public void onResult(Void v) {}
+                    @Override public void onError(androidx.credentials.exceptions.ClearCredentialException e) {}
+                });
+        } catch (RuntimeException ignored) {
+            // No credential provider on this device: nothing to clear.
+        }
         WebView scratch = new WebView(this);
         scratch.clearCache(true);
         scratch.destroy();

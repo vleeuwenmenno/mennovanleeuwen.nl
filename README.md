@@ -114,6 +114,36 @@ embedded user-agents; Google refuses it too). When the cloud desktop navigates t
    grants no CORS preflight. The code and verifier never appear in a WebView URL, in storage the
    page can read, or in the session cookie.
 
+**Native Google sign-in (the phone's own account picker).** For servers the app was built to trust,
+"Sign in with Google" can use Android's Credential Manager instead of the browser: a dialog names
+the server and what it receives (Google name, email address, picture, a stable account id), then
+Android's Google account chooser opens with the accounts on the phone (and "add account"); there is
+no automatic choice. It needs, together:
+
+- the server's origin in the APK's list (gradle property `mvlosNativeGoogleOrigins`, default
+  `https://mennovanleeuwen.nl`). Any other server keeps the browser flow, whatever it announces;
+- an **Android OAuth client** in the same Google Cloud project as the server's web client, for the
+  package `nl.mvlos.experiment` and the SHA-1 of the certificate that signs the installed APK (a
+  package and certificate pair can be registered in one project only, so only the owner's
+  deployment can offer this);
+- on the server, Google sign-in on, an https `PUBLIC_URL`, and that Android client's id in
+  `GOOGLE_SIGNIN_ANDROID_CLIENT_IDS` (comma-separated). Then `GET /api/auth/app` announces
+  `googleNative: { clientId }` (the web client id, which is public).
+
+The app asks `POST /api/auth/app/google/start` for a one-time challenge (five minutes), asks Google
+for an ID token for the web client with the nonce `base64url(SHA-256(challenge + "\n" + origin))`,
+and POSTs `{ challenge, idToken }` to `/api/auth/app/google/redeem` (JSON, `X-MvL-App-Redeem: 1`,
+from native code, no redirects; the page never sees the token). The server takes the challenge out
+first, verifies the token (Google's signature, issuer, `aud` exactly the web client, `azp` one of the
+listed Android clients, expiry, and the nonce computed with its own `PUBLIC_URL`), then applies the
+usual Google sign-in rules (the account by `sub`, never by email; bans; registration limits; a linked
+admin stays admin) and answers with session cookies like the browser hand-off. A server that relays
+another server's challenge gets a token naming itself, which the other server refuses; a token
+without its live challenge is worth nothing; every revocation (sign out everywhere, ban, deletion,
+removing a sign-in) drops the waiting challenges. Cancelling the picker does nothing more; if
+native sign-in fails, the app offers the browser as an explicit choice. Disconnect also clears the
+account picker's memory of the last account (not the Google consent).
+
 Linking another sign-in, connecting Google Calendar and allowing private repositories need
 GitHub's or Google's pages, so in the app they are done from the site in a browser: Settings
 hides the link and repository buttons there, and Connect Google Calendar (from any app) says to use
@@ -163,14 +193,14 @@ adb shell am start -n nl.mvlos.experiment/.LauncherActivity
 ```
 
 Alternatively transfer the debug APK to your phone and open it, allowing installation
-from that file app when Android asks. It appears as **MvL OS** (version 1.3), separately
+from that file app when Android asks. It appears as **MvL OS** (version 1.4), separately
 from the website/PWA. On this device needs no server: try local notes, Terminal and games.
 Uninstalling clears its local guest data; Android backup is disabled. Debug APKs are signed with
 the building machine's debug key (`~/.android/debug.keystore`): an APK built with another key
 can't update an installed one, so uninstall the old one first (that clears its guest data).
 `./gradlew testDebugUnitTest` runs the server address, navigation and cookie checks
-(`ServerUrlTest`, `CloudPolicyTest`, `CloudLoginCookiesTest`). `-PmvlosTest` builds an emulator
-test variant (version `1.3-test`) that also trusts user-installed CAs in the debuggable build and
+(`ServerUrlTest`, `CloudPolicyTest`, `CloudLoginCookiesTest`, `NativeGoogleTest`). `-PmvlosTest` builds an emulator
+test variant (version `1.4-test`) that also trusts user-installed CAs in the debuggable build and
 lets Chrome DevTools inspect the cloud WebView, for testing against a local HTTPS server with a
 test CA; never hand that build to users. Without the flag the APK trusts system CAs only.
 
