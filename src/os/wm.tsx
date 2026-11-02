@@ -940,10 +940,11 @@ export function WindowManagerProvider({
       // still tagged with the screen it was put on, not the one the window happens to be on.
       // A place saved before screens were known stays unknown until it is moved or resized by hand
       // (that sets wantScreen): minimizing it must not invent the screen it happens to be on.
-      const keepUnknown = !state.phone && !w.wantScreen && !!rec?.screenUnknown
+      // (Also a place whose screen is only partly there, a width with no height: nothing is made up.)
+      const keepUnknown = !state.phone && !w.wantScreen && !!rec
       const from = keepUnknown ? { vw: rec!.vw, vh: rec!.vh } : !state.phone && w.wantScreen ? w.wantScreen : { vw, vh }
       const round = { x: Math.round(state.phone ? localX(g.x) : g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw: from.vw, vh: from.vh, phone: keepUnknown ? rec!.phone : state.phone }
-      put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round, ...(keepUnknown ? { screenUnknown: true } : {}),
+      put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round, ...(keepUnknown && rec!.screenUnknown ? { screenUnknown: true } : {}),
         ...(state.phone ? { homeGrid: true, page: pageOfX(g.x) } : {}), stack: w.stack,
         minimized: w.minimized || undefined, at: nextAt(rec) }
 

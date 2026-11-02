@@ -197,7 +197,7 @@ try {
   await p.close()
 
   // --- phone widgets: width after a resize or a UI scale change, and the first-edit migration order ---
-  const r = await open('(() => { window.__writes = 0; const set = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (/widgets:placed/.test(k)) window.__writes++; return set.call(this, k, v) } })()')
+  const r = await open('(() => { window.__writes = 0; const set = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (/widgets:(placed|state)|mvlos\\.widgets\\.pending/.test(k)) window.__writes++; return set.call(this, k, v) } })()')
   await r.send('Page.navigate', { url: origin })
   await r.waitFor(`!!document.querySelector('.topbar') && !document.querySelector('.boot')`, 90_000)
   await sleep(1200)
@@ -269,6 +269,7 @@ try {
   await sleep(900)
   const shifted = await r.eval<{ page: number; w: number; x: number }>(`(async () => { const p = Object.values((await import('/src/os/widgetPlaces.ts')).screenWidgets(true).places).find((q) => q.id === 'wide'); return { page: p.page, w: p.w, x: p.x } })()`)
   const allPages = await r.eval<number[]>(`(async () => Object.values((await import('/src/os/widgetPlaces.ts')).screenWidgets(true).places).map((q) => q.page))()`)
+  check('the write counter does see the page shift (so the silence checks above mean something)', (await r.eval<number>(`window.__writes`)) > writes0)
   check('removing an empty page on a narrow screen moves the widget down a page and keeps its saved width and place', shifted.page === 2 && shifted.w === 362 && shifted.x === 14 && allPages.length === 3 && allPages.every((n) => n === 2), { shifted, dots: await dots(r), ui: await r.eval(`(async () => JSON.stringify((await import('/src/os/homePager.ts')).homeUi.get()))()`) })
   // Occupancy follows the saved sets even when no window changes, and what is shown on a page.
   await r.eval(`(async () => {

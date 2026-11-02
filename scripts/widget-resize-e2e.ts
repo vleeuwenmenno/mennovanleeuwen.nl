@@ -20,7 +20,7 @@ try {
   assert(log.includes('ready'), log)
   browser = await launch(1920, 1080)
   // Every write of the widget set to storage, counted: a resize must not cause any.
-  const spy = `(() => { window.__writes = 0; const set = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (/widgets:placed/.test(k)) window.__writes++; return set.call(this, k, v) } })()`
+  const spy = `(() => { window.__writes = 0; const set = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (/widgets:(placed|state)|mvlos\\.widgets\\.pending/.test(k)) window.__writes++; return set.call(this, k, v) } })()`
   const p = await newPage(browser, 1920, 1080, spy)
   const evaluate = <T = unknown>(expression: string) => p.eval<T>(`(async () => (${expression}))()`)
   const size = async (w: number, h: number) => { await p.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false }); await sleep(450) }
@@ -101,11 +101,13 @@ try {
   // A drag is an edit: it becomes the new place, on the screen it was made on.
   await load()
   const grip = await evaluate<{ x: number; y: number }>(`(() => { const r = document.querySelector('[data-app="widget"] .note-grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`)
+  const writesBeforeDrag = await writes()
   await p.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...grip, button: 'left', buttons: 1, clickCount: 1 })
   for (let i = 1; i <= 6; i++) { await p.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: grip.x + i * 20, y: grip.y, button: 'left', buttons: 1 }); await sleep(30) }
   await p.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: grip.x + 120, y: grip.y, button: 'left', buttons: 0, clickCount: 1 })
   await sleep(500)
   const dragged = await place()
+  check('the write counter does see an explicit edit (so the silence checks above mean something)', (await writes()) > writesBeforeDrag, { writesBeforeDrag, now: await writes() })
   const draggedShown = await shown()
   check('a drag saves the new place for the screen it was made on', dragged.vw === 1280 && dragged.vh === 720 && dragged.x === draggedShown.x && dragged.x !== original.x, { dragged, draggedShown })
   const b1 = widgetBounds({ w: dragged.w }, 1280, 720)
@@ -138,6 +140,19 @@ try {
   await sleep(500)
   const legacyAfter = await evaluate<any>(`Object.values((await import('/src/os/widgetPlaces.ts')).widgetPlaces.get().places).find((p) => p.id === 'old')`)
   check('minimizing an older save keeps its screen unknown (nothing invented)', legacyAfter.minimized === true && (legacyAfter as { screenUnknown?: boolean }).screenUnknown === true && legacyAfter.x === 700 && legacyAfter.y === 300 && legacyAfter.vw === 0, legacyAfter)
+  // The same for a place whose screen is only half there (a width, no height) and no flag: nothing is made up either.
+  await evaluate(`(async () => {
+    const { widgetPlaces } = await import('/src/os/widgetPlaces.ts')
+    widgetPlaces.set(() => ({ places: { half: { id: 'half', kind: 'status', x: 700, y: 300, w: 280, h: 200, vw: 1920, vh: 0, at: 90 } }, removed: 'old' }))
+  })()`)
+  await load()
+  await size(1280, 720)
+  await evaluate(`(() => { document.querySelector('[data-app="widget"] .note-grip').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 300 })) })()`)
+  await sleep(200)
+  await evaluate(`(() => { [...document.querySelectorAll('.ctx-menu button')].find((e) => e.textContent?.startsWith('Minimize'))?.click() })()`)
+  await sleep(500)
+  const halfAfter = await evaluate<any>(`Object.values((await import('/src/os/widgetPlaces.ts')).widgetPlaces.get().places).find((p) => p.id === 'half')`)
+  check('minimizing a place with a half-known screen keeps it as it was', halfAfter.minimized === true && halfAfter.vw === 1920 && halfAfter.vh === 0 && halfAfter.x === 700 && halfAfter.y === 300, halfAfter)
   assert.deepEqual(p.errors, [])
   if (failed) throw new Error(`${failed} check(s) failed`)
   console.log('PASS widget resize: centre/edges, shrink-expand, reload, UI scale, collisions, explicit drag')
