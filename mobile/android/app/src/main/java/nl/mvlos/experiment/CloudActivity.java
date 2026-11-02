@@ -193,7 +193,11 @@ public class CloudActivity extends AppCompatActivity {
      */
     private int authOp;
 
+    /** Session cookies are being put in: no other sign-in starts until that has settled. */
+    private boolean installing;
+
     private void startLogin(String provider) {
+        if (installing) return;
         final int op = ++authOp;
         final String server = origin;
         new Thread(() -> {
@@ -235,6 +239,8 @@ public class CloudActivity extends AppCompatActivity {
      * Choosing an account is the deliberate step; the browser stays one tap away.
      */
     private void askNativeGoogle(int op, String server, String clientId) {
+        // This replaces any browser sign-in still waiting: its return no longer counts.
+        CloudLogin.clear(this);
         new AlertDialog.Builder(this)
             .setTitle(R.string.native_google_title)
             .setMessage(getString(R.string.native_google_body, server))
@@ -307,7 +313,8 @@ public class CloudActivity extends AppCompatActivity {
         if (!com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL.equals(custom.getType())) return null;
         try {
             return com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.createFrom(custom.getData()).getIdToken();
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
+            // GoogleIdTokenParsingException is a checked exception (thrown from Kotlin): anything unreadable means no token.
             return null;
         }
     }
@@ -386,7 +393,8 @@ public class CloudActivity extends AppCompatActivity {
         // The app redeems it itself (not the WebView), then puts the checked session cookies into
         // the WebView and loads the desktop.
         final String server = origin;
-        final int op = authOp;
+        // The return is a sign-in of its own now: anything older no longer lands.
+        final int op = ++authOp;
         final String verifier = pending.verifier;
         final String oldCookie = CookieManager.getInstance().getCookie(server + "/");
         progress.setVisibility(View.VISIBLE);
@@ -407,8 +415,14 @@ public class CloudActivity extends AppCompatActivity {
 
     /** Puts the cookies in one by one (each confirmed), then opens the signed-in desktop. */
     private void install(String server, java.util.List<String> cookies, int i, int op) {
-        if (!current(op, server)) return;
+        installing = true;
+        if (!current(op, server)) {
+            // Cancelled or replaced while the cookies went in: the ones already written go again.
+            undoInstall(server, cookies, i);
+            return;
+        }
         if (i == cookies.size()) {
+            installing = false;
             CookieManager.getInstance().flush();
             errorView.setVisibility(View.GONE);
             freshStart = true;
@@ -416,9 +430,24 @@ public class CloudActivity extends AppCompatActivity {
             return;
         }
         CookieManager.getInstance().setCookie(server, cookies.get(i), ok -> {
-            if (ok) install(server, cookies, i + 1, op);
-            else message(R.string.login_failed_title, getString(R.string.login_error));
+            if (ok) {
+                install(server, cookies, i + 1, op);
+                return;
+            }
+            undoInstall(server, cookies, i);
+            if (current(op, server)) message(R.string.login_failed_title, getString(R.string.login_error));
         });
+    }
+
+    /** Expires the first `count` of these cookies (MvL OS's own names, Path=/), so a sign-in that didn't finish leaves no session behind. */
+    private void undoInstall(String server, java.util.List<String> cookies, int count) {
+        for (int k = 0; k < count && k < cookies.size(); k++) {
+            String name = cookies.get(k).substring(0, cookies.get(k).indexOf('='));
+            CookieManager.getInstance().setCookie(server, name + "=; Path=/; Max-Age=0; Secure");
+        }
+        CookieManager.getInstance().flush();
+        installing = false;
+        progress.setVisibility(View.GONE);
     }
 
     private String errorText(String error, String reason) {
