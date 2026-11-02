@@ -324,7 +324,11 @@ The top bar itself ([`src/os/TopBar.tsx`](src/os/TopBar.tsx), [`src/os/topbarPre
 holds the MvL OS menu, workspaces, clock, search, activity, Minecraft status, theme and
 notifications. Minecraft status is on by default away from `/cv`, and off on `/cv` (the opposite of
 the earlier CV-only rule). Right-click the bar to **Unlock the top bar**, then drag a widget
-to reorder it, or use *Show or hide* for each widget; **Lock the top bar** when you are done. A
+to reorder it, or use *Show or hide* for each widget. On touch screens, long-press the locked
+bar to unlock it, then drag the ↔ handles below its items. Tap a handle for *Move left*,
+*Move right* and **Lock the top bar**; keyboard users can focus a handle and use Left/Right.
+Widget taps and scrolling outside the handles still work. Escape, a cancelled touch or losing
+focus cancels the drag without saving its preview. **Lock the top bar** when you are done. A
 click that does not move still activates the widget. The
 layout is kept in this browser, and follows your account when you are signed in.
 A window's menu (right-click its title bar) has *Move to workspace*, and dragging a window onto a
@@ -2023,7 +2027,9 @@ dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or rep
 Spotlight or All apps to pin it. An open app that isn't pinned offers *Keep in dock* on its own
 dock item, or drag it in among the pinned ones to pin it at that spot. Settings → Dock lists what
 was taken off, to add it back, and restores the default dock. Everyone can still drag dock icons
-to reorder them. Dropping a launcher or an app (from All apps) on the dock pins it there, a file
+to reorder them with mouse, pen or touch. The grabbed point follows the pointer at every UI
+scale, stays inside the screen, and releases without opening an app. Escape, a cancelled gesture,
+window blur or a screen/scale change restores the saved order. Dropping a launcher or an app (from All apps) on the dock pins it there, a file
 dropped on an app's icon opens in that app if it opens that kind of file, and anything dropped on
 Trash goes in the trash.
 
@@ -4859,8 +4865,9 @@ part of the digest). Only then does the host run and show the widget on a phone-
 **active** revision decides: a fork that says false (or nothing) stays hidden on a phone even when
 the built-in it came from says true. The Sticky note, Weather, Agenda, Code inbox, Status, Minecraft
 server and Clock are phone-compatible (checked at 390 px wide: no sideways overflow), and the custom
-widget template says `phone: true`. On a phone they sit in the scrolling column of notes, each full
-width, in the order the phone's column has (hold the top strip to move one); *Show notes and widgets
+widget template says `phone: true`. On a phone they share the scrollable Home grid with icons;
+drag their top strip to choose a snapped x/y position. Their selection and coordinates save
+independently from desktop. *Show notes and widgets
 on the desktop* in Settings still puts them all away. **Add widget** (desktop menu, All apps,
 Spotlight) lists everything on a big screen, and on a phone only the phone-compatible widgets,
 with a note saying so ("Only widgets that work on a phone"). See `phone` in the SDK reference
@@ -5066,11 +5073,14 @@ The SDK build identity is descriptors 1.2. Snapshots from the earlier unreleased
 slices need explicit rebuild/preview/activation; they are not silently upgraded or re-granted.
 
 **Canonical state and migration.** `widgets:state:v2` is one versioned envelope containing
-per-config counters/tombstones, placement geometry/tombstones and immutable installation
+per-config counters/tombstones, desktop placement geometry/tombstones and immutable installation
 revisions/generations. Its presence is the atomic cutover marker. First import waits for successful
 account discovery and complete account-state hydration; failed/offline discovery does not mean
 an empty account. Confirmed guests cut over locally, including servers with sign-in disabled.
-Every accepted edit first enters an account-scoped, per-writer browser journal. Every
+The independent mobile Home set uses `widgets:placed:mobile`, with the same per-entry merge and
+removal rules; it shares widget configs and installations with desktop, and never overwrites
+desktop placement preferences.
+Every accepted canonical edit first enters an account-scoped, per-writer browser journal. Every
 operation has a writer UUID and monotonic sequence. Consumption watermarks commit in the same
 JSON envelope as config/placement/install data and merge by maximum sequence. Every durable canonical
 read/merge/write sequence and receipt cleanup runs inside one origin-wide IndexedDB `readwrite` request
@@ -5363,19 +5373,40 @@ taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync`
 these rules in memory. `pnpm check:widgets-sync-ui` checks migration,
 cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
 accounts and data; it starts and stops its own server.
-Desktop widgets overlap freely. Dragging, resizing or growing one never pushes another aside;
-clicking a widget brings it forward using the normal window stacking order. Multiple instances
-of the same kind are intentional. Width resizing keeps the grip fixed unless a wide tilted card
-needs extra edge clearance. Fitting keeps the whole rotated grip inside the viewport for either
-tilt direction; short viewports temporarily constrain width when both edges cannot otherwise fit.
-Long content scrolls
-inside the card so controls stay reachable. Offscreen saved positions are fitted independently;
-shrinking the viewport never overwrites preferred geometry, which returns when it grows again.
-All widgets (including sticky widgets) are hidden below the existing 720 px mobile breakpoint.
-Their instances, settings and desktop positions remain saved for the return to desktop.
-`pnpm check:ui-scale` checks scale geometry, overlay bounds and sidebar dragging;
-`pnpm check:widget-layout` checks independent placement, resizing and mobile transitions in muted
-Chromium using synthetic data. `pnpm check:widget-geometry` checks fitting without a browser.
+A big screen puts a widget where it was put, moved along when its own screen is another size (a
+widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
+added on a phone gets the usual spot for a new widget there. Phones initially inherit the existing widgets. Their first addition, removal, minimization or
+move saves an independent mobile set (`widgets:placed:mobile`). If account hydration is still
+pending, edits remain optimistic and the first snapshot waits for canonical hydration, then
+applies those edits to the complete inherited set. Desktop selection and positions
+stay intact. An intentionally empty mobile set stays empty. Both sets follow the account and
+merge entries independently. Until that first edit, desktop changes still appear on mobile.
+
+Settings → Appearance → **Keep widgets from overlapping** is on by default, per browser.
+Desktop widgets reserve their measured content, tape and slanted corners on a shared 20 px desktop
+lattice. They reflow when the screen shrinks; when they cannot fit, the desktop scrolls vertically
+instead of piling them on top of one another. Icons use 100 × 120 px cells on the same lattice,
+avoid visible widgets, and also overflow downwards. Names show up to three lines within each
+cell; the full name remains in the tooltip and accessible name. Shift+Arrow moves a selected icon.
+Explicit icon and widget moves retain their row in the scrollable overflow area. Marquee selection
+uses the same content coordinates, so enclosing visible icons works after scrolling.
+On desktop, turning avoidance off preserves manual widget overlaps; icons still avoid their rectangles.
+Automatic fitting never overwrites synced preferred widget positions. The last manually moved
+widget retains local priority, separately for each account, including after reload.
+
+Mobile home has **Home** and **Icons** views, with labelled page controls above the dock.
+Home places widgets and icons together on the same grid. Swipe left on empty home space for
+Icons, right for Home; vertical movement on empty space still scrolls. Drag icons to move them (dropping on another swaps cells); taps open them.
+Mobile icon positions save separately in the account's desktop state and initially inherit
+existing positions. Drag a widget by its grip to move it in both axes, snapped every 20 px; its mobile x/y coordinates
+save independently. Move up/down/top menu controls move it spatially on this grid. Readable
+widgets can span most or all phone columns; crowded homes scroll vertically. Old mobile column
+layouts migrate in their saved order to grid rows without saving automatic positions or changing
+the desktop. The first manual mobile edit freezes those initial rows in the independent mobile set, so later
+removals cannot change untouched widgets' starting coordinates on reload.
+`pnpm check:desktop-layout` covers crowded placement, resize overflow, independent mobile grid
+coordinates, reload/migration, touch widget/icon movement, native swipes in both directions, and
+app control reachability while the home content scrolls.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
 layout by an earlier release move into the canonical set during the one-time, complete account
@@ -5409,21 +5440,17 @@ flags, held game buttons and game canvases. Anything else can opt out with `data
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
 does not select its labels or show the browser's callout (see *Selecting text* above).
 
-On phones desktop widgets are hidden unless their manifest says `phone: true` (see *Widgets on phones*:
-the Clock, Sticky, Weather, Agenda, Code inbox, Status and Minecraft widgets do); the built-in headline and shortcut notes and those widgets sit in a
-scrolling column. Hold one by its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the
-desktop scrolls along near the top bar and the dock); let go without moving, or long-press it, for
-*Move up*, *Move down* and *Move to top*. The order is part of the
-phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)); on a big screen notes stay wherever they were put.
+On phones, notes, phone-compatible widgets and icons share a scrollable grid. Drag a note or widget by its top strip
+in either axis; long-press for *Move up*, *Move down* and *Move to top*. Widget selection and grid
+coordinates belong to the independent synced mobile set; desktop placement stays intact.
 
 The MvL OS menu (top left) opens the About app (*About this system*), Settings, and the Changelog
 (*Release notes*), and reboots or shuts down. Putting the notes and widgets away to see the desktop
 itself is Settings → Windows → *Notes and widgets* under *Right now* (per browser; adding a note
-brings them back). On a phone, where the icons otherwise sit behind the notes, the desktop's icons
-then show as a grid of tiles: tap one to open it, long-press for its menu.
+brings them back). On a phone, this switches the shared Home grid to the Icons view: tap one to open it, long-press for its menu.
 
-Dragging works with a finger too: hold a desktop icon (in the phone's grid) or a row in Files still
-for a moment and it lifts with a buzz; move the finger then and it drags, to
+Dragging works with a finger too: drag a desktop icon directly, or hold a row in Files still
+until it lifts with a buzz, then move it, to
 the same places a mouse drags to. Holding on without moving opens its menu as before, and moving
 after that closes the menu and drags.
 

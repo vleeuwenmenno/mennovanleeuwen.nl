@@ -1,3 +1,4 @@
+import './homeLayout.css'
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { openSticky } from '../apps/Sticky'
 import { addLauncher, isLauncherApp, launch, launcherAt, launcherImage, launchersAreFiles, removeLauncher, updateLauncher, useLauncherFiles, useLaunchers, type Launcher } from '../data/launchers'
@@ -13,7 +14,7 @@ import { isIcsName, isVcfName } from '../data/pimFiles'
 import { getClipboard, setClipboard, openSeafile, refreshDirs, revalidateDir, setSeafilePrefs, useDir, useSeafileHome, useSeafilePrefs } from '../data/seafile'
 import { deleteNoteFor as deleteNote, downloadFile as download, makeFile as createFile, makeFolder as mkdir, removePaths as deleteItems, renamePath as renameItem, transferPaths as transferItems } from '../data/fileOps'
 import { dropIntoFolder, folderOp, undoLastMove, type Landed } from '../data/fileDrop'
-import { beginPointerDrag, holdToDrag, keysOf, useDropTarget, type DragItem, type PointerDrag } from './dnd'
+import { beginPointerDrag, keysOf, useDropTarget, type DragItem, type PointerDrag } from './dnd'
 import { listBrowser, useBrowserFiles } from '../data/browserfs'
 import { whereIs } from '../data/mounts'
 import { notify } from './notify'
@@ -24,10 +25,12 @@ import { cancelTouchMenu, closeContextMenu, openContextMenu, type MenuItem } fro
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { openLink } from '../data/links'
 import { useSwing } from './swing'
-import { useWM, type AppId } from './wm'
-import { notesHidden } from './deskPrefs'
+import { mobileWidgetEnvelope, widgetEnvelope } from './widgetLayout'
+import { drawnHeight, drawnWidth, useWM, type AppId } from './wm'
+import { homeSwipe, freeHomeRect, iconLayout, ICON_W, ICON_H, HOME_LEFT, HOME_TOP, type HomeRect } from './homeLayout'
+import { NOTE_APPS, notesHidden } from './deskPrefs'
 import { useIsMobile } from './useIsMobile'
-import { toUi, uiPoint, viewH, viewW } from './uiScale'
+import { uiPoint, viewH, viewW } from './uiScale'
 
 // A desktop that behaves like one: click to select, Ctrl/Shift-click to add, drag a marquee over
 // empty space, drag icons around (they snap to a grid), double-click or Enter to open, F2 to
@@ -83,56 +86,17 @@ export const DESKTOP_ICONS: DesktopIcon[] = ([
   { id: 'readme', label: 'README.md', glyph: '📝', kind: 'file', path: '~/README.md', open: { app: 'zed', props: { path: `${HOME}/README.md`, view: 'preview' } }, terminal: 'cat ~/README.md' },
 ] as DesktopIcon[]).filter((i) => cvMode() || !CV_ICONS.has(i.id))
 
-const CELL_W = 100
-const CELL_H = 96
-const TOP = 28 + 12
-const LEFT = 14
+const CELL_W = ICON_W
+const CELL_H = ICON_H
+const TOP = HOME_TOP
+const LEFT = HOME_LEFT
 const DOCK_SPACE = 100
-
 function gridSize() {
   return { cols: Math.max(1, Math.floor((viewW() - LEFT * 2) / CELL_W)), rows: Math.max(1, Math.floor((viewH() - TOP - DOCK_SPACE) / CELL_H)) }
 }
-
-// Columns count from the right edge (col 0 is rightmost), like macOS, so icons keep their place
-// relative to that edge when the window resizes and the default column stays clear of windows.
-const rightX = () => viewW() - LEFT - CELL_W
+const rightX = () => LEFT + (gridSize().cols - 1) * CELL_W
 const toPx = (p: IconPos) => ({ x: rightX() - p.col * CELL_W, y: TOP + p.row * CELL_H })
 const key = (p: IconPos) => `${p.col},${p.row}`
-
-/** Stored positions, clamped to the current grid; icons without one fill columns from the right. */
-function layout(ids: string[], stored: Record<string, IconPos>): Record<string, IconPos> {
-  const { cols, rows } = gridSize()
-  const out: Record<string, IconPos> = {}
-  const taken = new Set<string>()
-  for (const id of ids) {
-    const s = stored[id]
-    if (!s) continue
-    const p = { col: Math.min(s.col, cols - 1), row: Math.min(s.row, rows - 1) }
-    if (taken.has(key(p))) continue
-    out[id] = p
-    taken.add(key(p))
-  }
-  let col = 0
-  let row = 0
-  for (const id of ids) {
-    if (out[id]) continue
-    // A full grid (tiny window, many launchers) stacks the rest on the last spot instead of looping forever.
-    if (taken.size >= cols * rows) {
-      out[id] = { col, row }
-      continue
-    }
-    while (taken.has(key({ col, row }))) {
-      row++
-      if (row >= rows) {
-        row = 0
-        col = Math.min(cols - 1, col + 1)
-      }
-    }
-    out[id] = { col, row }
-    taken.add(key({ col, row }))
-  }
-  return out
-}
 
 /**
  * Several icons dragged at once gather in a pile under the pointer, like Finder's, the grabbed one
@@ -148,22 +112,16 @@ const pileOffset = (dx: number, dy: number, k: number) => {
   return { x: shrink(dx), y: shrink(dy), tilt: k ? (k % 2 ? 1 : -1) * 1.5 : 0 }
 }
 
-/** Nearest free cell to a pixel position, spiralling outwards from the closest one. */
-function snap(x: number, y: number, taken: Set<string>): IconPos {
-  const { cols, rows } = gridSize()
-  const c0 = Math.min(cols - 1, Math.max(0, Math.round((rightX() - x) / CELL_W)))
-  const r0 = Math.min(rows - 1, Math.max(0, Math.round((y - TOP) / CELL_H)))
-  for (let d = 0; d < Math.max(cols, rows); d++) {
-    for (let dc = -d; dc <= d; dc++) {
-      for (let dr = -d; dr <= d; dr++) {
-        if (Math.max(Math.abs(dc), Math.abs(dr)) !== d) continue
-        const p = { col: c0 + dc, row: r0 + dr }
-        if (p.col < 0 || p.row < 0 || p.col >= cols || p.row >= rows || taken.has(key(p))) continue
-        return p
-      }
-    }
-  }
-  return { col: c0, row: r0 }
+/** Explicit moves keep their requested overflow row, then find a nearby free cell. */
+function snap(x: number, y: number, taken: Set<string>, obstacles: HomeRect[] = []): IconPos {
+  const { cols } = gridSize()
+  const occupied = [...obstacles, ...[...taken].map((k) => {
+    const [col, row] = k.split(',').map(Number)
+    return { ...toPx({ col, row }), w: CELL_W, h: CELL_H }
+  })]
+  const r = freeHomeRect({ x, y, w: CELL_W, h: CELL_H }, occupied,
+    LEFT * 2 + cols * CELL_W, viewH(), CELL_W, CELL_H, true)
+  return { col: Math.round((rightX() - r.x) / CELL_W), row: Math.round((r.y - TOP) / CELL_H) }
 }
 
 type Drag =
@@ -178,7 +136,8 @@ export function Desktop() {
   // otherwise change the order of hooks.
   const mobile = useIsMobile()
   const hidden = notesHidden.use()
-  const phoneGrid = mobile && hidden
+  const phoneGrid = mobile
+  const suppressTap = useRef(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [offset, setOffset] = useState({ dx: 0, dy: 0 })
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -267,7 +226,39 @@ export function Desktop() {
   // The site's own icons stay unless switched off (then the desktop is just the Seafile Desktop folder and launchers).
   const siteShown = !seafileDesktop || siteIcons
   const visible = [...(siteShown ? DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)) : []), ...sfIcons, ...officeIcons, ...linkIcons]
-  const positions = useMemo(() => layout(visible.map((i) => i.id), desk.positions), [visible.map((i) => i.id).join(), desk.positions, viewport])
+  const obstacles = hidden ? [] : wm.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized && wm.shown(w)).map((w) => mobile ? mobileWidgetEnvelope(w, drawnWidth(w.pid), drawnHeight(w.pid)) : widgetEnvelope(w, drawnWidth(w.pid), drawnHeight(w.pid)))
+  const obstacleKey = JSON.stringify(obstacles)
+  const storedPositions = mobile ? desk.mobilePositions ?? desk.positions : desk.positions
+  const positions = useMemo(() => iconLayout(visible.map((i) => i.id), storedPositions, viewW(), viewH(), obstacles), [visible.map((i) => i.id).join(), storedPositions, viewport, obstacleKey])
+  const savePositions = (next: Record<string, IconPos>) => updateDesktop((s) => ({ ...s, [mobile ? 'mobilePositions' : 'positions']: next }))
+  const extent = Math.max(viewH(), ...Object.values(positions).map((p) => TOP + (p.row + 1) * CELL_H + DOCK_SPACE), ...obstacles.map((r) => r.y + r.h + DOCK_SPACE))
+
+  useEffect(() => {
+    if (!mobile) return
+    const scroll = surface.current?.parentElement
+    if (!scroll) return
+    let start: { x: number; y: number; at: number } | null = null
+    const down = (e: PointerEvent) => {
+      const target = e.target as HTMLElement
+      if (e.pointerType !== 'touch' || target.closest('button, input, textarea, a, .desk-icon') || target.closest('.note-grip') || target.closest('.window:not(.chrome-note)')) return
+      start = { x: e.clientX, y: e.clientY, at: Date.now() }
+    }
+    const up = (e: PointerEvent) => {
+      if (!start) return
+      const page = homeSwipe(e.clientX - start.x, e.clientY - start.y, Date.now() - start.at)
+      start = null
+      if (page) { notesHidden.set(page === 'icons'); scroll.scrollTop = 0; cancelTouchMenu() }
+    }
+    const cancel = () => { start = null }
+    scroll.addEventListener('pointerdown', down, true)
+    scroll.addEventListener('pointerup', up, true)
+    scroll.addEventListener('pointercancel', cancel, true)
+    return () => {
+      scroll.removeEventListener('pointerdown', down, true)
+      scroll.removeEventListener('pointerup', up, true)
+      scroll.removeEventListener('pointercancel', cancel, true)
+    }
+  }, [mobile])
 
   useEffect(() => {
     const onResize = () => setViewport((n) => n + 1)
@@ -313,17 +304,19 @@ export function Desktop() {
     setSelected(new Set())
   }
 
+  /** Pointer positions in the same scroll-content space as icon and marquee geometry. */
+  const contentPoint = (e: { clientX: number; clientY: number }) => {
+    const p = uiPoint(e)
+    const scroller = surface.current?.parentElement
+    return { x: p.x + (scroller?.scrollLeft ?? 0), y: p.y + (scroller?.scrollTop ?? 0) }
+  }
+
   // --- pointer handling -----------------------------------------------------------------
 
   function onIconPointerDown(e: ReactPointerEvent, icon: DesktopIcon) {
     if (e.button !== 0 || renaming) return
     e.stopPropagation()
-    // The phone's grid has no positions to drag icons to: a finger there scrolls, taps or holds
-    // (and held still, lifts the icon to drag it into a folder, the dock or the trash).
-    if (phoneGrid) {
-      setSelected(new Set([icon.id]))
-      return holdToDrag(e, () => itemsFor([icon.id]), 'desktop')
-    }
+    suppressTap.current = false
     const additive = e.shiftKey || e.ctrlKey || e.metaKey
     let ids: string[]
     if (additive) {
@@ -337,7 +330,8 @@ export function Desktop() {
     if (additive && !selected.has(icon.id)) setSelected(new Set(ids))
     // The grabbed icon first: it tops the pile and lands nearest the drop.
     ids = [icon.id, ...ids.filter((id) => id !== icon.id)]
-    drag.current = { kind: 'icons', startX: toUi(e.clientX), startY: toUi(e.clientY), ids, moved: false, clickedId: icon.id, additive }
+    const at = contentPoint(e)
+    drag.current = { kind: 'icons', startX: at.x, startY: at.y, ids, moved: false, clickedId: icon.id, additive }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }
 
@@ -347,7 +341,8 @@ export function Desktop() {
     setRenaming(null)
     const base = e.shiftKey || e.ctrlKey || e.metaKey ? new Set(selected) : new Set<string>()
     setSelected(base)
-    drag.current = { kind: 'marquee', startX: toUi(e.clientX), startY: toUi(e.clientY), base }
+    const at = contentPoint(e)
+    drag.current = { kind: 'marquee', startX: at.x, startY: at.y, base }
     surface.current?.setPointerCapture(e.pointerId)
   }
 
@@ -355,12 +350,13 @@ export function Desktop() {
     const d = drag.current
     if (!d) return
     // Page pixels, as the icons are placed in (the UI scale, uiScale.ts).
-    const { x: px, y: py } = uiPoint(e)
+    const { x: px, y: py } = contentPoint(e)
     const dx = px - d.startX
     const dy = py - d.startY
     if (d.kind === 'icons') {
       if (!d.moved && Math.hypot(dx, dy) < 4) return
       if (!d.moved) {
+        suppressTap.current = true
         swing.start(e.clientX)
         // Icons on the move: a finger resting again mid-drag is not a long press.
         cancelTouchMenu()
@@ -421,6 +417,23 @@ export function Desktop() {
       else if (!d.additive) setSelected(new Set([d.clickedId]))
       return
     }
+    if (mobile && d.ids.length === 1) {
+      const id = d.ids[0]
+      const from = positions[id]
+      const p = toPx(from)
+      const { cols } = gridSize()
+      let target = { col: Math.max(0, Math.min(cols - 1, Math.round((rightX() - p.x - offsetRef.current.dx) / CELL_W))),
+        row: Math.max(0, Math.round((p.y + offsetRef.current.dy - TOP) / CELL_H)) }
+      if (obstacles.some((r) => {
+        const at = toPx(target)
+        return at.x < r.x + r.w && at.x + CELL_W > r.x && at.y < r.y + r.h && at.y + CELL_H > r.y
+      })) target = snap(toPx(target).x, toPx(target).y, new Set(visible.filter((i) => i.id !== id).map((i) => key(positions[i.id]))), obstacles)
+      const other = visible.find((i) => i.id !== id && key(positions[i.id]) === key(target))
+      savePositions({ ...positions, [id]: target, ...(other ? { [other.id]: from } : {}) })
+      offsetRef.current = { dx: 0, dy: 0 }
+      setOffset({ dx: 0, dy: 0 })
+      return
+    }
     const moving = new Set(d.ids)
     const taken = new Set(visible.filter((i) => !moving.has(i.id)).map((i) => key(positions[i.id])))
     const next: Record<string, IconPos> = {}
@@ -432,7 +445,7 @@ export function Desktop() {
     const drop = { x: top.x + offsetRef.current.dx, y: top.y + offsetRef.current.dy }
     d.ids.forEach((id, k) => {
       const p = toPx(positions[id])
-      const cell = snap(p.x + offsetRef.current.dx, p.y + offsetRef.current.dy, taken)
+      const cell = snap(p.x + offsetRef.current.dx, p.y + offsetRef.current.dy, taken, obstacles)
       taken.add(key(cell))
       next[id] = cell
       // It glides out from where it sat in the pile.
@@ -441,7 +454,7 @@ export function Desktop() {
       from[id] = { dx: drop.x + fan.x - to.x, dy: drop.y + fan.y - to.y }
     })
     // Pin every icon so the ones that did not move stay put too.
-    updateDesktop((s) => ({ ...s, positions: { ...positions, ...next } }))
+    savePositions({ ...positions, ...next })
     offsetRef.current = { dx: 0, dy: 0 }
     setOffset({ dx: 0, dy: 0 })
     setSettle(from)
@@ -453,11 +466,11 @@ export function Desktop() {
     const taken = new Set(visible.map((i) => key(positions[i.id])))
     const next: Record<string, IconPos> = {}
     landed.forEach((l, k) => {
-      const cell = snap(at.x - CELL_W / 2 - k * CELL_W, at.y - 30, taken)
+      const cell = snap(at.x - CELL_W / 2 - k * CELL_W, at.y + (surface.current?.parentElement?.scrollTop ?? 0) - 30, taken, obstacles)
       taken.add(key(cell))
       next[l.launcherId ? `launcher:${l.launcherId}` : `sf:${l.path.split('/').pop()}`] = cell
     })
-    updateDesktop((s) => ({ ...s, positions: { ...positions, ...s.positions, ...next } }))
+    savePositions({ ...storedPositions, ...positions, ...next })
   }
 
   // Dropping on the desktop: into its folder (files from Files windows and the computer, rows from
@@ -500,7 +513,16 @@ export function Desktop() {
   function onKeyDown(e: KeyboardEvent) {
     if (renaming) return
     const sel = selectedIcons()
-    if (e.key === 'Enter' && sel.length) sel.forEach(open)
+    if (e.shiftKey && e.key.startsWith('Arrow') && sel.length === 1) {
+      const id = sel[0].id
+      const p = positions[id]
+      const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]
+      if (delta) {
+        const next = snap(toPx(p).x + delta[0] * CELL_W, toPx(p).y + delta[1] * CELL_H,
+          new Set(visible.filter((i) => i.id !== id).map((i) => key(positions[i.id]))), obstacles)
+        savePositions({ ...positions, [id]: next })
+      }
+    } else if (e.key === 'Enter' && sel.length) sel.forEach(open)
     else if ((e.key === 'Delete' || e.key === 'Backspace') && sel.length) moveToTrash(sel.map((i) => i.id))
     else if (e.key === 'F2' && sel.length === 1) setRenaming(sel[0].id)
     else if (e.key === 'Escape') setSelected(new Set())
@@ -591,11 +613,11 @@ export function Desktop() {
     const base = kind === 'folder' ? 'New folder' : 'untitled.txt'
     let name = base
     for (let n = 2; taken.has(name); n++) name = kind === 'folder' ? `New folder ${n}` : `untitled-${n}.txt`
-    const cell = snap(at.x - CELL_W / 2, at.y - 30, new Set(visible.map((i) => key(positions[i.id]))))
+    const cell = snap(at.x - CELL_W / 2, at.y - 30, new Set(visible.map((i) => key(positions[i.id]))), obstacles)
     ;(kind === 'folder' ? mkdir(`${sfDesktop}/${name}`) : createFile(`${sfDesktop}/${name}`))
       .then((made) => {
         const id = `sf:${made.split('/').pop()}`
-        updateDesktop((s) => ({ ...s, positions: { ...s.positions, [id]: cell } }))
+        savePositions({ ...storedPositions, ...positions, [id]: cell })
         setSelected(new Set([id]))
         setRenaming(id)
       })
@@ -626,7 +648,7 @@ export function Desktop() {
         : []),
       { separator: true },
       { label: 'Select all', shortcut: 'Ctrl A', onSelect: () => setSelected(new Set(visible.map((i) => i.id))) },
-      { label: 'Clean up icons', onSelect: resetLayout },
+      { label: 'Clean up icons', onSelect: () => resetLayout(mobile) },
       ...(seafileDesktop ? [{ label: 'Show the site’s icons', checked: siteIcons, onSelect: () => setSeafilePrefs({ siteIcons: !siteIcons }) }, { label: 'Refresh', onSelect: () => refreshDirs(seafileDesktop) }] : []),
       ...(desk.trashed.length && siteShown ? [{ label: `Put back ${desk.trashed.length} trashed icon${desk.trashed.length === 1 ? '' : 's'}`, onSelect: () => restoreIcons(desk.trashed) }] : []),
       { separator: true },
@@ -644,9 +666,11 @@ export function Desktop() {
   }
 
   return (
+    <>
     <div
       ref={surface}
-      className={`desk ${phoneGrid ? 'is-grid' : ''}`}
+      className={`desk ${phoneGrid ? `is-home ${hidden ? 'is-home-icons' : ''}` : ''}`}
+      style={{ minHeight: extent }}
       tabIndex={-1}
       onPointerDown={onSurfacePointerDown}
       onPointerMove={onPointerMove}
@@ -656,7 +680,7 @@ export function Desktop() {
       onContextMenu={(e) => {
         if (e.target !== surface.current) return
         setSelected(new Set())
-        openContextMenu(e, desktopMenu(uiPoint(e)))
+        openContextMenu(e, desktopMenu(contentPoint(e)))
       }}
     >
       {visible.map((icon) => {
@@ -684,11 +708,13 @@ export function Desktop() {
             role="button"
             aria-label={label(icon)}
             aria-selected={isSel}
+            aria-keyshortcuts="Shift+ArrowUp Shift+ArrowDown Shift+ArrowLeft Shift+ArrowRight"
+            title={label(icon)}
             onPointerDown={(e) => onIconPointerDown(e, icon)}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onDoubleClick={() => !phoneGrid && open(icon)}
-            onClick={() => phoneGrid && !renaming && open(icon)}
+            onClick={() => phoneGrid && !renaming && !suppressTap.current && open(icon)}
             onFocus={() => !selected.has(icon.id) && !drag.current && setSelected(new Set([icon.id]))}
             onContextMenu={(e) => {
               closeContextMenu()
@@ -729,7 +755,10 @@ export function Desktop() {
                     renameItem(icon.path, v, sf.dir)
                       .then((made) => {
                         const id = `sf:${made.split('/').pop()}`
-                        updateDesktop((s) => ({ ...s, positions: { ...s.positions, [id]: s.positions[icon.id] ?? positions[icon.id] } }))
+                        updateDesktop((s) => ({ ...s,
+                          positions: { ...s.positions, ...((s.positions[icon.id] ?? (!mobile ? positions[icon.id] : undefined)) ? { [id]: s.positions[icon.id] ?? positions[icon.id] } : {}) },
+                          ...(s.mobilePositions || mobile ? { mobilePositions: { ...s.mobilePositions, [id]: s.mobilePositions?.[icon.id] ?? positions[icon.id] } } : {}),
+                        }))
                       })
                       .catch(failed('Could not rename it'))
                   } else if (v && v !== label(icon)) updateDesktop((s) => ({ ...s, names: { ...s.names, [icon.id]: v } }))
@@ -749,5 +778,10 @@ export function Desktop() {
       })}
       {marquee && <div className="marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />}
     </div>
+    {mobile && <nav className="home-pages" aria-label="Home views">
+      <button type="button" aria-current={!hidden ? 'page' : undefined} onClick={() => { notesHidden.set(false); surface.current?.parentElement?.scrollTo(0, 0) }}>Home</button>
+      <button type="button" aria-current={hidden ? 'page' : undefined} onClick={() => { notesHidden.set(true); surface.current?.parentElement?.scrollTo(0, 0) }}>Icons</button>
+    </nav>}
+    </>
   )
 }

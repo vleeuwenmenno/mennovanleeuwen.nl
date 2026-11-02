@@ -7,6 +7,7 @@ import { synced } from './synced'
 export type IconPos = { col: number; row: number }
 export type DesktopState = {
   positions: Record<string, IconPos>
+  mobilePositions?: Record<string, IconPos>
   names: Record<string, string>
   trashed: string[]
 }
@@ -20,4 +21,4 @@ export const useDesktop = store.use
 
 export const trashIcons = (ids: string[]) => updateDesktop((s) => ({ ...s, trashed: [...new Set([...s.trashed, ...ids])] }))
 export const restoreIcons = (ids: string[]) => updateDesktop((s) => ({ ...s, trashed: s.trashed.filter((t) => !ids.includes(t)) }))
-export const resetLayout = () => updateDesktop((s) => ({ ...s, positions: {} }))
+export const resetLayout = (mobile = false) => updateDesktop((s) => ({ ...s, [mobile ? 'mobilePositions' : 'positions']: {} }))

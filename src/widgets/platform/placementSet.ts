@@ -29,6 +29,8 @@ export type WidgetPlace = {
   screenUnknown?: boolean
   /** Screen class is independent of logical dimensions at a high UI scale. Absent in old saves. */
   phone?: boolean
+  /** Independent mobile grid coordinates; absent on legacy column layouts. */
+  homeGrid?: boolean
   vw: number
   vh: number
   /** Its place in the phone layout's column, once moved there by hand. */
@@ -55,6 +57,7 @@ function place(id: string, raw: Partial<WidgetPlace>): WidgetPlace {
     h: num(raw.h, 260),
     ...(raw.screenUnknown ? { screenUnknown: true } : {}),
     ...(typeof raw.phone === 'boolean' ? { phone: raw.phone } : {}),
+    ...(raw.homeGrid ? { homeGrid: true } : {}),
     vw: num(raw.vw),
     vh: num(raw.vh),
     ...(typeof raw.stack === 'number' ? { stack: raw.stack } : {}),

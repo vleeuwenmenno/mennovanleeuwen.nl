@@ -1,5 +1,6 @@
 // Widget layout regressions. Muted, isolated Chromium profiles and synthetic scratch account.
 // pnpm check:widget-layout (PORT overrides the isolated dev server port).
+// WIDGET_LAYOUT_ONLY=basic skips the dedicated wide-grip viewport/scale matrix.
 import { isDeepStrictEqual } from 'node:util'
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -70,6 +71,9 @@ async function load(page: P) {
   await page.waitFor(`!!document.querySelector('.desktop') && !document.querySelector('[class^="boot"], [class*=" boot"]')`, 90_000)
   await page.waitFor(`!document.querySelector('.boot')`, 30_000)
   await sleep(2500)
+  // This suite verifies deliberate independent placement; the shared-grid default has its own check.
+  await page.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m=>m.avoidWidgetOverlap.set(false))`)
+  await sleep(150)
 }
 const api = async (key: string, value?: unknown) => {
   const state = await fetch(origin + '/api/state', { headers: { Cookie: `mvlos_sid=${sid2}`, 'X-MvL-Account': '1' } }).then(async r => { if (!r.ok) throw new Error('state read: ' + r.status); return r.json() })
@@ -198,6 +202,7 @@ try {
     check('offscreen saved grip recovered independently', recovered[0].x + recovered[0].w <= 1200 && recovered[0].y >= 48 && recovered[1].x === afterTouch[1].x, recovered)
     check('recovery leaves saved preference intact', (await api('widgets:placed')).places.a.x === 9000)
   }
+  if (process.env.WIDGET_LAYOUT_ONLY !== 'basic') {
   // A very wide rotated grip used to cross the top bar even though its unrotated y was 48.
   for (const b of browsers.splice(0)) await b.close()
   const W = await browser(sid, 1600, 900)
@@ -268,6 +273,7 @@ try {
     await scale(W, 1); await resize(W, 1600, 900)
     wide.places.wide.at = Math.max(Date.now(), (await api('widgets:placed')).places.wide.at) + 1000
     await api('widgets:placed', wide)
+  }
   }
 } catch (error) {
   failed++; console.error(error)

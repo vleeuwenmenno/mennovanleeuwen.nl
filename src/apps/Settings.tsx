@@ -1,3 +1,4 @@
+import { avoidWidgetOverlap } from '../os/widgetLayoutPrefs'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { isShown, setCalendarHidden, setCalendarShown, useAllCalendars, useCalendarChoice, useCalendarList, useHiddenCalendars } from '../data/calendar'
 import { useTasks } from '../data/tasks'
@@ -305,6 +306,7 @@ async function removeAccount(setError: (e: string | null) => void) {
 
 /** Light/dark mode, the Omarchy theme for each, and the accent. Kept in this browser. */
 function Appearance() {
+  const avoidOverlap = avoidWidgetOverlap.use()
   const t = useTheme()
   const swing = useSwingPrefs()
   const performanceOverlay = performanceOverlayPref.use()
@@ -344,6 +346,13 @@ function Appearance() {
         <p className="muted set-help">Auto follows your device's light or dark setting. Showing {t.label} now.</p>
       </SetGroup>
       <UiScaleGroup />
+      <SetGroup title="Desktop widgets">
+        <label className="set-check">
+          <input type="checkbox" checked={avoidOverlap} onChange={(e) => avoidWidgetOverlap.set(e.target.checked)} />
+          Keep widgets from overlapping
+        </label>
+        <p className="muted set-help">Fit widgets and notes into free grid space, with scrollable overflow. Saved preferences stay intact. Mobile home always uses the shared grid.</p>
+      </SetGroup>
       <SetGroup title="Accent color">
         <div className="set-swatches">
           <button className={`set-swatch-btn set-swatch-theme ${!t.accent ? 'is-on' : ''}`} style={{ ['--sw' as string]: t.palette.accent }} onClick={() => setAccent(null)} title="The theme's own accent">

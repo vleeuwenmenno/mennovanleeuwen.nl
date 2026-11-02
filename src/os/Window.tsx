@@ -186,10 +186,10 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   // half off the bottom of the screen (fitNote in wm.tsx).
   useEffect(() => {
     const el = sectionRef.current
-    if (chrome !== 'note' || win.app === 'widget' || !el) return
+    if (chrome !== 'note' || !el) return
     let last = { w: 0, h: 0 }
     const measure = () => {
-      const h = Math.max(el.offsetHeight, ...[...el.children].map((c) => (c as HTMLElement).offsetTop + (c as HTMLElement).offsetHeight))
+      const h = win.app === 'widget' ? el.offsetHeight : Math.max(el.offsetHeight, ...[...el.children].map((c) => (c as HTMLElement).offsetTop + (c as HTMLElement).offsetHeight))
       const w = el.offsetWidth
       if (Math.abs(h - last.h) < 2 && Math.abs(w - last.w) < 2) return
       last = { w, h }
@@ -206,15 +206,15 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chrome, win.pid])
 
-  // On a phone a note's strip moves it within the column instead of around the screen.
-  const phoneStack = chrome === 'note' && window.innerWidth < 720
+  // Mobile note menus offer spatial grid moves; grips use ordinary two-axis dragging.
+  const mobileNote = chrome === 'note' && window.innerWidth < 720
   const lift = useRef<Lift | null>(null)
 
   const begin = (mode: Drag['mode'], edge = '') => (e: ReactPointerEvent) => {
     if (e.button !== 0 || drag.current) return
     if ((e.target as HTMLElement).closest('button, a, input, textarea')) return
     if (win.maximized && mode === 'resize') return
-    if (mode === 'move' && phoneStack) mode = 'stack'
+    // Mobile notes use the same free grid move as desktop notes; no forced column reorder.
     e.preventDefault()
     wm.focus(win.pid)
     const el = e.currentTarget as HTMLElement
@@ -354,6 +354,10 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
 
   /** Move up, Move down and Move to top in a note's menu on a phone. */
   const moveInStack = (where: 'up' | 'down' | 'top') => {
+    if (mobileNote) {
+      wm.setGeometry(win.pid, { y: where === 'top' ? 40 : Math.max(40, win.y + (where === 'up' ? -120 : 120)) })
+      return
+    }
     const order = stackOrder(wm.windows)
     const shown = order.filter((pid) => !wm.windows.find((w) => w.pid === pid)?.minimized)
     const i = shown.indexOf(win.pid)
@@ -372,7 +376,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     const px = toUi(e.clientX)
     const py = toUi(e.clientY)
     const dx = px - d.startX
-    const dy = py - d.startY
+    const dy = py - d.startY + (chrome === 'note' && d.mode === 'move' ? ((sectionRef.current?.closest('.desk-scroll')?.scrollTop ?? 0) - (d.scroll ?? 0)) : 0)
     if (d.mode === 'stack' && d.hold) {
       d.hold.y = py
       if (d.hold.armed) return liftMove(py)
@@ -410,12 +414,10 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           wm.setGeometry(win.pid, { x: d.x, y: d.y, w: d.w, h: d.h, snap: undefined, restore: undefined, maximized: false })
         }
       }
-      // A note stays whole on the screen (fitNote); other windows may hang off it a little.
+      // Notes move in scroll-content coordinates: fit horizontally, keep their requested Y.
       const { x, y } =
-        win.app === 'widget'
-          ? fitWidget({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, viewW(), viewH())
-          : chrome === 'note'
-          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, viewW(), viewH(), phoneStack, sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
+        chrome === 'note'
+          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, viewW(), viewH(), true, sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
           : { x: Math.min(Math.max(d.x + dx, -d.w + 120), viewW() - 120), y: Math.min(Math.max(d.y + dy, TOP_BAR), viewH() - 60) }
       wm.setGeometry(win.pid, { x, y })
       // Over a workspace number in the top bar: dropping there moves the window to it.
@@ -448,7 +450,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         const width = d.edge.includes('e') ? Math.min(g.w ?? d.w, viewW() - d.x - 24) : (g.w ?? d.w)
         const fitted = fitWidget({ x: g.x ?? d.x, y: g.y ?? d.y, w: width, h: g.h ?? d.h }, viewW(), viewH())
         g.x = fitted.x
-        g.y = fitted.y
+        g.y = (g.y ?? d.y) > viewH() ? (g.y ?? d.y) : fitted.y
         g.w = fitted.w
       }
       // Resizing a snapped window makes it a normal one again.
@@ -627,15 +629,13 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     const ws = workspaceOf(win)
     // For widgets, only the same kind (all weather widgets, not every widget).
     const siblings = others.filter((w) => w.app === win.app && w.props.kind === win.props.kind)
-    // Phones: the note's place in the column, for when dragging it is fiddly (or a long way).
-    const shown = phoneStack ? stackOrder(wm.windows).filter((pid) => !wm.windows.find((w) => w.pid === pid)?.minimized) : []
-    const place = shown.indexOf(win.pid)
+    // Spatial menu alternatives to moving a mobile note with a pointer.
     return [
-      ...(phoneStack && shown.length > 1
+      ...(mobileNote
         ? [
-            { label: 'Move up', disabled: place <= 0, onSelect: () => moveInStack('up') },
-            { label: 'Move down', disabled: place < 0 || place >= shown.length - 1, onSelect: () => moveInStack('down') },
-            { label: 'Move to top', disabled: place <= 0, onSelect: () => moveInStack('top') },
+            { label: 'Move up', disabled: win.y <= 60, onSelect: () => moveInStack('up') },
+            { label: 'Move down', onSelect: () => moveInStack('down') },
+            { label: 'Move to top', disabled: win.y <= 60, onSelect: () => moveInStack('top') },
             { separator: true as const },
           ]
         : []),
@@ -677,7 +677,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       ref={sectionRef}
       className={`window chrome-${chrome} ${focused ? 'is-focused' : ''} ${win.maximized ? 'is-max' : ''} ${win.minimized ? 'is-min' : ''} ${wm.shown(win) ? '' : 'is-away'} ${win.snap ? 'is-snapped' : ''} ${className}`}
       // --stack: the note's place in the phone layout's column (only that layout reads it).
-      style={{ ...style, ...(win.app === 'widget' ? { ['--widget-body-max' as string]: `${Math.max(60, viewH() - win.y - 70)}px` } : {}), left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z, ...(chrome === 'note' ? { ['--stack' as string]: stackOrder(wm.windows).indexOf(win.pid) } : {}) }}
+      style={{ ...style, ...(win.app === 'widget' ? { ['--widget-body-max' as string]: `${Math.max(140, viewH() - (win.want?.y ?? win.y) - 70)}px` } : {}), ['--home-x' as string]: `${win.x}px`, ['--home-y' as string]: `${win.y}px`, ['--home-w' as string]: `${win.w}px`, left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z, ...(chrome === 'note' ? { ['--stack' as string]: stackOrder(wm.windows).indexOf(win.pid) } : {}) }}
       onPointerDown={() => wm.focus(win.pid)}
       onPointerDownCapture={modPressDown}
       onContextMenuCapture={modContextMenu}
