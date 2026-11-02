@@ -7,7 +7,7 @@ import { UPSCALE_NODES, UPSCALE_RESOURCE_NOTE, upscaleWorkflow, validateUpscaleG
 import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
 import { applyComfyMessage, openComfySocket, progressState, queuePosition, throttleProgress } from './comfyProgress.ts'
-import { imagePresetSpec, type ImageProgress, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, type ImageLora, type ImageLoraHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings, type DiffusionImageSettings, type HiresSettings } from '../src/data/imageModels.ts'
+import { imagePresetSpec, presetModels, loadsAsCheckpoint, type ImageProgress, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, type ImageLora, type ImageLoraHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings, type DiffusionImageSettings, type HiresSettings } from '../src/data/imageModels.ts'
 import { randomInt, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -20,7 +20,7 @@ import { checkRoom } from './quota.ts'
 // Small, server-owned ComfyUI graphs, following Diffu's checkpoint / diffusion loader approach.
 // No arbitrary graphs, remote URLs, or backend credentials are accepted from a model tool call.
 const NAME = 'agents-comfyui'
-export const PRESETS = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo'] as const
+export const PRESETS = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo', 'moss_image'] as const
 export type Preset = (typeof PRESETS)[number]
 /** askBeforeGenerate: off by default, so generations run without an approval card in every mode except Plan. */
 /** civitaiLookup: model_details may ask civitai.com about a model by its Civitai ID or file hash (never prompts).
@@ -162,7 +162,7 @@ export async function saveThreadImageSettings(user: User, thread: string, value:
     const resolved = resolveImageAssets(effective, catalog)
     for (const selected of Object.values(resolved.selection)) if (!selected.automatic && 'error' in selected && selected.error) throw new HttpError(400, selected.error)
     effective = { ...effective, ...resolved.effective }
-    const models = Boolean(imagePresetSpec(effective.preset).clipType) ? catalog.diffusionModels : catalog.checkpoints
+    const models = presetModels(effective.preset, catalog)
     if (effective.model && !models.includes(effective.model)) throw new HttpError(400, 'Choose an installed model for the selected preset')
     if (Boolean(imagePresetSpec(effective.preset).clipType) && ((effective.clip && !catalog.clips.includes(effective.clip)) || (effective.vae && !catalog.vaes.includes(effective.vae)) || !catalog.clipTypes.includes(imagePresetSpec(effective.preset).clipType))) throw new HttpError(400, 'This diffusion preset requires its supported text encoder type and an installed encoder and VAE')
     // Explicit inactive encoder/VAE overrides must still refer to real catalog assets.
@@ -199,7 +199,7 @@ export async function readJSON(user: User, s: ImageSettings, path: string, signa
 const options = nodeOptions
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete', 'EmptyFlux2LatentImage'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user), forPlanning = false) {
@@ -295,7 +295,7 @@ async function imageLoraHints(user: User, settings: ImageSettings, signal: Abort
 }
 export type ImageInput = { checkpoint_vae?: unknown; clip_skip?: unknown; v_prediction?: unknown; mask_id?: unknown; hires?: unknown; operation?: unknown; upscale_model?: unknown; scale?: unknown; source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
-export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[] }, sourceName?: string) {
+export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[]; checkpoints?: string[]; diffusionModels?: string[] }, sourceName?: string) {
   if (!PRESETS.includes(s.preset)) throw new HttpError(400, 'Unsupported image workflow')
   if (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 6000) throw new HttpError(400, 'Supply an image prompt of 1–6000 characters')
   if (input.negative_prompt !== undefined && (typeof input.negative_prompt !== 'string' || input.negative_prompt.length > 6000)) throw new HttpError(400, 'Negative prompt must be at most 6000 characters')
@@ -322,7 +322,9 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   if (!sourceName && input.denoise !== undefined) throw new HttpError(400, 'Denoise requires source_image_id')
   const graph: Graph = {}
   const node = (id: string, class_type: string, inputs: Record<string, unknown>) => (graph[id] = { class_type, inputs }, [id, 0])
-  let model = diffusion ? node('1', 'UNETLoader', { unet_name: s.model, weight_dtype: 'default' }) : node('1', 'CheckpointLoaderSimple', { ckpt_name: s.model })
+  // A MOSS Image file in models/checkpoints is diffusion-only: CheckpointLoaderSimple gives its MODEL,
+  // while the encoder and VAE still come from CLIPLoader and VAELoader below.
+  let model = diffusion && !loadsAsCheckpoint(s.preset, s.model, catalog) ? node('1', 'UNETLoader', { unet_name: s.model, weight_dtype: 'default' }) : node('1', 'CheckpointLoaderSimple', { ckpt_name: s.model })
   let clip = diffusion ? node('2', 'CLIPLoader', { clip_name: s.clip, type: spec.clipType, device: 'default' }) : ['1', 1]
   // Clip skip (checkpoints only): 1 is the default and adds no node, 2 stops one layer early.
   const clipSkip = input.clip_skip === undefined ? 1 : input.clip_skip
@@ -342,9 +344,11 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   const loras = validateLoras(input.loras ?? [])
   if (loras.length) {
     const preferred = diffusion ? 'LoraLoaderModelOnly' : 'LoraLoader'
-    const fallback = spec.clipType === 'krea2' ? 'LoraLoaderModelOnly' : diffusion ? 'LoraLoader' : 'LoraLoaderModelOnly'
+    // Krea2 and MOSS Image LoRAs carry diffusion_model keys only: never LoraLoader.
+    const modelOnly = spec.clipType === 'krea2' || spec.clipType === 'moss_image'
+    const fallback = modelOnly ? 'LoraLoaderModelOnly' : diffusion ? 'LoraLoader' : 'LoraLoaderModelOnly'
     const loader = !catalog || catalog.nodes.includes(preferred) ? preferred : catalog.nodes.includes(fallback) ? fallback : null
-    if (!loader) throw new HttpError(409, spec.clipType === 'krea2' ? 'Krea2 requires a model-only LoRA loader' : 'This ComfyUI has no LoRA loader')
+    if (!loader) throw new HttpError(409, spec.clipType === 'krea2' ? 'Krea2 requires a model-only LoRA loader' : spec.clipType === 'moss_image' ? 'MOSS Image requires a model-only LoRA loader' : 'This ComfyUI has no LoRA loader')
     loras.forEach((lora, i) => {
       const id = String(10 + i)
       model = node(id, loader, { model, lora_name: lora.name, strength_model: lora.weight, ...(loader === 'LoraLoader' ? { clip, strength_clip: lora.weight } : {}) })
@@ -356,7 +360,8 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   let sourcePixels = sourceName ? node('20', 'LoadImage', { image: sourceName }) : null
   if (refining && input.upscale_model && sourcePixels) sourcePixels = node('refineUpscale', 'ImageUpscaleWithModel', { image: sourcePixels, upscale_model: node('refineModel', 'UpscaleModelLoader', { model_name: input.upscale_model }) })
   const pixels = sourcePixels ? node('21', 'ImageScale', { image: sourcePixels, upscale_method: 'lanczos', width, height, crop: 'center' }) : null
-  const latent = pixels ? node('6', 'VAEEncode', { pixels, vae }) : node('6', 'EmptyLatentImage', { width, height, batch_size: 1 })
+  // MOSS Image decodes with the FLUX.2 VAE, whose latents have their own channels and scale.
+  const latent = pixels ? node('6', 'VAEEncode', { pixels, vae }) : node('6', s.preset === 'moss_image' ? 'EmptyFlux2LatentImage' : 'EmptyLatentImage', { width, height, batch_size: 1 })
   const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: sampling.steps, cfg: sampling.cfg, sampler_name: sampling.sampler, scheduler: sampling.scheduler, denoise })
   const images = node('8', 'VAEDecode', { samples, vae })
   node('9', 'SaveImage', { images, filename_prefix: 'agents/generated' })
@@ -471,7 +476,7 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   if (exact) {
     const spec = imagePresetSpec(preset)
     const required: [string, unknown, readonly string[]][] = [
-      ['model', configured.model, spec.clipType ? catalog.diffusionModels : catalog.checkpoints],
+      ['model', configured.model, presetModels(preset, catalog)],
       ...(spec.clipType ? [['encoder', configured.clip, catalog.clips], ['VAE', configured.vae, catalog.vaes]] as [string, unknown, readonly string[]][] : []),
       ['sampler', input.sampler, catalog.samplers], ['scheduler', input.scheduler, catalog.schedulers],
       ...configured.loras.map((l): [string, unknown, readonly string[]] => ['LoRA', l.name, catalog.loras]),

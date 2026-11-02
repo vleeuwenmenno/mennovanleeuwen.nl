@@ -284,6 +284,8 @@ export function ImageStudio({ threads, onBack, onOpenThread, onSettings, assist 
       if (Boolean(imagePresetSpec(patch.preset).clipType) !== Boolean(imagePresetSpec(f.preset).clipType)) next = { ...f, model: '', clip: '', vae: '', checkpointVae: '', ...patch }
       next.variant = presetRules(patch.preset).variants ? (isTurbo(patch.preset) ? 'turbo' : 'raw') : 'auto'
       if (!presetRules(patch.preset).embeddings) next.embeddings = []
+      // An untouched hires strength follows the workflow's own default (MOSS Image: 0.6).
+      if (next.hires.denoise === presetRules(f.preset).hiresDenoise) next.hires = { ...next.hires, denoise: presetRules(patch.preset).hiresDenoise }
     }
     if (patch.model !== undefined && next.variant === 'auto') next.preset = variantPreset(next.preset, 'auto', patch.model)
     return next
@@ -410,7 +412,8 @@ function ModelSection({ form, catalog, details, resolved, model, offer, onAccept
     if (!row) return
     const checkpoint = row.category === 'checkpoints'
     const f = row.family
-    const preset: ImagePreset = f && f !== 'unsupported' && f !== 'krea2' && Boolean(imagePresetSpec(f).clipType) !== checkpoint ? f
+    // MOSS Image runs as one workflow whether the file sits in diffusion_models or checkpoints.
+    const preset: ImagePreset = f === 'moss_image' ? 'moss_image' : f && f !== 'unsupported' && f !== 'krea2' && Boolean(imagePresetSpec(f).clipType) !== checkpoint ? f
       : f === 'krea2' ? (form.preset.startsWith('krea2') ? form.preset : 'krea2_turbo')
       : checkpoint ? (imagePresetSpec(form.preset).clipType ? 'sdxl' : form.preset) : imagePresetSpec(form.preset).clipType ? form.preset : 'z_image'
     onAssets({ preset, model: name, ...(preset !== form.preset ? { clip: '', vae: '' } : {}) })

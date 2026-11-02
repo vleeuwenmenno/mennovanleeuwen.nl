@@ -2,7 +2,7 @@ import { getModelDetails, getModelMetadata, saveImageIntelSettings, type ModelCa
 import { recommendedLine, recommendedSourceLabel, type Recommended } from '../data/modelFamilies'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type KeyboardEvent, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { IMAGE_PRESETS, imagePresetSpec, resolveImageAssets, recommendedImageSampling, type ImageAssetCatalog, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
+import { IMAGE_PRESETS, imagePresetSpec, presetModels, resolveImageAssets, recommendedImageSampling, type ImageAssetCatalog, modelAssets, modelFolders, visibleModelAssets, type ImagePreset, type ModelFolder } from '../data/imageModels'
 import { useIsMobile } from '../os/useIsMobile'
 import { FileIcon, FolderIcon } from './Files'
 
@@ -285,7 +285,8 @@ export function ImageModelFields({ value, catalog, onChange, disabled, loading, 
   const field = (name: Field, label: string, category: ModelCategory, values: string[]) => <AssetField field={name} label={label} category={category} values={values} value={value[name]} selection={resolved?.selection[name]} onChange={onChange} disabled={disabled} loading={loading} error={error} onRefresh={onRefresh} extra={extra?.(name)} />
   return <div className="image-config-fields">
     <div className="image-config-field"><div className="image-config-label"><strong>Workflow</strong>{extra?.('preset')}</div><PresetPicker value={value.preset} onChange={(preset) => onChange({ preset })} disabled={disabled} /></div>
-    {field('model', diffusion ? 'Diffusion model' : 'Checkpoint', diffusion ? 'diffusion_models' : 'checkpoints', (diffusion ? catalog?.diffusionModels : catalog?.checkpoints) ?? [])}
+    {/* MOSS Image also runs diffusion-only files from models/checkpoints, so its list joins both folders. */}
+    {field('model', diffusion ? 'Diffusion model' : 'Checkpoint', diffusion ? 'diffusion_models' : 'checkpoints', catalog ? presetModels(value.preset, catalog) : [])}
     {diffusion && <>{field('clip', `Text encoder (${imagePresetSpec(value.preset).clipType})`, 'text_encoders', catalog?.clips ?? [])}{field('vae', 'VAE', 'vae', catalog?.vaes ?? [])}</>}
     <div className="image-auto-summary">
       <span className="muted" title="Ask the agent to tune a single generation; saved defaults stay unchanged.">Recommended sampling: {sampling.steps} steps · CFG {sampling.cfg} · {sampling.sampler || 'no supported sampler'} / {sampling.scheduler || 'no supported scheduler'}</span>

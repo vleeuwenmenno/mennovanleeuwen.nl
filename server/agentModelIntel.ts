@@ -451,6 +451,8 @@ export function fitSize(width: number, height: number) {
 const presetFor = (family: FamilyId | null, category: Category): ImagePreset | null => {
   const preset = family ? MODEL_FAMILIES[family].preset : null
   if (!preset) return category === 'checkpoints' ? 'sdxl' : null
+  // MOSS Image files in models/checkpoints carry the diffusion model only; both folders run moss_image.
+  if (preset === 'moss_image') return preset
   // A checkpoint runs a checkpoint preset; a separate diffusion model runs a component preset.
   return (category === 'diffusionModels') === Boolean(imagePresetSpec(preset).clipType) ? preset : null
 }
