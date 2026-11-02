@@ -4083,6 +4083,8 @@ lattice. They reflow when the screen shrinks; when they cannot fit, the desktop 
 instead of piling them on top of one another. Icons use 100 × 120 px cells on the same lattice,
 avoid visible widgets, and also overflow downwards. Names show up to three lines within each
 cell; the full name remains in the tooltip and accessible name. Shift+Arrow moves a selected icon.
+Explicit icon and widget moves retain their row in the scrollable overflow area. Marquee selection
+uses the same content coordinates, so enclosing visible icons works after scrolling.
 On desktop, turning avoidance off preserves manual widget overlaps; icons still avoid their rectangles.
 Automatic fitting never overwrites synced preferred widget positions. The last manually moved
 widget retains local priority, separately for each account, including after reload.

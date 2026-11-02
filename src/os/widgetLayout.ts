@@ -22,7 +22,7 @@ export function arrangeDesktop(items: DesktopItem[], width: number, height: numb
     const outer = mobile ? mobileWidgetEnvelope(item, item.drawnW, item.drawnH) : widgetEnvelope(item, item.drawnW, item.drawnH)
     const dx = item.x - outer.x
     const dy = item.y - outer.y
-    const r = freeHomeRect(outer, occupied, width, height, 20, 20, mobile)
+    const r = freeHomeRect(outer, occupied, width, height, 20, 20, mobile || item.pid === priority)
     occupied.push(r)
     result.set(item.pid, { x: r.x + dx, y: r.y + dy, w: item.w, h: item.h })
   }

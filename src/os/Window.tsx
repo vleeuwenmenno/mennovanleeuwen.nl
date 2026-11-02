@@ -412,10 +412,10 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
           wm.setGeometry(win.pid, { x: d.x, y: d.y, w: d.w, h: d.h, snap: undefined, restore: undefined, maximized: false })
         }
       }
-      // A note stays whole on the screen (fitNote); other windows may hang off it a little.
+      // Notes move in scroll-content coordinates: fit horizontally, keep their requested Y.
       const { x, y } =
         chrome === 'note'
-          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, viewW(), viewH(), window.innerWidth < 720, sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
+          ? fitNote({ x: d.x + dx, y: d.y + dy, w: d.w, h: d.h }, viewW(), viewH(), true, sectionRef.current?.offsetHeight ?? drawnHeight(win.pid))
           : { x: Math.min(Math.max(d.x + dx, -d.w + 120), viewW() - 120), y: Math.min(Math.max(d.y + dy, TOP_BAR), viewH() - 60) }
       wm.setGeometry(win.pid, { x, y })
       // Over a workspace number in the top bar: dropping there moves the window to it.

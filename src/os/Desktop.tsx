@@ -30,7 +30,7 @@ import { drawnHeight, drawnWidth, useWM, type AppId } from './wm'
 import { homeSwipe, freeHomeRect, iconLayout, ICON_W, ICON_H, HOME_LEFT, HOME_TOP, type HomeRect } from './homeLayout'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
 import { useIsMobile } from './useIsMobile'
-import { toUi, uiPoint, viewH, viewW } from './uiScale'
+import { uiPoint, viewH, viewW } from './uiScale'
 
 // A desktop that behaves like one: click to select, Ctrl/Shift-click to add, drag a marquee over
 // empty space, drag icons around (they snap to a grid), double-click or Enter to open, F2 to
@@ -112,7 +112,7 @@ const pileOffset = (dx: number, dy: number, k: number) => {
   return { x: shrink(dx), y: shrink(dy), tilt: k ? (k % 2 ? 1 : -1) * 1.5 : 0 }
 }
 
-/** Nearest free cell to a pixel position, spiralling outwards from the closest one. */
+/** Explicit moves keep their requested overflow row, then find a nearby free cell. */
 function snap(x: number, y: number, taken: Set<string>, obstacles: HomeRect[] = []): IconPos {
   const { cols } = gridSize()
   const occupied = [...obstacles, ...[...taken].map((k) => {
@@ -120,7 +120,7 @@ function snap(x: number, y: number, taken: Set<string>, obstacles: HomeRect[] = 
     return { ...toPx({ col, row }), w: CELL_W, h: CELL_H }
   })]
   const r = freeHomeRect({ x, y, w: CELL_W, h: CELL_H }, occupied,
-    LEFT * 2 + cols * CELL_W, viewH(), CELL_W, CELL_H)
+    LEFT * 2 + cols * CELL_W, viewH(), CELL_W, CELL_H, true)
   return { col: Math.round((rightX() - r.x) / CELL_W), row: Math.round((r.y - TOP) / CELL_H) }
 }
 
@@ -304,6 +304,13 @@ export function Desktop() {
     setSelected(new Set())
   }
 
+  /** Pointer positions in the same scroll-content space as icon and marquee geometry. */
+  const contentPoint = (e: { clientX: number; clientY: number }) => {
+    const p = uiPoint(e)
+    const scroller = surface.current?.parentElement
+    return { x: p.x + (scroller?.scrollLeft ?? 0), y: p.y + (scroller?.scrollTop ?? 0) }
+  }
+
   // --- pointer handling -----------------------------------------------------------------
 
   function onIconPointerDown(e: ReactPointerEvent, icon: DesktopIcon) {
@@ -323,7 +330,8 @@ export function Desktop() {
     if (additive && !selected.has(icon.id)) setSelected(new Set(ids))
     // The grabbed icon first: it tops the pile and lands nearest the drop.
     ids = [icon.id, ...ids.filter((id) => id !== icon.id)]
-    drag.current = { kind: 'icons', startX: toUi(e.clientX), startY: toUi(e.clientY), ids, moved: false, clickedId: icon.id, additive }
+    const at = contentPoint(e)
+    drag.current = { kind: 'icons', startX: at.x, startY: at.y, ids, moved: false, clickedId: icon.id, additive }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   }
 
@@ -333,7 +341,8 @@ export function Desktop() {
     setRenaming(null)
     const base = e.shiftKey || e.ctrlKey || e.metaKey ? new Set(selected) : new Set<string>()
     setSelected(base)
-    drag.current = { kind: 'marquee', startX: toUi(e.clientX), startY: toUi(e.clientY), base }
+    const at = contentPoint(e)
+    drag.current = { kind: 'marquee', startX: at.x, startY: at.y, base }
     surface.current?.setPointerCapture(e.pointerId)
   }
 
@@ -341,7 +350,7 @@ export function Desktop() {
     const d = drag.current
     if (!d) return
     // Page pixels, as the icons are placed in (the UI scale, uiScale.ts).
-    const { x: px, y: py } = uiPoint(e)
+    const { x: px, y: py } = contentPoint(e)
     const dx = px - d.startX
     const dy = py - d.startY
     if (d.kind === 'icons') {
@@ -457,7 +466,7 @@ export function Desktop() {
     const taken = new Set(visible.map((i) => key(positions[i.id])))
     const next: Record<string, IconPos> = {}
     landed.forEach((l, k) => {
-      const cell = snap(at.x - CELL_W / 2 - k * CELL_W, at.y - 30, taken, obstacles)
+      const cell = snap(at.x - CELL_W / 2 - k * CELL_W, at.y + (surface.current?.parentElement?.scrollTop ?? 0) - 30, taken, obstacles)
       taken.add(key(cell))
       next[l.launcherId ? `launcher:${l.launcherId}` : `sf:${l.path.split('/').pop()}`] = cell
     })
@@ -671,7 +680,7 @@ export function Desktop() {
       onContextMenu={(e) => {
         if (e.target !== surface.current) return
         setSelected(new Set())
-        openContextMenu(e, desktopMenu(uiPoint(e)))
+        openContextMenu(e, desktopMenu(contentPoint(e)))
       }}
     >
       {visible.map((icon) => {

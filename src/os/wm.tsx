@@ -988,7 +988,8 @@ export function WindowManagerProvider({
     // Pids are session-local. Resolve the remembered entry only if it still exists; a removed
     // widget's priority must not attach to a reused pid or to a new placement of the same widget.
     const priorityPid = notes.find((w) => w.app === 'widget' ? !!priorityWidgetId && w.props.id === priorityWidgetId : layoutPriority === `note:${w.app}`)?.pid
-    const positions = arrangeDesktop(notes.map((w) => ({ ...w, drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid, state.phone)
+    // A viewport fit may clamp state geometry; explicit overflow placement keeps its canonical Y.
+    const positions = arrangeDesktop(notes.map((w) => ({ ...w, ...(w.pid === priorityPid && w.want ? { y: w.want.y } : {}), drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid, state.phone)
     return state.windows.map((w) => positions.has(w.pid) ? { ...w, ...positions.get(w.pid)! } : w)
   }, [state.windows, state.phone, avoidOverlap, layoutPriority, priorityWidgetId])
 
