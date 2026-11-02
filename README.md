@@ -115,10 +115,9 @@ embedded user-agents; Google refuses it too). When the cloud desktop navigates t
    page can read, or in the session cookie.
 
 **Native Google sign-in (the phone's own account picker).** For servers the app was built to trust,
-"Sign in with Google" can use Android's Credential Manager instead of the browser: a dialog names
-the server and what it receives (Google name, email address, picture, a stable account id), then
-Android's Google account chooser opens with the accounts on the phone (and "add account"); there is
-no automatic choice. It needs, together:
+"Sign in with Google" opens Android's Google account chooser (Credential Manager) straight away,
+with the accounts on the phone and "add account"; Google's sheet names the app ("to continue to
+MvL OS") and there is no automatic choice. It needs, together:
 
 - the server's origin in the APK's list (gradle property `mvlosNativeGoogleOrigins`, default
   `https://mennovanleeuwen.nl`). Any other server keeps the browser flow, whatever it announces;
@@ -140,8 +139,12 @@ usual Google sign-in rules (the account by `sub`, never by email; bans; registra
 admin stays admin) and answers with session cookies like the browser hand-off. A server that relays
 another server's challenge gets a token naming itself, which the other server refuses; a token
 without its live challenge is worth nothing; every revocation (sign out everywhere, ban, deletion,
-removing a sign-in) drops the waiting challenges. Cancelling the picker does nothing more; if
-native sign-in fails, the app offers the browser as an explicit choice. Disconnect also clears the
+removing a sign-in) drops the waiting challenges. Nothing fails silently: Credential Manager
+reports both the person closing the chooser and Google Play services refusing the token after an
+account was chosen (status 16) as a "cancellation", so every outcome that doesn't sign in shows a
+dialog with a short code (for example `Cancellation: 16: …`, or the server's failed check such as
+`server: error, wrong authorized party`) and offers the browser. The server logs each refusal as
+one line naming the check, never the token or the account. Disconnect also clears the
 account picker's memory of the last account (not the Google consent).
 
 Linking another sign-in, connecting Google Calendar and allowing private repositories need
@@ -193,14 +196,14 @@ adb shell am start -n nl.mvlos.experiment/.LauncherActivity
 ```
 
 Alternatively transfer the debug APK to your phone and open it, allowing installation
-from that file app when Android asks. It appears as **MvL OS** (version 1.4), separately
+from that file app when Android asks. It appears as **MvL OS** (version 1.5), separately
 from the website/PWA. On this device needs no server: try local notes, Terminal and games.
 Uninstalling clears its local guest data; Android backup is disabled. Debug APKs are signed with
 the building machine's debug key (`~/.android/debug.keystore`): an APK built with another key
 can't update an installed one, so uninstall the old one first (that clears its guest data).
 `./gradlew testDebugUnitTest` runs the server address, navigation and cookie checks
-(`ServerUrlTest`, `CloudPolicyTest`, `CloudLoginCookiesTest`, `NativeGoogleTest`). `-PmvlosTest` builds an emulator
-test variant (version `1.4-test`) that also trusts user-installed CAs in the debuggable build and
+(`ServerUrlTest`, `CloudPolicyTest`, `CloudLoginCookiesTest`, `NativeGoogleTest`, `NativeGoogleErrorsTest`). `-PmvlosTest` builds an emulator
+test variant (version `1.5-test`) that also trusts user-installed CAs in the debuggable build and
 lets Chrome DevTools inspect the cloud WebView, for testing against a local HTTPS server with a
 test CA; never hand that build to users. Without the flag the APK trusts system CAs only.
 

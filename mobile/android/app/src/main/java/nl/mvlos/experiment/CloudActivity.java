@@ -154,7 +154,7 @@ public class CloudActivity extends AppCompatActivity {
         String next = checkedOrigin(intent.getStringExtra(EXTRA_ORIGIN));
         if (next != null && !next.equals(origin)) {
             origin = next;
-            authOp++;
+            newOp();
             freshStart = true;
             web.loadUrl(origin + "/");
         }
@@ -176,7 +176,8 @@ public class CloudActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        authOp++;
+        // This screen's answers stop counting; the latest attempt (shared) stays, so a late failure of it is handed over.
+        authOp = ++opSeq;
         if (web != null) {
             web.stopLoading();
             web.destroy();
@@ -201,7 +202,7 @@ public class CloudActivity extends AppCompatActivity {
 
     private void startLogin(String provider) {
         if (installingOp != 0) return;
-        final int op = ++authOp;
+        final int op = newOp();
         // A new sign-in replaces any browser sign-in still waiting: its return no longer counts,
         // also while this one is still asking the server what it supports.
         CloudLogin.clear(this);
@@ -214,7 +215,8 @@ public class CloudActivity extends AppCompatActivity {
                 switch (support) {
                     case SUPPORTED:
                         if ("google".equals(provider) && info.nativeGoogleClientId != null && NativeGoogle.allowedOrigin(server)) {
-                            askNativeGoogle(op, server, info.nativeGoogleClientId);
+                            // A server this build trusts: Google's own account chooser at once.
+                            nativeGoogle(op, server, info.nativeGoogleClientId);
                         } else {
                             openBrowser(CloudLogin.begin(this, server, provider));
                         }
@@ -240,25 +242,6 @@ public class CloudActivity extends AppCompatActivity {
 
     // ---- Native Google sign-in (Android's account picker) ----
 
-    /**
-     * Asks first, naming the server: the Google sheet itself only shows the Google project's name.
-     * Choosing an account is the deliberate step; the browser stays one tap away.
-     */
-    private void askNativeGoogle(int op, String server, String clientId) {
-        // This replaces any browser sign-in still waiting: its return no longer counts.
-        CloudLogin.clear(this);
-        new AlertDialog.Builder(this)
-            .setTitle(R.string.native_google_title)
-            .setMessage(getString(R.string.native_google_body, server))
-            .setPositiveButton(R.string.native_google_choose, (d, w) -> nativeGoogle(op, server, clientId))
-            .setNeutralButton(R.string.native_google_browser, (d, w) -> {
-                if (op == authOp && server.equals(origin)) openBrowser(CloudLogin.begin(this, server, "google"));
-            })
-            .setNegativeButton(android.R.string.cancel, (d, w) -> authOp++)
-            .setOnCancelListener(d -> authOp++)
-            .show();
-    }
-
     private boolean current(int op, String server) {
         return !isFinishing() && !isDestroyed() && op == authOp && server.equals(origin);
     }
@@ -271,7 +254,7 @@ public class CloudActivity extends AppCompatActivity {
                 if (!current(op, server)) return;
                 if (challenge == null) {
                     progress.setVisibility(View.GONE);
-                    offerBrowser(op, server, getString(R.string.native_google_failed));
+                    offerBrowser(op, server, getString(R.string.native_google_failed_code, "server: no challenge"));
                     return;
                 }
                 // The account chooser every time (no automatic choice), with every Google account on
@@ -285,27 +268,40 @@ public class CloudActivity extends AppCompatActivity {
                     new androidx.credentials.CredentialManagerCallback<androidx.credentials.GetCredentialResponse, androidx.credentials.exceptions.GetCredentialException>() {
                         @Override
                         public void onResult(androidx.credentials.GetCredentialResponse result) {
-                            if (!current(op, server)) return;
+                            if (!current(op, server)) {
+                                dropped(op, server, "the account was chosen after the screen closed");
+                                return;
+                            }
                             String idToken = googleIdToken(result.getCredential());
                             if (idToken == null) {
                                 progress.setVisibility(View.GONE);
-                                offerBrowser(op, server, getString(R.string.native_google_failed));
+                                offerBrowser(op, server, getString(R.string.native_google_failed_code, "no Google ID token"));
                                 return;
                             }
+                            android.util.Log.i(TAG, "native sign-in: account chosen, redeeming");
                             redeemNative(op, server, challenge, idToken);
                         }
 
                         @Override
                         public void onError(androidx.credentials.exceptions.GetCredentialException e) {
-                            progress.setVisibility(View.GONE);
-                            if (!current(op, server)) return;
-                            // Cancelled: the person said no; nothing else opens by itself.
-                            if (e instanceof androidx.credentials.exceptions.GetCredentialCancellationException) {
-                                authOp++;
+                            String name = e.getClass().getSimpleName();
+                            String code = NativeGoogleErrors.code(name, e.getMessage());
+                            android.util.Log.w(TAG, "native sign-in failed: " + NativeGoogleErrors.logCode(name, e.getMessage()));
+                            if (!current(op, server)) {
+                                dropped(op, server, code);
                                 return;
                             }
-                            offerBrowser(op, server, getString(e instanceof androidx.credentials.exceptions.NoCredentialException
-                                ? R.string.native_google_no_account : R.string.native_google_failed));
+                            progress.setVisibility(View.GONE);
+                            // Never silent: a refusal from Google after an account was chosen also arrives
+                            // as a "cancellation" (status 16). Only the person closing the chooser gets the
+                            // softer wording; both say it didn't sign in and offer the browser.
+                            if (NativeGoogleErrors.userCancelled(name, e.getMessage())) {
+                                offerBrowser(op, server, getString(R.string.native_google_cancelled));
+                            } else if (e instanceof androidx.credentials.exceptions.NoCredentialException) {
+                                offerBrowser(op, server, getString(R.string.native_google_no_account));
+                            } else {
+                                offerBrowser(op, server, getString(R.string.native_google_failed_code, code));
+                            }
                         }
                     });
             });
@@ -330,20 +326,90 @@ public class CloudActivity extends AppCompatActivity {
         new Thread(() -> {
             NativeGoogle.Result r = NativeGoogle.redeem(server, challenge, idToken, oldCookie);
             runOnUiThread(() -> {
-                if (!current(op, server)) return;
+                if (!current(op, server)) {
+                    dropped(op, server, r.cookies != null ? "signed in after the screen closed; sign in again" : "server: " + r.error);
+                    return;
+                }
                 if (r.cookies == null) {
                     progress.setVisibility(View.GONE);
+                    android.util.Log.w(TAG, "native sign-in refused by the server: " + r.error + (r.detail != null ? " (" + r.detail + ")" : ""));
                     // The server's own refusals (banned, sign-up closed or full) are final; other failures can try the browser.
                     if ("banned".equals(r.error) || "closed".equals(r.error) || "full".equals(r.error)) {
                         message(R.string.login_failed_title, errorText(r.error, r.reason));
                     } else {
-                        offerBrowser(op, server, getString(R.string.native_google_failed));
+                        offerBrowser(op, server, getString(R.string.native_google_failed_code, "server: " + r.error + (r.detail != null ? ", " + r.detail : "")));
                     }
                     return;
                 }
                 install(server, r.cookies, 0, op);
             });
         }).start();
+    }
+
+    private static final String TAG = "MvLOS";
+    /** The sign-in that was current when this screen was destroyed: its late answer is not a superseded one. */
+    /**
+     * Operation numbers are unique across screens (a recreated screen counts on), and the latest
+     * attempt or cancel anywhere is remembered: only its late answer is handed over, and only while
+     * no newer attempt has started.
+     */
+    private static int opSeq;
+    private static int latestAttempt;
+    private static int noticeOp;
+
+    /** A new sign-in attempt (or a cancel): every older answer stops counting, on every screen. */
+    private int newOp() {
+        authOp = ++opSeq;
+        latestAttempt = authOp;
+        return authOp;
+    }
+    private boolean resumed;
+    /**
+     * A sign-in outcome that arrived after its screen was gone (same process): for which server and
+     * what to say. Shown by the next screen of that server, with the browser offered; forgotten when
+     * a sign-in succeeds or another server is opened.
+     */
+    private static String noticeOrigin;
+    private static String noticeText;
+
+    /**
+     * An answer for a sign-in that no longer counts. Replaced by a newer attempt: nothing to say
+     * (that one reports for itself). The screen went away while it was the current one: hand the
+     * failure to the next screen, so it is never just lost.
+     */
+    private void dropped(int op, String server, String what) {
+        boolean gone = (isDestroyed() || isFinishing()) && op == latestAttempt;
+        android.util.Log.w(TAG, "native sign-in answer dropped (" + (gone ? "screen gone" : "replaced") + ")");
+        if (!gone) return;
+        noticeOrigin = server;
+        noticeOp = op;
+        noticeText = getString(R.string.native_google_failed_code, what);
+        CloudActivity next = live.get();
+        if (next != null && next != this && next.resumed) next.showNotice();
+    }
+
+    /** Shows a handed-over failure if it is for this screen's server, with the browser offered. */
+    private void showNotice() {
+        if (noticeText == null || web == null || origin == null) return;
+        String text = noticeText;
+        // Not for this server, or a newer attempt has started since: it would only get in the way.
+        boolean show = origin.equals(noticeOrigin) && noticeOp == latestAttempt && installingOp == 0;
+        noticeText = null;
+        noticeOrigin = null;
+        if (show) offerBrowser(newOp(), origin, text);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        showNotice();
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        super.onPause();
     }
 
     /** Native sign-in didn't work: say so, and offer the browser as an explicit choice. */
@@ -354,7 +420,7 @@ public class CloudActivity extends AppCompatActivity {
             .setPositiveButton(R.string.native_google_browser, (d, w) -> {
                 if (op == authOp && server.equals(origin)) openBrowser(CloudLogin.begin(this, server, "google"));
             })
-            .setNegativeButton(android.R.string.cancel, (d, w) -> authOp++)
+            .setNegativeButton(android.R.string.cancel, (d, w) -> newOp())
             .show();
     }
 
@@ -405,7 +471,7 @@ public class CloudActivity extends AppCompatActivity {
             return;
         }
         // The return is a sign-in of its own now: anything older no longer lands.
-        final int op = ++authOp;
+        final int op = newOp();
         final String verifier = pending.verifier;
         final String oldCookie = CookieManager.getInstance().getCookie(server + "/");
         progress.setVisibility(View.VISIBLE);
@@ -437,6 +503,8 @@ public class CloudActivity extends AppCompatActivity {
         }
         if (i == cookies.size()) {
             installingOp = 0;
+            noticeText = null;
+            noticeOrigin = null;
             CookieManager.getInstance().flush();
             errorView.setVisibility(View.GONE);
             freshStart = true;
