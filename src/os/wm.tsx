@@ -1,5 +1,6 @@
+import { HOME_LEFT, HOME_TOP, HOME_GRID, mobileHomeGeometry } from './homeLayout'
 import { arrangeDesktop } from './widgetLayout'
-import { avoidWidgetOverlap, desktopLayoutPriority } from './widgetLayoutPrefs'
+import { avoidWidgetOverlap, desktopLayoutPriority, mobileLayoutPriority } from './widgetLayoutPrefs'
 import { snapReserve } from './dockPrefs'
 import { viewH, viewW } from './uiScale'
 import { persistentProps } from './windowProps'
@@ -520,10 +521,12 @@ const sameGeometry = (a: Geometry | undefined, b: Geometry) => !!a && Math.round
  * Where a widget from the set goes on this screen. A big screen puts it where it was put, moved
  * along with the screen's size when that was another one (a widget near the right edge stays
  * near the right edge), and fitted on after that. One placed on a phone has no place on a big
- * screen yet: it gets the usual spot for a new widget. A phone stacks them in a column anyway.
+ * screen yet: it gets the usual spot for a new widget. Mobile has independent grid geometry;
+ * older column layouts use their saved order for the initial grid rows.
  */
 function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: number) => Geometry): Geometry {
-  if (phone || p.screenUnknown) return { x: p.x, y: p.y, w: p.w, h: p.h }
+  if (phone) return mobileHomeGeometry(p, i, viewW())
+  if (p.screenUnknown) return { x: p.x, y: p.y, w: p.w, h: p.h }
   if (placedOnPhone(p)) return place(i)
   const vw = viewW()
   const vh = viewH()
@@ -539,6 +542,7 @@ function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: nu
 /** The widgets of the set that this build knows, as this screen shows them. */
 function widgetsShown(all: WidgetSet, phone: boolean, known: (kind: string) => boolean, place: (n: number) => Geometry): WidgetShown[] {
   return liveWidgets(all)
+    .sort((a, b) => phone ? (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id) : 0)
     .filter((p) => known(p.kind))
     .map((p, i) => ({ id: p.id, kind: p.kind, g: widgetGeometry(p, i, phone, place), minimized: !!p.minimized, stack: p.stack }))
 }
@@ -899,11 +903,10 @@ export function WindowManagerProvider({
       const entry = entriesOf(all, id)[0]
       const rec = entry?.place
       const round = { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw, vh, phone: state.phone }
-      if (rec && state.phone) {
-        // Mobile geometry stays stable while its independent column order changes.
-        if (rec.stack === w.stack && !!rec.minimized === w.minimized) continue
-        put[entry.key] = { ...rec, stack: w.stack, minimized: w.minimized || undefined, at: nextAt(rec) }
-      } else put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round, stack: w.stack, minimized: w.minimized || undefined, at: nextAt(rec) }
+      put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round,
+        ...(state.phone ? { homeGrid: true } : {}), stack: w.stack,
+        minimized: w.minimized || undefined, at: nextAt(rec) }
+
       applied.current.delete(id)
     }
     for (const id of before.keys()) {
@@ -967,20 +970,25 @@ export function WindowManagerProvider({
   // Projection only: persistence and remote reconciliation above always see state.windows.
   // A manual move/resize owns its displayed position; neighbours are only nudged in this view.
   const avoidOverlap = avoidWidgetOverlap.use()
-  const layoutPriority = desktopLayoutPriority.use()
+  const desktopPriority = desktopLayoutPriority.use()
+  const mobilePriority = mobileLayoutPriority.use()
+  const layoutPriority = state.phone ? mobilePriority : desktopPriority
   // Watch only the resolved identity: replacing an entry can leave every window's geometry
   // unchanged, while a pointer move should not add a second render for each placement save.
-  const priorityWidgetId = useSyncExternalStore(widgetPlaces.subscribe, () =>
-    layoutPriority?.startsWith('widget:') ? widgetPlaces.get().places[layoutPriority.slice(7)]?.id : undefined,
+  const priorityWidgetId = useSyncExternalStore((notify) => {
+    const a = widgetPlaces.subscribe(notify), b = mobileWidgetPlaces.subscribe(notify)
+    return () => { a(); b() }
+  }, () =>
+    layoutPriority?.startsWith('widget:') ? screenWidgets(state.phone).places[layoutPriority.slice(7)]?.id : undefined,
   )
   const displayWindows = useMemo(() => {
-    if (state.phone || !avoidOverlap) return state.windows
+    if (!state.phone && !avoidOverlap) return state.windows
     const notes = state.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized)
       .sort((a, b) => (a.props.id ?? a.app).localeCompare(b.props.id ?? b.app) || a.pid - b.pid)
     // Pids are session-local. Resolve the remembered entry only if it still exists; a removed
     // widget's priority must not attach to a reused pid or to a new placement of the same widget.
     const priorityPid = notes.find((w) => w.app === 'widget' ? !!priorityWidgetId && w.props.id === priorityWidgetId : layoutPriority === `note:${w.app}`)?.pid
-    const positions = arrangeDesktop(notes.map((w) => ({ ...w, drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid)
+    const positions = arrangeDesktop(notes.map((w) => ({ ...w, drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid, state.phone)
     return state.windows.map((w) => positions.has(w.pid) ? { ...w, ...positions.get(w.pid)! } : w)
   }, [state.windows, state.phone, avoidOverlap, layoutPriority, priorityWidgetId])
 
@@ -1013,13 +1021,20 @@ export function WindowManagerProvider({
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry, { automatic = false } = {}) => {
         const shown = displayWindows.find((w) => w.pid === pid)
-        if (shown && NOTE_APPS.has(shown.app) && !state.phone) {
+        if (shown && NOTE_APPS.has(shown.app)) {
           if (!automatic) {
-            const entry = shown.app === 'widget' ? entriesOf(widgetPlaces.get(), shown.props.id ?? '')[0] : undefined
-            desktopLayoutPriority.set(shown.app === 'widget' ? (entry ? `widget:${entry.key}` : null) : `note:${shown.app}`)
+            const entry = shown.app === 'widget' ? entriesOf(screenWidgets(state.phone), shown.props.id ?? '')[0] : undefined
+            ;(state.phone ? mobileLayoutPriority : desktopLayoutPriority).set(shown.app === 'widget' ? (entry ? `widget:${entry.key}` : null) : `note:${shown.app}`)
           }
           // Resizing a nudged note keeps its visible origin; only this note becomes canonical.
           geometry = { x: shown.x, y: shown.y, w: shown.w, h: shown.h, ...geometry }
+        }
+        if (shown && NOTE_APPS.has(shown.app) && state.phone && !automatic) {
+          const snap = (n: number, origin: number) => origin + Math.round((n - origin) / HOME_GRID) * HOME_GRID
+          geometry = { ...geometry,
+            ...(geometry.x !== undefined ? { x: Math.max(HOME_LEFT, snap(geometry.x, HOME_LEFT)) } : {}),
+            ...(geometry.y !== undefined ? { y: Math.max(HOME_TOP, snap(geometry.y, HOME_TOP)) } : {}),
+          }
         }
         dispatch({ type: 'setGeometry', pid, geometry })
       },

@@ -686,6 +686,12 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
   const remote = wp.changeSet(mobile, { two: { ...mobile.places.two, stack: 0, at: 2 } })
   check('mobile: mobile reorder and removal survive merging in either order',
     JSON.stringify(wp.mergeSets(mobile, remote)) === JSON.stringify(wp.mergeSets(remote, mobile)) && !wp.mergeSets(mobile, remote).places.one && wp.mergeSets(mobile, remote).places.two.stack === 0)
+  const migrated = wp.migrateMobileWidgets(desktop, 390, 780)
+  const afterRemoval = wp.changeSet(migrated, {}, ['one'])
+  check('mobile: first-edit migration freezes rows before deletion without changing desktop', migrated.places.two.homeGrid === true && afterRemoval.places.two.y === migrated.places.two.y && JSON.stringify(desktop) === before)
+  const moved = wp.normalizeSet({ ...mobile, places: { ...mobile.places, two: { ...mobile.places.two, homeGrid: true, x: 54, y: 160, phone: true, at: 3 } } })
+  const merged = wp.mergeSets(mobile, moved)
+  check('mobile: grid coordinates and marker survive normalization and merging', merged.places.two.homeGrid === true && merged.places.two.x === 54 && merged.places.two.y === 160 && merged.places.two.phone === true)
   check('mobile: switching back selects untouched desktop', wp.widgetsForScreen(desktop, mobile, false) === desktop)
 }
 

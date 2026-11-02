@@ -22,3 +22,16 @@
   .desk-scroll .windows { padding-bottom: calc(160px + var(--sab)); }
   .desk-scroll:has(.window:not(.chrome-note):not(.is-min):not(.is-away)) .home-pages { display: none; }
 }
+@media (max-width: 719px) {
+  :root .desk.is-home .desk-icon { display: flex; touch-action: none; }
+  :root .desk-scroll .windows { display: block; padding: 0; }
+  :root .desk-scroll .window.chrome-note {
+    position: absolute; left: var(--home-x) !important; top: var(--home-y) !important;
+    width: var(--home-w) !important; transform: none;
+  }
+  :root .desk-scroll .window.chrome-note .note-grip { touch-action: none; }
+  :root .desk-scroll:not(.is-notes-hidden) > .desk { pointer-events: auto; }
+}
+/* Only home items travel with this scroller. App controls stay in viewport coordinates. */
+:root .desk-scroll .window:not(.chrome-note) { position: fixed; }
+:root .desk-scroll, :root .desk { touch-action: pan-y; }

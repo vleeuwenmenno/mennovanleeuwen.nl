@@ -1,3 +1,4 @@
+import { mobileHomeGeometry } from './homeLayout'
 import { synced } from './synced'
 import { viewH, viewW } from './uiScale'
 
@@ -31,6 +32,8 @@ export type WidgetPlace = {
   screenUnknown?: boolean
   /** Screen class is independent of logical dimensions at a high UI scale. Absent in old saves. */
   phone?: boolean
+  /** Mobile free placement; absent on older column layouts, whose stack order is migrated. */
+  homeGrid?: boolean
   vw: number
   vh: number
   /** Its place in the phone layout's column, once moved there by hand. */
@@ -57,6 +60,7 @@ function place(id: string, raw: Partial<WidgetPlace>): WidgetPlace {
     h: num(raw.h, 260),
     ...(raw.screenUnknown ? { screenUnknown: true } : {}),
     ...(typeof raw.phone === 'boolean' ? { phone: raw.phone } : {}),
+    ...(raw.homeGrid ? { homeGrid: true } : {}),
     vw: num(raw.vw),
     vh: num(raw.vh),
     ...(typeof raw.stack === 'number' ? { stack: raw.stack } : {}),
@@ -228,6 +232,15 @@ export const widgetsForScreen = (desktop: WidgetSet, mobile: WidgetSet | null, p
   phone ? mobile ?? desktop : desktop
 export const screenWidgets = (phone: boolean): WidgetSet => widgetsForScreen(widgetPlaces.get(), mobileWidgetPlaces.get(), phone)
 export function changeScreenWidgets(phone: boolean, fn: (set: WidgetSet) => WidgetSet) {
-  if (phone) mobileWidgetPlaces.set((current) => fn(current ?? widgetPlaces.get()))
+  if (phone) mobileWidgetPlaces.set((current) => fn(migrateMobileWidgets(current ?? widgetPlaces.get(), viewW(), viewH())))
   else widgetPlaces.set(fn)
+}
+
+/** Freeze the old column's ordered starting coordinates on first edit, without touching its source.
+ * Otherwise deleting an earlier legacy entry would change every later entry's row on reload. */
+export function migrateMobileWidgets(set: WidgetSet, width: number, height: number): WidgetSet {
+  const ordered = Object.entries(set.places).sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
+  return { ...set, places: Object.fromEntries(ordered.map(([key, p], index) => [key, p.homeGrid ? p : {
+    ...p, ...mobileHomeGeometry(p, index, width), homeGrid: true, phone: true, vw: width, vh: height, at: nextAt(p),
+  }])) }
 }

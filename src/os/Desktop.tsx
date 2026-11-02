@@ -25,7 +25,7 @@ import { cancelTouchMenu, closeContextMenu, openContextMenu, type MenuItem } fro
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { openLink } from '../data/links'
 import { useSwing } from './swing'
-import { widgetEnvelope } from './widgetLayout'
+import { mobileWidgetEnvelope, widgetEnvelope } from './widgetLayout'
 import { drawnHeight, drawnWidth, useWM, type AppId } from './wm'
 import { homeSwipe, freeHomeRect, iconLayout, ICON_W, ICON_H, HOME_LEFT, HOME_TOP, type HomeRect } from './homeLayout'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
@@ -136,7 +136,7 @@ export function Desktop() {
   // otherwise change the order of hooks.
   const mobile = useIsMobile()
   const hidden = notesHidden.use()
-  const phoneGrid = mobile && hidden
+  const phoneGrid = mobile
   const suppressTap = useRef(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [offset, setOffset] = useState({ dx: 0, dy: 0 })
@@ -226,7 +226,7 @@ export function Desktop() {
   // The site's own icons stay unless switched off (then the desktop is just the Seafile Desktop folder and launchers).
   const siteShown = !seafileDesktop || siteIcons
   const visible = [...(siteShown ? DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)) : []), ...sfIcons, ...officeIcons, ...linkIcons]
-  const obstacles = mobile || hidden ? [] : wm.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized).map((w) => widgetEnvelope(w, drawnWidth(w.pid), drawnHeight(w.pid)))
+  const obstacles = hidden ? [] : wm.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized).map((w) => mobile ? mobileWidgetEnvelope(w, drawnWidth(w.pid), drawnHeight(w.pid)) : widgetEnvelope(w, drawnWidth(w.pid), drawnHeight(w.pid)))
   const obstacleKey = JSON.stringify(obstacles)
   const storedPositions = mobile ? desk.mobilePositions ?? desk.positions : desk.positions
   const positions = useMemo(() => iconLayout(visible.map((i) => i.id), storedPositions, viewW(), viewH(), obstacles), [visible.map((i) => i.id).join(), storedPositions, viewport, obstacleKey])
@@ -240,7 +240,7 @@ export function Desktop() {
     let start: { x: number; y: number; at: number } | null = null
     const down = (e: PointerEvent) => {
       const target = e.target as HTMLElement
-      if (e.pointerType !== 'touch' || target.closest('button, input, textarea, a, .desk-icon') || target.closest('.window') && !target.closest('.note-grip')) return
+      if (e.pointerType !== 'touch' || target.closest('button, input, textarea, a, .desk-icon') || target.closest('.note-grip') || target.closest('.window:not(.chrome-note)')) return
       start = { x: e.clientX, y: e.clientY, at: Date.now() }
     }
     const up = (e: PointerEvent) => {
@@ -413,8 +413,12 @@ export function Desktop() {
       const from = positions[id]
       const p = toPx(from)
       const { cols } = gridSize()
-      const target = { col: Math.max(0, Math.min(cols - 1, Math.round((rightX() - p.x - offsetRef.current.dx) / CELL_W))),
+      let target = { col: Math.max(0, Math.min(cols - 1, Math.round((rightX() - p.x - offsetRef.current.dx) / CELL_W))),
         row: Math.max(0, Math.round((p.y + offsetRef.current.dy - TOP) / CELL_H)) }
+      if (obstacles.some((r) => {
+        const at = toPx(target)
+        return at.x < r.x + r.w && at.x + CELL_W > r.x && at.y < r.y + r.h && at.y + CELL_H > r.y
+      })) target = snap(toPx(target).x, toPx(target).y, new Set(visible.filter((i) => i.id !== id).map((i) => key(positions[i.id]))), obstacles)
       const other = visible.find((i) => i.id !== id && key(positions[i.id]) === key(target))
       savePositions({ ...positions, [id]: target, ...(other ? { [other.id]: from } : {}) })
       offsetRef.current = { dx: 0, dy: 0 }
@@ -656,8 +660,8 @@ export function Desktop() {
     <>
     <div
       ref={surface}
-      className={`desk ${phoneGrid ? 'is-home-icons' : ''}`}
-      style={{ minHeight: mobile && !hidden ? undefined : extent }}
+      className={`desk ${phoneGrid ? `is-home ${hidden ? 'is-home-icons' : ''}` : ''}`}
+      style={{ minHeight: extent }}
       tabIndex={-1}
       onPointerDown={onSurfacePointerDown}
       onPointerMove={onPointerMove}
@@ -766,7 +770,7 @@ export function Desktop() {
       {marquee && <div className="marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />}
     </div>
     {mobile && <nav className="home-pages" aria-label="Home views">
-      <button type="button" aria-current={!hidden ? 'page' : undefined} onClick={() => { notesHidden.set(false); surface.current?.parentElement?.scrollTo(0, 0) }}>Widgets</button>
+      <button type="button" aria-current={!hidden ? 'page' : undefined} onClick={() => { notesHidden.set(false); surface.current?.parentElement?.scrollTo(0, 0) }}>Home</button>
       <button type="button" aria-current={hidden ? 'page' : undefined} onClick={() => { notesHidden.set(true); surface.current?.parentElement?.scrollTo(0, 0) }}>Icons</button>
     </nav>}
     </>

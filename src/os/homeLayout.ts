@@ -8,14 +8,15 @@ export type HomeRect = { x: number; y: number; w: number; h: number }
 export const overlaps = (a: HomeRect, b: HomeRect) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 
 /** Nearest free lattice origin on the current screen, or the first free row below it. */
-export function freeHomeRect(want: HomeRect, occupied: HomeRect[], width: number, height: number, stepX = HOME_GRID, stepY = HOME_GRID): HomeRect {
+export function freeHomeRect(want: HomeRect, occupied: HomeRect[], width: number, height: number, stepX = HOME_GRID, stepY = HOME_GRID, preserveOverflow = false): HomeRect {
   const cols = Math.max(1, Math.floor((width - HOME_LEFT * 2 - want.w) / stepX) + 1)
   const rows = Math.max(1, Math.floor((height - HOME_TOP - 100 - want.h) / stepY) + 1)
   const left = HOME_LEFT
   const clear = (r: HomeRect) => !occupied.some((o) => overlaps(r, o))
+  const wantedRow = Math.max(0, Math.round((want.y - HOME_TOP) / stepY))
   const nearest = { ...want,
     x: left + Math.max(0, Math.min(cols - 1, Math.round((want.x - left) / stepX))) * stepX,
-    y: HOME_TOP + Math.max(0, Math.min(rows - 1, Math.round((want.y - HOME_TOP) / stepY))) * stepY }
+    y: HOME_TOP + (preserveOverflow ? wantedRow : Math.min(rows - 1, wantedRow)) * stepY }
   if (clear(nearest)) return nearest
   let best: HomeRect | undefined
   let distance = Infinity
@@ -68,4 +69,10 @@ export function iconLayout(ids: string[], stored: Record<string, HomeCell>, widt
 /** Horizontal home gestures ignore vertical scrolling and short taps. */
 export function homeSwipe(dx: number, dy: number, elapsed: number): 'icons' | 'widgets' | null {
   return elapsed < 650 && Math.abs(dx) >= 60 && Math.abs(dx) > Math.abs(dy) * 1.6 ? (dx < 0 ? 'icons' : 'widgets') : null
+}
+
+/** Old mobile column places have no grid marker. Preserve their sorted order, ignore desktop x/y. */
+export function mobileHomeGeometry(p: HomeRect & { homeGrid?: boolean }, index: number, width: number): HomeRect {
+  return { x: p.homeGrid ? p.x : HOME_LEFT, y: p.homeGrid ? p.y : HOME_TOP + index * 320,
+    w: Math.min(Math.max(180, p.w), Math.max(1, width - 2 * HOME_LEFT)), h: p.h }
 }

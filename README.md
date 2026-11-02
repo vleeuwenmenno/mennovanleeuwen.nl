@@ -4073,27 +4073,33 @@ accounts and data; it starts and stops its own server.
 A big screen puts a widget where it was put, moved along when its own screen is another size (a
 widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
 added on a phone gets the usual spot for a new widget there. Phones initially inherit the existing widgets. Their first addition, removal, minimization or
-reorder saves an independent mobile set (`widgets:placed:mobile`); desktop selection and positions
+move saves an independent mobile set (`widgets:placed:mobile`); desktop selection and positions
 stay intact. An intentionally empty mobile set stays empty. Both sets follow the account and
 merge entries independently. Until that first edit, desktop changes still appear on mobile.
 
 Settings → Appearance → **Keep widgets from overlapping** is on by default, per browser.
-Widgets reserve their measured content, tape and slanted corners on a shared 20 px desktop
+Desktop widgets reserve their measured content, tape and slanted corners on a shared 20 px desktop
 lattice. They reflow when the screen shrinks; when they cannot fit, the desktop scrolls vertically
 instead of piling them on top of one another. Icons use 100 × 120 px cells on the same lattice,
 avoid visible widgets, and also overflow downwards. Names show up to three lines within each
 cell; the full name remains in the tooltip and accessible name. Shift+Arrow moves a selected icon.
-Turning avoidance off preserves manual widget overlaps; icons still avoid their rectangles.
+On desktop, turning avoidance off preserves manual widget overlaps; icons still avoid their rectangles.
 Automatic fitting never overwrites synced preferred widget positions. The last manually moved
 widget retains local priority, separately for each account, including after reload.
 
-Mobile home has **Widgets** and **Icons** views, with labelled page controls above the dock.
-Swipe left on empty home space or a widget grip for Icons, right for Widgets; vertical movement
-still scrolls. Drag icons to move them (dropping on another swaps cells); taps open them.
+Mobile home has **Home** and **Icons** views, with labelled page controls above the dock.
+Home places widgets and icons together on the same grid. Swipe left on empty home space for
+Icons, right for Home; vertical movement on empty space still scrolls. Drag icons to move them (dropping on another swaps cells); taps open them.
 Mobile icon positions save separately in the account's desktop state and initially inherit
-existing positions. Widget grips retain hold-to-reorder and their Move up/down/top menu controls.
-`pnpm check:desktop-layout` covers crowded placement, resize overflow, mobile selection isolation,
-reload persistence, icon dragging and home navigation in muted Chromium.
+existing positions. Drag a widget by its grip to move it in both axes, snapped every 20 px; its mobile x/y coordinates
+save independently. Move up/down/top menu controls move it spatially on this grid. Readable
+widgets can span most or all phone columns; crowded homes scroll vertically. Old mobile column
+layouts migrate in their saved order to grid rows without saving automatic positions or changing
+the desktop. The first manual mobile edit freezes those initial rows in the independent mobile set, so later
+removals cannot change untouched widgets' starting coordinates on reload.
+`pnpm check:desktop-layout` covers crowded placement, resize overflow, independent mobile grid
+coordinates, reload/migration, touch widget/icon movement, native swipes in both directions, and
+app control reachability while the home content scrolls.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
 layout by an earlier release move into the set when that layout is loaded or arrives from the
@@ -4127,21 +4133,17 @@ flags, held game buttons and game canvases. Anything else can opt out with `data
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
 does not select its labels or show the browser's callout (see *Selecting text* above).
 
-On phones the notes and widgets go one under the other down a desktop that scrolls. Hold one by
-its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the
-desktop scrolls along near the top bar and the dock); let go without moving, or long-press it, for
-*Move up*, *Move down* and *Move to top*. The order is part of the
-phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)), and for widgets part of their
-synced set; on a big screen notes stay wherever they were put.
+On phones, notes, widgets and icons share a scrollable grid. Drag a note or widget by its top strip
+in either axis; long-press for *Move up*, *Move down* and *Move to top*. Widget selection and grid
+coordinates belong to the independent synced mobile set; desktop placement stays intact.
 
 The MvL OS menu (top left) opens the About app (*About this system*), Settings, and the Changelog
 (*Release notes*), and reboots or shuts down. Putting the notes and widgets away to see the desktop
 itself is Settings → Windows → *Notes and widgets* under *Right now* (per browser; adding a note
-brings them back). On a phone, where the icons otherwise sit behind the notes, the desktop's icons
-then show as a grid of tiles: tap one to open it, long-press for its menu.
+brings them back). On a phone, this switches the shared Home grid to the Icons view: tap one to open it, long-press for its menu.
 
-Dragging works with a finger too: hold a desktop icon (in the phone's grid) or a row in Files still
-for a moment and it lifts with a buzz; move the finger then and it drags, to
+Dragging works with a finger too: drag a desktop icon directly, or hold a row in Files still
+until it lifts with a buzz, then move it, to
 the same places a mouse drags to. Holding on without moving opens its menu as before, and moving
 after that closes the menu and drags.
 

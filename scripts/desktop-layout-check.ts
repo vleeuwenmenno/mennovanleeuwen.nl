@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { iconLayout, overlaps, homeSwipe, ICON_W, ICON_H, HOME_TOP } from '../src/os/homeLayout.ts'
+import { iconLayout, overlaps, homeSwipe, mobileHomeGeometry, ICON_W, ICON_H, HOME_TOP } from '../src/os/homeLayout.ts'
 import { arrangeDesktop } from '../src/os/widgetLayout.ts'
 import { launch, newPage, sleep } from './perf/cdp.ts'
 
@@ -25,6 +25,10 @@ assert.equal(homeSwipe(-100, 20, 300), 'icons')
 assert.equal(homeSwipe(100, 20, 300), 'widgets')
 assert.equal(homeSwipe(20, 100, 300), null)
 assert.equal(homeSwipe(-100, 0, 900), null)
+const legacy = { x: 1200, y: 800, w: 280, h: 260 }
+assert.deepEqual(mobileHomeGeometry(legacy, 1, 390), { x:14, y:360, w:280, h:260 })
+assert.deepEqual(legacy, { x:1200, y:800, w:280, h:260 }, 'mobile migration must not mutate desktop source')
+assert.deepEqual(mobileHomeGeometry({ ...legacy, x:54, y:160, homeGrid:true }, 1, 390), { x:54, y:160, w:280, h:260 })
 console.log('PASS pure placement: crowded/narrow, obstacles, overflow, deterministic; swipe thresholds')
 
 const data = mkdtempSync('/tmp/mvlos-desktop-layout-')
@@ -69,11 +73,29 @@ try {
   await p.send('Emulation.setDeviceMetricsOverride', { width: 740, height: 400, deviceScaleFactor: 1, mobile: false })
   await sleep(600)
   assert(await evaluate(`(() => { const a=[...document.querySelectorAll('.desk-icon,.window.chrome-note')].filter(e=>getComputedStyle(e).display!=='none').map(e=>e.getBoundingClientRect()); const s=document.querySelector('.desk-scroll'); return s.scrollHeight>s.clientHeight && a.every((r,i)=>a.slice(0,i).every(o=>r.right<=o.left||r.left>=o.right||r.bottom<=o.top||r.top>=o.bottom)) })()`), 'crowded desktop resize separates rendered items with usable scroll overflow')
+  // Crowded desktop scroll must not carry newly opened/focused app controls off screen.
+  await evaluate(`document.querySelector('.desk-scroll').scrollTop = 360`)
+  await evaluate(`window.dispatchEvent(new CustomEvent('mvlos:open', {detail:'files'}))`)
+  await p.waitFor(`!!document.querySelector('[data-app="files"] .titlebar')`)
+  await sleep(300)
+  const controlsReachable = `(() => { const e=document.querySelector('[data-app="files"] .titlebar'); const r=e.getBoundingClientRect(); return r.top>=28 && r.bottom<=innerHeight && getComputedStyle(e.closest('.window')).position==='fixed' })()`
+  assert(await evaluate(controlsReachable), 'opening Files on a scrolled home keeps titlebar reachable')
+  await evaluate(`document.querySelector('.desk-scroll').scrollTop += 200`)
+  assert(await evaluate(controlsReachable), 'scrolling and focusing preserves app titlebar position')
+  const title = await evaluate<{x:number;y:number}>(`(() => { const r=document.querySelector('[data-app="files"] .titlebar').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2} })()`)
+  await p.send('Input.dispatchMouseEvent', { type:'mousePressed', ...title, button:'left', buttons:1, clickCount:1 })
+  await p.send('Input.dispatchMouseEvent', { type:'mouseReleased', ...title, button:'left', buttons:0, clickCount:1 })
+  assert(await evaluate(controlsReachable), 'focused app controls remain reachable')
+  await evaluate(`document.querySelector('[data-app="files"] .ctl-max').click()`)
+  assert(await evaluate(controlsReachable), 'maximized app controls remain reachable on scrolled desktop')
+  await evaluate(`document.querySelector('[data-app="files"] .ctl-close').click()`)
+  await evaluate(`document.querySelector('.desk-scroll').scrollTop = 0`)
   await p.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 780, deviceScaleFactor: 1, mobile: false })
   await p.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
   console.log('browser: mobile resize')
   await p.waitFor(`!!document.querySelector('.home-pages')`)
   await sleep(500)
+  assert.equal(await evaluate(`(await import('/src/os/widgetPlaces.ts')).mobileWidgetPlaces.get()`), null, 'migration and mobile resize do not save automatic grid positions')
   // Close one inherited widget through its real UI. Only the mobile set should change.
   await evaluate(`document.querySelector('[data-app="widget"] .note-grip').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, clientX:100, clientY:100}))`)
   await sleep(150)
@@ -81,15 +103,17 @@ try {
   await p.waitFor(`document.querySelectorAll('[data-app="widget"]').length === 4`)
   assert.equal(await evaluate(`JSON.stringify((await import('/src/os/widgetPlaces.ts')).widgetPlaces.get())`), desktopSet)
   assert.equal(await evaluate(`Object.keys((await import('/src/os/widgetPlaces.ts')).mobileWidgetPlaces.get().places).length`), 4)
+  assert(await evaluate(`(() => { const icons=[...document.querySelectorAll('.desk-icon')].filter(e=>getComputedStyle(e).display!=='none'); const widgets=[...document.querySelectorAll('[data-app="widget"]')]; const a=[...icons,...widgets].map(e=>e.getBoundingClientRect()); return icons.length>0 && widgets.every(e=>getComputedStyle(e).position==='absolute') && a.every((r,i)=>a.slice(0,i).every(o=>r.right<=o.left||r.left>=o.right||r.bottom<=o.top||r.top>=o.bottom)) })()`), 'mobile home shares collision-free placement between icons and absolutely positioned widgets')
   const grip = await evaluate<{x:number;y:number}>(`(() => { const r=document.querySelector('[data-app="widget"] .note-grip').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2} })()`)
   await p.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [grip] })
   await sleep(450)
-  await p.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: grip.x, y: grip.y+320 }] })
+  await p.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: grip.x+40, y: grip.y+120 }] })
   await sleep(100)
   await p.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
   await sleep(250)
-  assert(await evaluate(`Object.values((await import('/src/os/widgetPlaces.ts')).mobileWidgetPlaces.get().places).some(p=>typeof p.stack==='number')`), 'touch grip reorder persists mobile order')
+  assert(await evaluate(`Object.values((await import('/src/os/widgetPlaces.ts')).mobileWidgetPlaces.get().places).some(p=>p.homeGrid && p.x>14 && (p.x-14)%20===0 && (p.y-40)%20===0)`), 'touch widget move persists independent snapped mobile x/y')
   assert.equal(await evaluate(`JSON.stringify((await import('/src/os/widgetPlaces.ts')).widgetPlaces.get())`), desktopSet)
+  const placedMobile = await evaluate(`(() => { const e=[...document.querySelectorAll('[data-app="widget"]')].find(e=>parseFloat(e.style.left)>14); return [e.style.left,e.style.top] })()`)
   await evaluate(`document.querySelector('.home-pages button:last-child').click()`)
   await p.waitFor(`!!document.querySelector('.desk.is-home-icons')`)
   await sleep(300)
@@ -118,10 +142,21 @@ try {
   }
   await p.waitFor(`!document.querySelector('.desk.is-home-icons')`)
   assert.equal(await evaluate(`document.querySelectorAll('[data-app="widget"]').length`), 4)
+  assert(await evaluate(`Object.values((await import('/src/os/widgetPlaces.ts')).mobileWidgetPlaces.get().places).some(p=>p.homeGrid && p.x>14)`), 'mobile grid coordinates survive reload')
+  assert(await evaluate(`[...document.querySelectorAll('[data-app="widget"]')].some(e=>JSON.stringify([e.style.left,e.style.top])===${JSON.stringify(JSON.stringify(placedMobile))})`), 'manually placed mobile widget x/y survives reload while neighbours may reflow')
+  // Home background must permit native horizontal gestures too (not pointercancel).
+  await evaluate(`document.querySelector('.desk-scroll').scrollTop = 0`)
+  await evaluate(`(() => { window.__homeCancel=0; document.querySelector('.desk-scroll').addEventListener('pointercancel',()=>window.__homeCancel++) })()`)
+  for (const [type, x] of [['touchStart',350],['touchMove',230],['touchEnd',230]] as const) {
+    await p.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y:690 }] })
+    await sleep(60)
+  }
+  await p.waitFor(`!!document.querySelector('.desk.is-home-icons')`)
+  assert.equal(await evaluate(`window.__homeCancel`), 0, 'native Home-to-Icons swipe finishes without pointercancel')
   await p.send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false })
   await p.waitFor(`document.querySelectorAll('[data-app="widget"]').length === 5`)
   assert.equal(await evaluate(`JSON.stringify((await import('/src/os/widgetPlaces.ts')).widgetPlaces.get())`), desktopSet)
-  console.log('PASS browser: multiline/collision bounds; mobile selection, touch widget reorder/icon move, reload, swipe, width switching preserve desktop')
+  console.log('PASS browser: multiline/collision bounds; mobile selection, shared mobile grid, touch widget x/y and icon move, reload, native swipes both directions, stationary app controls, width switching preserve desktop')
 } finally {
   await browser?.close()
   vite.kill()

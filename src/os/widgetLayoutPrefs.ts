@@ -14,3 +14,6 @@ export const desktopLayoutPriority = localPref<string | null>(
   (value) => value ?? '',
   { account: true },
 )
+
+/** Mobile moves never change the desktop's last-moved placement priority. */
+export const mobileLayoutPriority = localPref<string | null>('mvlos.widgets.mobileLayoutPriority', (raw) => raw || null, (v) => v ?? '', { account: true })
