@@ -2,7 +2,7 @@
 // default), or always auto-hidden. Windows that snap or maximize leave room for the dock when it
 // can be there. Snapped windows can also be told to ignore the dock and use the full height.
 
-import { flagPref } from './localPref'
+import { flagPref, localPref } from './localPref'
 
 export type DockMode = 'show' | 'maximized' | 'hide'
 
@@ -35,6 +35,23 @@ export function setDockMode(mode: DockMode) {
   // Snapped windows re-fit on resize; reuse that so they make or take back room for the dock.
   window.dispatchEvent(new Event('resize'))
 }
+
+/**
+ * On a phone, how many apps the dock shows before the rest go under More (default 4). All apps,
+ * Trash and More itself are extra and not counted; fewer show when the screen is too narrow.
+ * This device only.
+ */
+export const MOBILE_DOCK_APPS = { min: 1, max: 8, fallback: 4 }
+export const mobileDockApps = localPref<number>(
+  'mvlos.dock.mobileApps',
+  (raw) => {
+    const n = raw === null || raw === '' ? NaN : Number(raw)
+    return Number.isInteger(n) ? Math.max(MOBILE_DOCK_APPS.min, Math.min(MOBILE_DOCK_APPS.max, n)) : MOBILE_DOCK_APPS.fallback
+  },
+  String,
+)
+// A change re-fits the dock the same way a resize does.
+mobileDockApps.subscribe(() => window.dispatchEvent(new Event('resize')))
 
 /** Whether snapped windows keep room for the dock (on by default); off, they use the height below it. This device only. */
 export const snapReservePref = flagPref('mvlos.dock.snapReserve', true)

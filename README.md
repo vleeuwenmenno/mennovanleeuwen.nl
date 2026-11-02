@@ -365,6 +365,14 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+**Phone dock.** Settings → Dock → *Phone dock* → *Apps shown in the dock* (1 to 8, default 4, on this
+device only) is how many pinned or open apps the dock shows on a phone-sized screen before the rest
+go under **More**. *All apps*, *Trash* and *More* itself are extra and do not count, so the default
+is four apps plus those three. The width still decides first: fewer show on a narrow screen (or
+with an open app that adds a divider), and a higher number never makes the dock wider than the
+screen. The More pop-up scrolls inside itself when there are many apps. Open apps keep their place;
+pinned ones move under More first. The desktop dock is unchanged.
+
 Settings → Dock → *Show the dock* picks when the dock shows (always, auto-hide when a window covers
 it, or always auto-hide). Windows snapped left, right or to a corner keep room for the dock unless
 it always auto-hides; turning off *Reserve dock space for snapped windows* (on this device only,
@@ -2682,8 +2690,14 @@ Documents. Right-click a Seafile folder's empty space for New (folder, text file
 spreadsheet, presentation), Upload, View, Sort, and Seafile (copy a share link, open it in
 Seafile's own web interface, the library's trash, lock now).
 
-The mouse's Back and Forward buttons, and the browser's own Back, go back in the focused window
-(Files a folder, Preview a picture, Archive up a folder) instead of leaving the site.
+The mouse's Back and Forward buttons, and the browser's own Back (a phone's Back button or gesture),
+go back in the focused window (Files a folder, Archive up a folder; Preview a picture with the mouse
+button) instead of leaving the site. First, whatever sits on top of the page closes: a context menu,
+a dialog, Spotlight or All apps, the notification list, the dock's More and the home editor
+([`src/os/backLayers.ts`](src/os/backLayers.ts); each closes only itself). A window with nothing left
+to go back to (a handler returns `false`), and on a phone, then lets Back minimize the app window,
+which stays running in the dock, and after that return from a later home screen to the first. App
+content is never intercepted: only what an app registers itself with `useBackButton` is asked.
 
 Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
 
@@ -5009,7 +5023,7 @@ part of the digest). Only then does the host run and show the widget on a phone-
 **active** revision decides: a fork that says false (or nothing) stays hidden on a phone even when
 the built-in it came from says true. The Sticky note, Weather, Agenda, Code inbox, Status, Minecraft
 server and Clock are phone-compatible (checked at 390 px wide: no sideways overflow), and the custom
-widget template says `phone: true`. On a phone they share the scrollable Home grid with icons;
+widget template says `phone: true`. On a phone they share the home screens (fixed pages) with icons;
 drag their top strip to choose a snapped x/y position. Their selection and coordinates save
 independently from desktop. *Show notes and widgets
 on the desktop* in Settings still puts them all away. **Add widget** (desktop menu, All apps,
@@ -5590,8 +5604,24 @@ taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync`
 these rules in memory. `pnpm check:widgets-sync-ui` checks migration,
 cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
 accounts and data; it starts and stops its own server.
-A big screen puts a widget where it was put, moved along when its own screen is another size (a
-widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
+A big screen puts a widget where it was put on the screen it was put on, and shows its **share of
+the room it can travel** on this one: the position is worked out as `(x - minX) / (maxX - minX)` and
+the same for y, with the range taken from the widget's real (fitted) width, the top bar, the dock
+and the rotated grip ([`projectWidget` and `widgetBounds` in `widgetLayout.ts`](src/os/widgetLayout.ts)),
+in page pixels, so the UI scale counts like any other resize. A widget exactly in the middle stays
+in the middle, one at an edge stays at that edge, in a browser resized live, after a reload and
+after a UI scale change alike. The place that is saved never changes by resizing: what is shown is
+worked out again from it every time (asking for the first size back gives it back exactly, through
+any number of sizes), nothing is written (no sync traffic) and a collision nudge is only drawn. Only
+a drag or a resize by hand saves a new place, tagged with the screen it was made on (`vw`/`vh`); an
+edit that is not a move (minimizing, say) keeps the screen the place was put on. A place from an
+older save that does not know its screen is used as it is and only kept on screen, not guessed; a
+screen with no room to travel (a widget wider than the page, a tiny window) carries no share, so the
+widget is kept on screen and the share comes back when there is room. A desktop widget with
+nothing in its way is drawn exactly where it is; only a colliding one looks for a free cell on the
+lattice. Notes in the window layout carry no screen, so they are only kept on screen.
+`pnpm check:widget-geometry` (pure) and `pnpm check:widget-resize` (muted Chromium) check centre,
+edges, shrink and expand, reload, UI scale, collisions and explicit drags. A widget
 added on a phone gets the usual spot for a new widget there. Phones initially inherit the existing widgets. Their first addition, removal, minimization or
 move saves an independent mobile set (`widgets:placed:mobile`). If account hydration is still
 pending, edits remain optimistic and the first snapshot waits for canonical hydration, then
@@ -5611,19 +5641,51 @@ On desktop, turning avoidance off preserves manual widget overlaps; icons still 
 Automatic fitting never overwrites synced preferred widget positions. The last manually moved
 widget retains local priority, separately for each account, including after reload.
 
-Mobile home has **Home** and **Icons** views, with labelled page controls above the dock.
-Home places widgets and icons together on the same grid. Swipe left on empty home space for
-Icons, right for Home; vertical movement on empty space still scrolls. Drag icons to move them (dropping on another swaps cells); taps open them.
+**Phone home screens.** The phone home is a row of fixed pages that you swipe sideways
+([`src/os/homePages.ts`](src/os/homePages.ts), [`src/os/homePager.ts`](src/os/homePager.ts),
+[`src/os/HomePager.tsx`](src/os/HomePager.tsx)); it never scrolls down. The browser's own
+horizontal scrolling with snapping turns the pages, so a swipe works from anywhere (an icon, a
+widget, empty space) and an app's own scrolling (a widget's body, a list) keeps vertical moves.
+Android's edge gestures are not taken: nothing listens at the screen edge except while you carry
+something. Small dots above the dock show the pages (named *Page 2 of 3*, the current one marked,
+44 px-wide targets); a pencil next to them opens **Edit home screen**, as does the empty home's long
+press menu.
+
+- **Lift and move.** Hold an icon or a widget's top strip still for about 0.4 s (a buzz): it lifts,
+  the page stops following the finger and the item does. Hold it at the left or right edge for half
+  a second and the screen turns to the next page (on the last page, if it holds something, a new
+  one is made). Let go, and it takes the nearest free cell there; nothing swaps, nothing else
+  moves, nothing overlaps, and an item never hangs between two pages. Let go without moving and it is
+  a long press: the item's menu, which has **Move to page** (the alternative to dragging) and, for
+  widgets, Move up, down and to top.
+- **Edit mode** has *Add page*, *Remove page* and *Done*. Only an empty page can be removed (the
+  button says so); later pages move down one and nothing is deleted. At most 12 pages. Back leaves
+  the editor.
+- **Older homes** (one tall page, icons with rows below the screen, widgets in a long column) are
+  cut into pages when shown, by row and by the height the widget was saved at, without saving
+  anything: until you change something, the old data is untouched and every device keeps showing it.
+  The first page change or removal saves explicit page and cell for what it touches (icons: `page`
+  in `mobilePositions`; widgets: `page` in the independent mobile set; the number of pages:
+  `mobilePages` in the desktop state). The desktop layouts are never changed by any of this.
+  Turning the phone or a smaller screen keeps every item on its page (a widget's `x` counts the
+  page, 1000 px per page); one that no longer fits goes to the next page with room and comes back
+  when the screen is big enough again (the saved place is not rewritten).
+- With **Notes and widgets** put away (Settings → Windows) the home shows icons only, on the
+  same pages; icons keep clear of their widgets' places either way, so nothing moves when they come
+  back.
+- With storage blocked the pages and placements work until the page closes.
+
 Mobile icon positions save separately in the account's desktop state and initially inherit
-existing positions. Drag a widget by its grip to move it in both axes, snapped every 20 px; its mobile x/y coordinates
-save independently. Move up/down/top menu controls move it spatially on this grid. Readable
-widgets can span most or all phone columns; crowded homes scroll vertically. Old mobile column
-layouts migrate in their saved order to grid rows without saving automatic positions or changing
-the desktop. The first manual mobile edit freezes those initial rows in the independent mobile set, so later
-removals cannot change untouched widgets' starting coordinates on reload.
-`pnpm check:desktop-layout` covers crowded placement, resize overflow, independent mobile grid
-coordinates, reload/migration, touch widget/icon movement, native swipes in both directions, and
-app control reachability while the home content scrolls.
+existing positions. Widgets move in both axes on the same snapped grid (20 px) and their mobile
+coordinates save independently. Old mobile column layouts migrate in their saved order to
+pages without saving automatic positions or changing the desktop. The first manual mobile edit
+freezes those initial rows in the independent mobile set, so later removals cannot change
+untouched widgets' starting coordinates on reload.
+`pnpm check:home-pages` (pure layout, migration, drops), `pnpm check:mobile-home` (real touch in a
+muted phone-sized Chromium: swipes, long press, dragging between pages, dots, edit mode, dock cap,
+Back, resize, blocked storage, desktop) and `pnpm check:desktop-layout` (crowded placement, independent
+mobile coordinates, reload and migration, touch widget and icon moves, app control reachability) cover this.
+Browser emulation is not a physical phone: gesture feel and Android's system gestures still need a real device.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
 layout by an earlier release move into the canonical set during the one-time, complete account
@@ -5657,14 +5719,16 @@ flags, held game buttons and game canvases. Anything else can opt out with `data
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
 does not select its labels or show the browser's callout (see *Selecting text* above).
 
-On phones, notes, phone-compatible widgets and icons share a scrollable grid. Drag a note or widget by its top strip
-in either axis; long-press for *Move up*, *Move down* and *Move to top*. Widget selection and grid
-coordinates belong to the independent synced mobile set; desktop placement stays intact.
+On phones, notes, phone-compatible widgets and icons sit on fixed home screens you swipe sideways
+(see *Phone home screens* above). Hold a note or widget's top strip, or an icon, until it lifts, then
+drag it, to the screen edge to change page; long-press for *Move to page*, *Move up*, *Move down* and
+*Move to top*. Widget selection and grid coordinates belong to the independent synced mobile
+set; desktop placement stays intact.
 
 The MvL OS menu (top left) opens the About app (*About this system*), Settings, and the Changelog
 (*Release notes*), and reboots or shuts down. Putting the notes and widgets away to see the desktop
 itself is Settings → Windows → *Notes and widgets* under *Right now* (per browser; adding a note
-brings them back). On a phone, this switches the shared Home grid to the Icons view: tap one to open it, long-press for its menu.
+brings them back). On a phone, this leaves the icons on the home screens: tap one to open it, long-press for its menu.
 
 Dragging works with a finger too: drag a desktop icon directly, or hold a row in Files still
 until it lifts with a buzz, then move it, to

@@ -189,7 +189,8 @@ try {
   check('high-scale saved position survives reload', JSON.stringify({ ...(await widgets(A))[0], pid: 0 }) === JSON.stringify({ ...moved[0], pid: 0 }), { before: moved, after: await widgets(A) })
   await instrument(A); await quiet(A, 'high-scale reload')
   const fit = await A.eval(`import('/src/os/wm.tsx').then(m => ({ desktop: m.fitNote({ x: 100, y: 450, w: 240, h: 180 }, 640, 400, false), phone: m.fitNote({ x: 100, y: 450, w: 240, h: 180 }, 640, 400, true) }))`)
-  check('note fitting uses actual phone state', fit.desktop.y + fit.desktop.h <= 400 && fit.phone.y === 450, fit)
+  // Phones have fixed home pages now (no scrolling down): a phone note is kept on its page, above the dock.
+  check('note fitting uses actual phone state', fit.desktop.y + fit.desktop.h <= 400 && fit.phone.y >= 44 && fit.phone.y + fit.phone.h <= 400 - 100, fit)
   const classes = await A.eval(`import('/src/os/widgetPlaces.ts').then(m => {
     const p = { id: 'x', kind: 'status', x: 0, y: 0, w: 240, h: 180, vw: 640, vh: 400, at: 0 }
     return [m.placedOnPhone(p), m.placedOnPhone({ ...p, phone: false }), m.wins({ ...p, phone: false }, { ...p, vw: 700, phone: true }), m.normalizeSet({ places: { x: { ...p, phone: false } }, removed: '' }).places.x.phone]

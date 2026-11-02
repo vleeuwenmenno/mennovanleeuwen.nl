@@ -1,9 +1,10 @@
-import { HOME_LEFT, HOME_TOP, HOME_GRID, mobileHomeGeometry } from './homeLayout'
-import { arrangeDesktop } from './widgetLayout'
+import { HOME_LEFT, HOME_TOP, HOME_GRID } from './homeLayout'
+import { PAGE_DOCK, PAGE_STRIDE, arrangePages, fitPhoneWidget, joinX, localX, mobileWidgetRect, pageOfX } from './homePages'
+import { arrangeDesktop, mobileWidgetEnvelope } from './widgetLayout'
 import { avoidWidgetOverlap, desktopLayoutPriority, mobileLayoutPriority } from './widgetLayoutPrefs'
 import { closeGuards } from './closeGuards'
 export { setCloseGuard } from './closeGuards'
-import { fitWidget } from './widgetLayout'
+import { projectWidget, widgetBounds, type Screen } from './widgetLayout'
 import { widgetRunsOnPhone } from '../widgets/platform/phone'
 import { installations } from '../widgets/platform/installations'
 import { snapReserve } from './dockPrefs'
@@ -12,7 +13,7 @@ import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
-import { changeScreenWidgets, mobileWidgetPlaces, screenWidgets, changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
+import { mobileWidgetPageCounts, shiftMobilePagesAfter, phoneOrder, changeScreenWidgets, mobileWidgetPlaces, screenWidgets, changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { widgetMigrationUnresolved } from './accountSpace'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
@@ -45,6 +46,8 @@ export type WinState = {
    * window does not shrink every window for good.
    */
   want?: Geometry
+  /** The screen `want` was put on (widgets): a resize shows its share of the room, not the same pixels. Unknown for older saves. */
+  wantScreen?: Screen | null
   /**
    * The note's place in the phone layout's column of notes (stackOrder), once it has been moved
    * there by hand. Only the phone layout reads it; free-standing notes on a big screen ignore it.
@@ -144,9 +147,11 @@ type Action =
   /** The widgets on the desktop, from the synced set (src/os/widgetPlaces.ts): widget windows not
    * in it close, the ones missing open, the others move to where it says. */
   | { type: 'widgets'; list: WidgetShown[] }
+  /** An empty phone page was taken away: notes and widgets on later pages move down one, nothing else about them changes. */
+  | { type: 'shiftPage'; removed: number }
 
 /** A widget as the synced set puts it on this screen (see widgetsShown). */
-type WidgetShown = { id: string; kind: string; g: Geometry; minimized: boolean; stack?: number }
+type WidgetShown = { id: string; kind: string; g: Geometry; /** The screen `g` was put on, when known */ screen?: Screen | null; minimized: boolean; stack?: number }
 
 /** `touched` flips once the visitor moves, resizes or opens something; until then a viewport
  * change re-applies the opening layout instead of just clamping. `focused` is the window that
@@ -177,7 +182,7 @@ type State = {
 }
 
 /** Actions that are the visitor's own doing (as opposed to a viewport change or a restore). */
-const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps', 'restack', 'moveTo'])
+const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps', 'restack', 'moveTo', 'shiftPage'])
 
 const isPhone = () => window.innerWidth < 720
 
@@ -333,11 +338,16 @@ function apply(state: State, action: Action): State {
     case 'reset': {
       // A tab with a workspace of its own starts over on it. Widgets are part of the desktop, not
       // windows: they stay.
-      const list = state.windows.filter((w) => w.app === 'widget').map((w) => ({ id: w.props.id ?? '', kind: w.props.kind ?? '', g: w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }, minimized: w.minimized, stack: w.stack }))
+      const list = state.windows.filter((w) => w.app === 'widget').map((w) => ({ id: w.props.id ?? '', kind: w.props.kind ?? '', g: w.want ?? { x: w.x, y: w.y, w: w.w, h: w.h }, screen: w.wantScreen, minimized: w.minimized, stack: w.stack }))
       return { ...showWidgets(fresh(action.layout, action.ws), list), away: state.away }
     }
     case 'widgets':
       return showWidgets(state, action.list)
+    case 'shiftPage': {
+      // Only the page moves: the saved width, height and place on the page stay as they are.
+      const down = (x: number) => (pageOfX(x) > action.removed ? x - PAGE_STRIDE : x)
+      return { ...state, touched: true, windows: state.windows.map((w) => (NOTE_APPS.has(w.app) && w.app !== 'widget' ? { ...w, x: down(w.x), ...(w.want ? { want: { ...w.want, x: down(w.want.x) } } : {}) } : w)) }
+    }
     case 'restore':
       return { ...restored(action.windows, state.windows, state.ws), away: state.away, unplaced: state.unplaced }
     case 'workspace': {
@@ -400,6 +410,9 @@ function apply(state: State, action: Action): State {
         ws: NOTE_APPS.has(action.app) ? undefined : state.ws,
         // A CV app opened away from /cv (the Minecraft widget, a notification): here, on every page.
         anywhere: appHere(action.app) ? undefined : true,
+        // A widget added by hand is put where it opens, on this screen: that is its place, and a resize
+        // shows its share of the room without changing it (projectWidget), before any drag or reload.
+        ...(action.app === 'widget' ? { want: { ...action.geometry }, wantScreen: state.phone ? null : { vw: viewW(), vh: viewH() } } : {}),
       }
       return { ...state, touched: true, focused: win.pid, windows: [...state.windows, win], nextPid: state.nextPid + 1, topZ: z, unplaced: state.unplaced && [...state.unplaced, win.pid] }
     }
@@ -428,7 +441,8 @@ function apply(state: State, action: Action): State {
           if (w.pid !== action.pid) return w
           const next = { ...w, ...action.geometry }
           // Moved or resized by hand (not snapped or maximized): that is where it should be from now on.
-          return next.snap || next.maximized ? next : { ...next, want: { x: next.x, y: next.y, w: next.w, h: next.h } }
+          // A widget put by hand is put on this screen: that is its new place, whatever it was before.
+          return next.snap || next.maximized ? next : { ...next, want: { x: next.x, y: next.y, w: next.w, h: next.h }, ...(w.app === 'widget' ? { wantScreen: { vw: viewW(), vh: viewH() } } : {}) }
         }),
       }
     case 'setProps':
@@ -443,7 +457,12 @@ function apply(state: State, action: Action): State {
         ...state,
         phone: action.phone,
         windows: state.windows.map((w) => {
-          if (w.app === 'widget') return action.phone ? w : { ...w, ...fitWidget(w.want ?? w, width, height) }
+          if (w.app === 'widget') {
+            if (!action.phone) return { ...w, ...projectWidget(w.want ?? w, w.wantScreen, width, height) }
+            // A phone page is only as wide as the screen: shown narrower (and kept on its page) when
+            // it is smaller than the widget, wide again when it grows back; the saved place is untouched.
+            return { ...w, ...fitPhoneWidget(w.want ?? w, width) }
+          }
           if (w.snap) return { ...w, ...snapRect(w.snap, width, height) }
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
           // Fitted from where it was put, not from an earlier fitting: a bigger screen gets it back as it was.
@@ -507,11 +526,16 @@ const NOTE_TOP = 28 + NOTE_MARGIN
  * screen is smaller than the note. Phones scroll the desktop down, so there a note only has to
  * fit across and below the top bar.
  */
-export function fitNote(g: Geometry, width: number, height: number, phone: boolean, drawn = g.h): Geometry {
+export function fitNote(g: Geometry, width: number, height: number, phone: boolean, drawn = g.h, pages = phone): Geometry {
   const w = Math.max(160, Math.min(g.w, width - 2 * NOTE_MARGIN))
   const h = phone ? g.h : Math.max(140, Math.min(g.h, height - NOTE_TOP - NOTE_MARGIN))
   // Kept clear of the bottom by what shows, which can be more than its box.
   const shown = Math.max(h, drawn)
+  // Phones: fixed pages, x counts the page too (homePages.ts) and nothing hangs below the dock.
+  if (pages) {
+    const x = Math.max(NOTE_MARGIN, Math.min(localX(g.x), width - w - NOTE_MARGIN))
+    return { w, h, x: joinX(pageOfX(g.x), x), y: Math.max(NOTE_TOP, Math.min(g.y, Math.max(NOTE_TOP, height - PAGE_DOCK - Math.min(shown, height - NOTE_TOP - PAGE_DOCK)))) }
+  }
   return {
     w,
     h,
@@ -523,6 +547,17 @@ export function fitNote(g: Geometry, width: number, height: number, phone: boole
 // ---------------------------------------------------------------------------------------------
 // Widgets: their windows follow the synced set of widgets (src/os/widgetPlaces.ts), not the layout.
 
+/** Where a window's `want` shows on this screen (a widget's place is kept as put on its own screen). */
+export function wantedHere(w: WinState): Geometry | undefined {
+  if (w.app !== 'widget' || !w.want || isPhone()) return w.want
+  const shown = projectWidget(w.want, w.wantScreen, viewW(), viewH())
+  // Placed in the scrollable area below the screen (past what a widget can travel): that row is
+  // kept as put, for the widget that has priority (see displayWindows).
+  const from = w.wantScreen
+  const overflow = !from || widgetBounds(w.want, from.vw, from.vh).maxY < w.want.y - 1
+  return overflow ? { ...shown, y: w.want.y } : shown
+}
+const sameScreen = (a?: Screen | null, b?: Screen | null) => (a?.vw ?? 0) === (b?.vw ?? 0) && (a?.vh ?? 0) === (b?.vh ?? 0)
 const sameGeometry = (a: Geometry | undefined, b: Geometry) => !!a && Math.round(a.x) === Math.round(b.x) && Math.round(a.y) === Math.round(b.y) && Math.round(a.w) === Math.round(b.w) && Math.round(a.h) === Math.round(b.h)
 
 /**
@@ -532,27 +567,24 @@ const sameGeometry = (a: Geometry | undefined, b: Geometry) => !!a && Math.round
  * screen yet: it gets the usual spot for a new widget. Mobile has independent grid geometry;
  * older column layouts use their saved order for the initial grid rows.
  */
-function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: number) => Geometry): Geometry {
-  if (phone) return mobileHomeGeometry(p, i, viewW())
-  if (p.screenUnknown) return { x: p.x, y: p.y, w: p.w, h: p.h }
-  if (placedOnPhone(p)) return place(i)
-  const vw = viewW()
-  const vh = viewH()
-  const along = (v: number, size: number, from: number, to: number, lo: number) => {
-    if (from === to) return v
-    const was = from - size - lo - NOTE_MARGIN
-    const now = to - size - lo - NOTE_MARGIN
-    return was > 0 && now > 0 ? Math.round(lo + ((v - lo) * now) / was) : v
-  }
-  return { x: along(p.x, p.w, p.vw, vw, NOTE_MARGIN), y: along(p.y, p.h, p.vh || vh, vh, NOTE_TOP), w: p.w, h: p.h }
+function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: number) => Geometry): { g: Geometry; screen: Screen | null } {
+  if (phone) return { g: mobileWidgetRect(p, i, viewW(), viewH()), screen: null }
+  // Saved before places knew their screen: used as they are, not worked out from a guess.
+  if (p.screenUnknown) return { g: { x: p.x, y: p.y, w: p.w, h: p.h }, screen: null }
+  if (placedOnPhone(p)) return { g: place(i), screen: { vw: viewW(), vh: viewH() } }
+  // The place as it was put, on the screen it was put on; `projectWidget` shows it on this one.
+  return { g: { x: p.x, y: p.y, w: p.w, h: p.h }, screen: p.vw > 0 && p.vh > 0 ? { vw: p.vw, vh: p.vh } : null }
 }
 
 /** The widgets of the set that this build knows, as this screen shows them. */
 function widgetsShown(all: WidgetSet, phone: boolean, known: (kind: string) => boolean, place: (n: number) => Geometry): WidgetShown[] {
-  return liveWidgets(all)
-    .sort((a, b) => phone ? (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id) : 0)
-    .filter((p) => known(p.kind))
-    .map((p, i) => ({ id: p.id, kind: p.kind, g: widgetGeometry(p, i, phone, place), minimized: !!p.minimized, stack: p.stack }))
+  // A widget's index is its place among all of the set's widgets, known kinds or not: it is what
+  // the first phone edit freezes the old column's rows and pages by (migrateMobileWidgets), so
+  // a kind this build does not know yet must not shift the ones after it.
+  return (phone ? phoneOrder(all).map(([, p]) => p) : liveWidgets(all))
+    .map((p, i) => ({ p, i }))
+    .filter(({ p }) => known(p.kind))
+    .map(({ p, i }) => ({ id: p.id, kind: p.kind, ...widgetGeometry(p, i, phone, place), minimized: !!p.minimized, stack: p.stack }))
 }
 
 /** The lowest z a window gets: the first one opened on an empty desk (fresh). Desktop icons being
@@ -593,7 +625,7 @@ function showWidgets(state: State, list: WidgetShown[]): State {
   const seen = new Set<string>()
   let changed = false
   let pid = state.nextPid
-  const fit = (g: Geometry) => (state.phone ? g : fitWidget(g, viewW(), viewH()))
+  const fit = (g: Geometry, screen?: Screen | null) => (state.phone ? { ...g, ...fitPhoneWidget(g, viewW()) } : projectWidget(g, screen, viewW(), viewH()))
   const windows: WinState[] = []
   for (const w of state.windows) {
     if (w.app !== 'widget') {
@@ -607,17 +639,17 @@ function showWidgets(state: State, list: WidgetShown[]): State {
       continue
     }
     seen.add(p.id)
-    if (sameGeometry(w.want ?? w, p.g) && w.minimized === p.minimized && w.stack === p.stack) windows.push(w)
+    if (sameGeometry(w.want ?? w, p.g) && sameScreen(w.wantScreen, p.screen) && w.minimized === p.minimized && w.stack === p.stack) windows.push(w)
     else {
       changed = true
-      windows.push({ ...w, ...fit(p.g), want: p.g, minimized: p.minimized, stack: p.stack, snap: undefined, maximized: false })
+      windows.push({ ...w, ...fit(p.g, p.screen), want: p.g, wantScreen: p.screen, minimized: p.minimized, stack: p.stack, snap: undefined, maximized: false })
     }
   }
   const added: WinState[] = []
   for (const p of list) {
     if (seen.has(p.id)) continue
     changed = true
-    added.push({ pid: pid++, app: 'widget', ...fit(p.g), want: p.g, z: 0, minimized: p.minimized, maximized: false, props: { kind: p.kind, id: p.id }, openedAt: Date.now(), stack: p.stack })
+    added.push({ pid: pid++, app: 'widget', ...fit(p.g, p.screen), want: p.g, wantScreen: p.screen, z: 0, minimized: p.minimized, maximized: false, props: { kind: p.kind, id: p.id }, openedAt: Date.now(), stack: p.stack })
   }
   if (!changed) return state
   const focused = windows.some((w) => w.pid === state.focused) ? state.focused : null
@@ -638,6 +670,8 @@ type WM = {
   toggleMax: (pid: number) => void
   /** Automatic sizing does not claim local overlap priority. */
   setGeometry: (pid: number, geometry: GeometryPatch, opts?: { automatic?: boolean }) => void
+  /** A phone page was removed: notes and widgets on later pages move down one page. */
+  shiftPagesAfter: (removed: number) => void
   /** A window changing what it shows itself (Preview going to the next picture): its title and saved layout follow. */
   setProps: (pid: number, props: WinState['props']) => void
   /** Puts the notes in this order in the phone layout's column (pids, top to bottom). */
@@ -905,9 +939,16 @@ export function WindowManagerProvider({
       if (shown && sameGeometry(shown.g, g) && shown.minimized === w.minimized && shown.stack === w.stack) continue
       const entry = entriesOf(all, id)[0]
       const rec = entry?.place
-      const round = { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw, vh, phone: state.phone }
-      put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round,
-        ...(state.phone ? { homeGrid: true } : {}), stack: w.stack,
+      // A resize shows the place's share of the room without changing it, so what is saved is
+      // still tagged with the screen it was put on, not the one the window happens to be on.
+      // A place saved before screens were known stays unknown until it is moved or resized by hand
+      // (that sets wantScreen): minimizing it must not invent the screen it happens to be on.
+      // (Also a place whose screen is only partly there, a width with no height: nothing is made up.)
+      const keepUnknown = !state.phone && !w.wantScreen && !!rec
+      const from = keepUnknown ? { vw: rec!.vw, vh: rec!.vh } : !state.phone && w.wantScreen ? w.wantScreen : { vw, vh }
+      const round = { x: Math.round(state.phone ? localX(g.x) : g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw: from.vw, vh: from.vh, phone: keepUnknown ? rec!.phone : state.phone }
+      put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round, ...(keepUnknown && rec!.screenUnknown ? { screenUnknown: true } : {}),
+        ...(state.phone ? { homeGrid: true, page: pageOfX(g.x) } : {}), stack: w.stack,
         minimized: w.minimized || undefined, at: nextAt(rec) }
 
       applied.current.delete(id)
@@ -994,7 +1035,9 @@ export function WindowManagerProvider({
     // widget's priority must not attach to a reused pid or to a new placement of the same widget.
     const priorityPid = notes.find((w) => w.app === 'widget' ? !!priorityWidgetId && w.props.id === priorityWidgetId : layoutPriority === `note:${w.app}`)?.pid
     // A viewport fit may clamp state geometry; explicit overflow placement keeps its canonical Y.
-    const positions = arrangeDesktop(notes.map((w) => ({ ...w, ...(w.pid === priorityPid && w.want ? { y: w.want.y } : {}), drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid, state.phone)
+    const positions = state.phone
+      ? arrangePages(notes.map((w) => ({ id: w.pid, x: w.x, y: w.pid === priorityPid && w.want ? w.want.y : w.y, w: w.w, h: w.h, envelope: (i) => mobileWidgetEnvelope(i, drawnWidths.get(w.pid) ?? i.w, drawnHeights.get(w.pid) ?? i.h) })), viewW(), viewH(), priorityPid)
+      : arrangeDesktop(notes.map((w) => ({ ...w, ...(w.pid === priorityPid && w.want ? { y: wantedHere(w)!.y } : {}), drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid, false)
     return state.windows.map((w) => positions.has(w.pid) ? { ...w, ...positions.get(w.pid)! } : w)
   }, [state.windows, state.phone, avoidOverlap, layoutPriority, priorityWidgetId, phoneRecords])
 
@@ -1028,6 +1071,16 @@ export function WindowManagerProvider({
       },
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
+      shiftPagesAfter: (removed) => {
+        // Widgets: the saved set moves as a whole (every key, every kind) and is shown again from it,
+        // which is not a change made by a window. Notes in the window layout: only their page moves.
+        // Only when a widget is on a later page: with none, the phone keeps inheriting the desktop's set.
+        if (stateRef.current.phone && mobileWidgetPageCounts(screenWidgets(true), viewW(), viewH()).some((n, i) => i > removed && n > 0)) {
+          changeScreenWidgets(true, (set) => shiftMobilePagesAfter(set, removed, viewW(), viewH()))
+          showSet(screenWidgets(true))
+        }
+        dispatch({ type: 'shiftPage', removed })
+      },
       setGeometry: (pid, geometry, { automatic = false } = {}) => {
         const shown = displayWindows.find((w) => w.pid === pid)
         if (shown && NOTE_APPS.has(shown.app)) {
@@ -1041,7 +1094,7 @@ export function WindowManagerProvider({
         if (shown && NOTE_APPS.has(shown.app) && state.phone && !automatic) {
           const snap = (n: number, origin: number) => origin + Math.round((n - origin) / HOME_GRID) * HOME_GRID
           geometry = { ...geometry,
-            ...(geometry.x !== undefined ? { x: Math.max(HOME_LEFT, snap(geometry.x, HOME_LEFT)) } : {}),
+            ...(geometry.x !== undefined ? { x: joinX(pageOfX(geometry.x), Math.max(HOME_LEFT, snap(localX(geometry.x), HOME_LEFT))) } : {}),
             ...(geometry.y !== undefined ? { y: Math.max(HOME_TOP, snap(geometry.y, HOME_TOP)) } : {}),
           }
         }
@@ -1095,6 +1148,7 @@ export function SoloWindowProvider({ win, children }: { win: WinState; children:
       minimize: none,
       toggleMax: none,
       setGeometry: none,
+      shiftPagesAfter: none,
       setProps: none,
       restack: none,
       reset: none,

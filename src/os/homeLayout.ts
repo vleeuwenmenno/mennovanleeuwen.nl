@@ -66,11 +66,6 @@ export function iconLayout(ids: string[], stored: Record<string, HomeCell>, widt
   return out
 }
 
-/** Horizontal home gestures ignore vertical scrolling and short taps. */
-export function homeSwipe(dx: number, dy: number, elapsed: number): 'icons' | 'widgets' | null {
-  return elapsed < 650 && Math.abs(dx) >= 60 && Math.abs(dx) > Math.abs(dy) * 1.6 ? (dx < 0 ? 'icons' : 'widgets') : null
-}
-
 /** Old mobile column places have no grid marker. Preserve their sorted order, ignore desktop x/y. */
 export function mobileHomeGeometry(p: HomeRect & { homeGrid?: boolean }, index: number, width: number): HomeRect {
   return { x: p.homeGrid ? p.x : HOME_LEFT, y: p.homeGrid ? p.y : HOME_TOP + index * 320,

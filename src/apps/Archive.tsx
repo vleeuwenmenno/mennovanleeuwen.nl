@@ -175,7 +175,7 @@ export function Archive({ win }: { win: WinState }) {
   const goUp = () => folder && go(folder.split('/').slice(0, -1).join('/'), true, folder)
   const goBack = () => {
     const prev = back[back.length - 1]
-    if (prev === undefined) return
+    if (prev === undefined) return false
     setBack(back.slice(0, -1))
     setFwd([folder, ...fwd])
     go(prev, false, prev.length < folder.length && folder.startsWith(prev) ? folder : undefined)

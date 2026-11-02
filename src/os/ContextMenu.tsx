@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useBackLayer } from './backLayers'
 import { openLink, openMailto } from '../data/links'
 import { notify } from './notify'
 import { toUi, uiScale } from './uiScale'
@@ -467,6 +468,7 @@ export function ContextMenuHost() {
     () => current,
   )
 
+  useBackLayer(!!menu, () => set(null))
   useEffect(() => {
     if (!menu) return
     const close = (e: Event) => {
