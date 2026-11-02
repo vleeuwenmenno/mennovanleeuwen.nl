@@ -142,7 +142,12 @@ try {
   for (const [name, value] of [['mvlos_sid', sid], ['mvlos_login', 'dock-check'], ['mvlos_uid', '1']]) await page.send('Network.setCookie', { name, value, url: origin })
   await page.send('Emulation.setTouchEmulationEnabled', { enabled: false })
   await page.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false })
-  await page.send('Page.navigate', { url: origin + '/?open=settings' })
+  await page.send('Page.navigate', { url: origin + '/' })
+  await page.waitFor(`!!document.querySelector('.desktop') && !document.querySelector('.boot')`, 90_000)
+  // Account hydration can replace the startup window layout. Open the running app afterwards;
+  // this fixture checks pinning, not the startup URL/window-restore race.
+  await page.waitFor(`import('/src/widgets/platform/canonicalState.ts').then(m=>m.widgetsHydrated())`, 90_000)
+  await page.eval(`window.dispatchEvent(new CustomEvent('mvlos:open',{detail:'settings'}))`)
   await page.waitFor(`document.querySelector('.dock > [data-drop="settings"]') && !document.querySelector('.boot')`, 90_000)
   await sleep(800)
   const pinned = await allOrder()
@@ -161,6 +166,9 @@ try {
   assert.equal(await page.eval(`document.querySelectorAll('.window[data-app="files"]').length`), count + 1)
   console.log('PASS ordinary dock click still opens app')
   assert.deepEqual(page.errors, [])
+} catch (error) {
+  console.error('Dock check failure', page.errors, await page.eval(`({root:document.querySelector('#root')?.innerHTML.slice(0,500),url:location.href,resources:performance.getEntriesByType('resource').filter(e=>e.name.includes('src/main')||e.responseStatus>=400).map(e=>({name:e.name,status:e.responseStatus}))})`))
+  throw error
 } finally {
   await browser.close()
   vite.kill()

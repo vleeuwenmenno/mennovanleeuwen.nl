@@ -44,6 +44,8 @@ type Props = {
   /** The mailbox the conversation was opened from (moves take it out of there). */
   mailbox: string | null
   narrow: boolean
+  /** Shown alone (a phone, or a window too small for the list beside it): a way back to the conversations. */
+  canBack?: boolean
   onBack: () => void
   /** A change to the whole conversation (archive, delete…), done by the app so the list follows. */
   onAction: (op: Op, opts?: { to?: string }) => void
@@ -54,7 +56,7 @@ type Props = {
 /** What other apps get to see of a message (Make task, Create event, invitations). */
 export const messageRef = (account: number, m: Message): MessageRef => ({ account, id: m.id, threadId: m.threadId, subject: m.subject, from: m.from, to: m.to, cc: m.cc, receivedAt: m.receivedAt, text: m.text ?? (m.html ? htmlToText(m.html) : ''), invite: m.invite, messageId: m.messageId[0] ?? null })
 
-export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAction, onReply, onSearch }: Props) {
+export function Reader({ account, threadId, boot, mailbox, narrow, canBack, onBack, onAction, onReply, onSearch }: Props) {
   const [messages, setMessages] = useState<Message[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<Set<string>>(new Set())
@@ -204,8 +206,8 @@ export function Reader({ account, threadId, boot, mailbox, narrow, onBack, onAct
 
   const toolbar = (
     <header className="ml-reader-bar">
-      {narrow && (
-        <button className="ml-icon" onClick={onBack} aria-label="Back to the list" title="Back (Esc)">
+      {(narrow || canBack) && (
+        <button className="ml-icon" onClick={onBack} aria-label="Back to the conversations" title="Back (Esc)">
           <Icon name="back" size={18} />
         </button>
       )}

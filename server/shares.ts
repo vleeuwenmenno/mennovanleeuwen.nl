@@ -144,6 +144,8 @@ export function stepLabel(name: string, args: Record<string, unknown>): string {
       return 'Changed files'
     case 'terminal':
       return 'Ran a command'
+    case 'terminal_capabilities':
+      return 'Checked what the terminal can do'
     case 'exit_plan_mode':
       return 'Presented a plan'
     case 'use_skill':

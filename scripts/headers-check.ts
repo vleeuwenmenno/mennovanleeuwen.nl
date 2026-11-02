@@ -10,7 +10,8 @@
 // Boots server/index.ts on a scratch port and DATA_DIR. Exits 1 on any failure.
 
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { buildPackage } from '../src/widgets/platform/package.ts'
+import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -26,7 +27,7 @@ const check = (what: string, test: boolean, detail?: unknown) => {
   }
 }
 
-const GENERAL = "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+const GENERAL = "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'"
 check('SECURITY carries HSTS without includeSubDomains or preload', SECURITY['Strict-Transport-Security'] === 'max-age=31536000')
 check('SECURITY carries the general CSP', SECURITY['Content-Security-Policy'] === GENERAL)
 // The merge order every untrusted-bytes route uses: SECURITY first, UNTRUSTED after.
@@ -52,7 +53,7 @@ try {
   check('/api/me: general CSP, no nonce', api.get('content-security-policy') === GENERAL, api.get('content-security-policy'))
   check('/api/me: nosniff and frame options kept', api.get('x-content-type-options') === 'nosniff' && api.get('x-frame-options') === 'SAMEORIGIN')
 
-  const nonceOf = (csp: string | null) => /^script-src 'nonce-([A-Za-z0-9+/=]{22,})' 'strict-dynamic' 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'$/.exec(csp ?? '')?.[1]
+  const nonceOf = (csp: string | null) => /^script-src 'nonce-([A-Za-z0-9+/=]{22,})' 'strict-dynamic' 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'$/.exec(csp ?? '')?.[1]
   const seen = new Set<string>()
   for (const path of ['/', '/cv', '/play/empires', '/play', '/no/such/page', '/index.html']) {
     for (const enc of ['identity', 'gzip', 'br']) {
@@ -173,6 +174,25 @@ try {
       () => check('browser: the real page boots under the nonce policy', true),
       (e) => check('browser: the real page boots under the nonce policy', false, e.message),
     )
+    // Exercise the actual production worker/WASM assets under the response CSP.
+    const files: Record<string, string> = {}
+    const collect = (root: string, prefix = '') => {
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory()) collect(join(root, entry.name), `${prefix}${entry.name}/`)
+        else files[prefix + entry.name] = readFileSync(join(root, entry.name), 'utf8')
+      }
+    }
+    collect('src/widgets/packages/sticky')
+    const snapshot = await buildPackage(files)
+    const workerAsset = readdirSync('dist/assets').find(name => /^worker-.*\.js$/.test(name))
+    const output = await real.eval<{ ok: boolean; error?: string }>(`new Promise(resolve=>{
+      const worker=new Worker(${JSON.stringify(`/assets/${workerAsset}`)},{type:'module'});
+      const timer=setTimeout(()=>{worker.terminate();resolve({ok:false,error:'timeout'})},4000);
+      worker.onmessage=e=>{clearTimeout(timer);worker.terminate();resolve(e.data)};
+      worker.onerror=()=>{clearTimeout(timer);worker.terminate();resolve({ok:false,error:'worker failure'})};
+      worker.postMessage({snapshot:${JSON.stringify(snapshot)},input:{note:{text:'Production proof',revision:'1'}}});
+    })`)
+    check('browser: production widget WASM worker runs under CSP', output.ok === true, output)
     check('browser: the boot raised no script errors', real.errors.length === 0, real.errors.join(' | '))
     await real.close()
   } finally {

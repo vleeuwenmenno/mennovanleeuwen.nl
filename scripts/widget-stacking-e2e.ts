@@ -178,7 +178,7 @@ async function quiet(page: P, what: string) {
   await resetPuts(page)
   await sleep(IDLE_MS)
   const r = await puts(page)
-  check(`${what}: no window layout or widget saves while idle`, !r['widgets:placed'] && !r['windows:desktop'], r)
+  check(`${what}: no window layout or widget saves while idle`, !r['widgets:state:v2'] && !r['windows:desktop'], r)
 }
 const plain = (o: { widget: boolean; name: string }[]) => o.filter((w) => !w.widget && !/^(notes|keys):/.test(w.name))
 
@@ -257,7 +257,7 @@ try {
   check('everything else kept its order', names(afterRemote.filter((w) => w !== arrived)) === names(beforeRemote), { before: names(beforeRemote), after: names(afterRemote) })
   check('the window is still in front', afterRemote.at(-1)?.name === front, names(afterRemote))
   const got = await puts(A)
-  check('showing the arrival saved no widget places and no layout in A', !got['widgets:placed'] && !got['windows:desktop'], got)
+  check('showing the arrival saved no widget places and no layout in A', !got['widgets:state:v2'] && !got['windows:desktop'], got)
   await quiet(A, 'A after the remote widget')
 
   // 5. A widget moved elsewhere, by its place in the set only (no layout from there: a phone's
@@ -274,7 +274,7 @@ try {
   check('the move reached A', (await at(A)) !== wasAt, { wasAt })
   check('and A kept its stacking', names(afterMove) === names(beforeMove), { before: names(beforeMove), after: names(afterMove) })
   const moved = await puts(A)
-  check('showing the move saved nothing in A', !moved['widgets:placed'] && !moved['windows:desktop'], moved)
+  check('showing the move saved nothing in A', !moved['widgets:state:v2'] && !moved['windows:desktop'], moved)
 
   for (const p of [V, A, B]) if (p.errors.length) check('no page errors', false, p.errors.slice(0, 3))
 } catch (e) {

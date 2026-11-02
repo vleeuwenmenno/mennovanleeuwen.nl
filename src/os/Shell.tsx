@@ -1,3 +1,4 @@
+import { WidgetVisibility } from '../widgets/platform/visibility'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
 import { dropInTrash, trashOp } from '../data/fileDrop'
@@ -7,6 +8,7 @@ import { filesFor, openWith } from './appDrops'
 import { HOME } from '../terminal/vfs'
 import { whereIs } from '../data/mounts'
 import { widgetDef } from '../widgets/registry'
+import { openWidget } from '../widgets/windows'
 import type { WidgetDef } from '../widgets/types'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
@@ -694,7 +696,7 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
   const style = def.useFrame?.(id)
   const menuItems = def.useMenu?.(id, wm) ?? []
   return (
-    <Window win={w} title={def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
+    <Window win={w} title={def.useTitle?.(id) ?? def.name} chrome="note" className={`widget widget-${def.kind}${style?.['--widget-bare' as keyof typeof style] === '1' ? ' widget-bare' : ''}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
       {APP_META.widget.render(w)}
     </Window>
   )
@@ -702,14 +704,21 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
 
 const AUTH_NOTICES: Record<string, { title: string; body?: string }> = {
   ok: { title: 'Signed in', body: 'Notes, launchers and layouts now sync. Spotlight searches your repositories too (try #123 or repo@branch).' },
-  error: { title: 'Sign-in failed', body: 'GitHub did not complete the sign-in. Try again.' },
-  off: { title: 'Sign-in is not set up', body: 'This server has no GitHub OAuth app configured.' },
+  error: { title: 'Sign-in failed', body: 'The sign-in did not complete. Try again.' },
+  off: { title: 'Sign-in is not set up', body: 'This server has no sign-in configured for that.' },
+  denied: { title: 'Not signed in', body: 'Access was not granted.' },
+  'linked-github': { title: 'GitHub linked', body: 'You can now sign in to this account with GitHub too.' },
+  'linked-google': { title: 'Google linked', body: 'You can now sign in to this account with Google too. Google Calendar is connected separately, in Settings → Integrations.' },
+  'app-error': { title: 'Not signed in', body: 'The app sign-in did not complete or expired. Try signing in again.' },
+  'link-error': { title: 'Not linked', body: 'Linking did not complete. Start again from Settings → Account, on this device, while signed in.' },
 }
 
 /** Sign-ins the server turned away (server/auth.ts finishLogin), shown as a dialog (here, and on a game's direct link: Play.tsx). */
 export const REFUSED: Record<string, (reason: string | null) => { title: string; body: string }> = {
-  full: () => ({ title: "We're full", body: 'MvL OS has room for a limited number of accounts, and they are all taken. Your GitHub account was not added. Try again later; you can keep using this desktop as a guest.' }),
-  closed: () => ({ title: 'Sign-up is closed', body: 'New accounts are not being made right now. Your GitHub account was not added; you can keep using this desktop as a guest.' }),
+  full: () => ({ title: "We're full", body: 'MvL OS has room for a limited number of accounts, and they are all taken. No account was made. Try again later; you can keep using this desktop as a guest.' }),
+  closed: () => ({ title: 'Sign-up is closed', body: 'New accounts are not being made right now. No account was made; you can keep using this desktop as a guest.' }),
+  'link-taken': () => ({ title: 'Already in use', body: 'That account already signs in to another MvL OS account, so it was not linked. Accounts are never merged: sign in with it to use that account, or delete that account first.' }),
+  'link-exists': () => ({ title: 'Already linked', body: 'This account already has a different one of those linked. Remove it in Settings → Account first.' }),
   banned: (reason) => ({ title: 'This account is blocked', body: reason ? `The admin blocked this account: ${reason.slice(0, 200)}` : 'The admin blocked this account from signing in.' }),
 }
 
@@ -717,7 +726,7 @@ const GOOGLE_NOTICES: Record<string, { title: string; body?: string }> = {
   ok: { title: 'Google Calendar connected', body: 'Add an Agenda widget from the desktop menu (Add widget) to see it.' },
   denied: { title: 'Google Calendar not connected', body: 'Access was not granted.' },
   error: { title: 'Google Calendar could not connect', body: 'Google did not complete it. Try again from Settings.' },
-  signin: { title: 'Sign in first', body: 'Google Calendar attaches to your GitHub sign-in.' },
+  signin: { title: 'Sign in first', body: 'Google Calendar attaches to your MvL OS account: sign in first.' },
   off: { title: 'Google Calendar is not set up', body: 'This server has no Google OAuth client configured.' },
 }
 
@@ -748,7 +757,7 @@ export function Shell() {
   // moment the desk behind it shows. Nothing of the desk may peek out from behind it then.
   const covered = wm.windows.some((w) => w.maximized && !w.minimized && !NOTE_APPS.has(w.app) && wm.shown(w))
 
-  // Phones: app windows are full-screen sheets, and the notes (sticky widgets too) go one under
+  // Phones: app windows are full-screen sheets; built-in notes go one under
   // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
   // the front, or just added, scrolls into view.
   const mobile = useIsMobile()
@@ -802,6 +811,16 @@ export function Shell() {
     window.addEventListener('mvlos:open', onOpen)
     return () => window.removeEventListener('mvlos:open', onOpen)
   }, [wm.open])
+
+  // An agent's `widget activate` puts the widget it made on the desktop (focuses it when it is there already).
+  useEffect(() => {
+    const onWidget = (e: Event) => {
+      const d = (e as CustomEvent<{ kind: string; id: string }>).detail
+      if (d && typeof d.kind === 'string' && typeof d.id === 'string') openWidget(wm, d.kind, d.id)
+    }
+    window.addEventListener('mvlos:open-widget', onWidget)
+    return () => window.removeEventListener('mvlos:open-widget', onWidget)
+  }, [wm])
 
   // A reboot (or powering on again) starts from a clean desk, like a real one.
   useEffect(() => {
@@ -895,16 +914,18 @@ export function Shell() {
       <TopBar />
       {/* Icons and windows. On phones this layer scrolls down when windows reach below the
           screen; the top bar, the dock and the wallpaper stay where they are. */}
-      <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
+      <WidgetVisibility value={!hidden && !covered}><div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
         <Desktop />
         <main className="windows">
-          {wm.windows.map((w) => (
+          {/* A phone only draws the widgets whose package says it works there (`phone: true`). */}
+          {wm.windows.filter((w) => !mobile || w.app !== 'widget' || wm.shown(w)).map((w) => (
             <AppWindow key={w.pid} w={w} />
           ))}
           {/* Phones: where a note being moved up or down the column will land. */}
           <NoteStackSlot />
         </main>
       </div>
+      </WidgetVisibility>
       <SnapPreview />
       <Dock />
       {overlay === 'launchpad' && <Launchpad />}

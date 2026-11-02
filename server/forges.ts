@@ -138,7 +138,8 @@ export function listForges(user: User): ForgeInfo[] {
 
 export function sources(user: User): Source[] {
   const rows = database().prepare('SELECT id, label, base_url, username, token FROM forges WHERE user_id = ? ORDER BY id').all(user.id) as unknown as ForgeRow[]
-  return [githubSource(user), ...rows.map((r) => giteaSource(user, r.id, r.label, r.base_url, r.username, decrypt(r.token)))]
+  // GitHub only when the account has it linked (an account made with Google may not).
+  return [...(user.githubId !== null && user.githubToken ? [githubSource(user)] : []), ...rows.map((r) => giteaSource(user, r.id, r.label, r.base_url, r.username, decrypt(r.token)))]
 }
 
 /** "git.example.com", "https://git.example.com/", ".../api/v1" all become "https://git.example.com". */

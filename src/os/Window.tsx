@@ -1,8 +1,9 @@
+import { fitWidget } from './widgetLayout'
 import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { addWidgetItems } from '../widgets/registry'
 import { APP_META } from './apps'
 import { cancelTouchMenu, linkAt, linkMenu, openContextMenu, wantsNativeMenu, type MenuItem } from './ContextMenu'
-import { getDockMode, snapReserve } from './dockPrefs'
+import { maxReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { useSwing } from './swing'
 import { WindowMenuContext } from './windowMenu'
@@ -37,6 +38,7 @@ type Props = {
 
 type Drag = {
   mode: 'move' | 'resize' | 'stack'
+  pointerId: number
   edge: string
   startX: number
   startY: number
@@ -152,7 +154,7 @@ function workspaceAt(x: number, y: number): number | null {
 }
 const clearWorkspaceDrop = () => document.querySelectorAll('.ws[data-drop]').forEach((el) => el.removeAttribute('data-drop'))
 
-const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: viewW() - 20, h: viewH() - TOP_BAR - 20 - (getDockMode() === 'show' ? snapReserve() : 0) })
+const maxRect = (): Geometry => ({ x: 10, y: TOP_BAR + 10, w: viewW() - 20, h: viewH() - TOP_BAR - 20 - maxReserve() })
 
 export function Window({ win, title, chrome = 'default', className = '', style, menuItems = [], closeLabel = 'Close', resizableWidth = false, children }: Props) {
   const wm = useWM()
@@ -187,7 +189,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     if (chrome !== 'note' || !el) return
     let last = { w: 0, h: 0 }
     const measure = () => {
-      const h = Math.max(el.offsetHeight, ...[...el.children].map((c) => (c as HTMLElement).offsetTop + (c as HTMLElement).offsetHeight))
+      const h = win.app === 'widget' ? el.offsetHeight : Math.max(el.offsetHeight, ...[...el.children].map((c) => (c as HTMLElement).offsetTop + (c as HTMLElement).offsetHeight))
       const w = el.offsetWidth
       if (Math.abs(h - last.h) < 2 && Math.abs(w - last.w) < 2) return
       last = { w, h }
@@ -209,14 +211,14 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
   const lift = useRef<Lift | null>(null)
 
   const begin = (mode: Drag['mode'], edge = '') => (e: ReactPointerEvent) => {
-    if (e.button !== 0) return
+    if (e.button !== 0 || drag.current) return
     if ((e.target as HTMLElement).closest('button, a, input, textarea')) return
     if (win.maximized && mode === 'resize') return
     // Mobile notes use the same free grid move as desktop notes; no forced column reorder.
     e.preventDefault()
     wm.focus(win.pid)
     const el = e.currentTarget as HTMLElement
-    const d: Drag = { mode, edge, startX: toUi(e.clientX), startY: toUi(e.clientY), x: win.x, y: win.y, w: win.w, h: win.h, moved: false, scroll: el.closest('.desk-scroll')?.scrollTop }
+    const d: Drag = { mode, edge, pointerId: e.pointerId, startX: toUi(e.clientX), startY: toUi(e.clientY), x: win.x, y: win.y, w: win.w, h: win.h, moved: false, scroll: el.closest('.desk-scroll')?.scrollTop }
     drag.current = d
     if (mode === 'stack' && e.pointerType === 'touch') {
       const hold: NonNullable<Drag['hold']> = { timer: null, armed: false, given: false, y: toUi(e.clientY), at: toUi(e.clientY) }
@@ -369,7 +371,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
 
   const onMove = (e: Ptr) => {
     const d = drag.current
-    if (!d) return
+    if (!d || d.pointerId !== e.pointerId) return
     // Page pixels (the UI scale, uiScale.ts), as the window's geometry is.
     const px = toUi(e.clientX)
     const py = toUi(e.clientY)
@@ -429,10 +431,11 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       }
     } else {
       const g: Partial<Geometry> = {}
-      if (d.edge.includes('e')) g.w = Math.max(MIN_W, d.w + dx)
+      const minW = win.app === 'widget' ? 160 : MIN_W
+      if (d.edge.includes('e')) g.w = Math.max(minW, d.w + dx)
       if (d.edge.includes('s')) g.h = Math.max(MIN_H, d.h + dy)
       if (d.edge.includes('w')) {
-        const w = Math.max(MIN_W, d.w - dx)
+        const w = Math.max(minW, d.w - dx)
         g.w = w
         g.x = d.x + (d.w - w)
       }
@@ -442,6 +445,14 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         g.y = top
         g.h = d.y + d.h - top
       }
+      // Use the same complete control envelope for pointer resizing and viewport fitting.
+      if (win.app === 'widget') {
+        const width = d.edge.includes('e') ? Math.min(g.w ?? d.w, viewW() - d.x - 24) : (g.w ?? d.w)
+        const fitted = fitWidget({ x: g.x ?? d.x, y: g.y ?? d.y, w: width, h: g.h ?? d.h }, viewW(), viewH())
+        g.x = fitted.x
+        g.y = (g.y ?? d.y) > viewH() ? (g.y ?? d.y) : fitted.y
+        g.w = fitted.w
+      }
       // Resizing a snapped window makes it a normal one again.
       wm.setGeometry(win.pid, { ...g, snap: undefined, restore: undefined })
     }
@@ -449,6 +460,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
 
   const end = (e: Ptr) => {
     const d = drag.current
+    if (d && d.pointerId !== e.pointerId) return
     drag.current = null
     if (d?.hold?.timer) clearTimeout(d.hold.timer)
     // Let go of a lifted note that never moved: it was a long press, so it gets its menu.
@@ -482,7 +494,16 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     else wm.setGeometry(win.pid, { ...snapRect(zone), snap: zone, restore, maximized: false })
   }
 
-  const handlers = { onPointerMove: onMove, onPointerUp: end, onPointerCancel: end }
+  useEffect(() => () => {
+    if (!drag.current) return
+    if (drag.current.hold?.timer) clearTimeout(drag.current.hold.timer)
+    drag.current = null
+    document.body.classList.remove('is-dragging', 'is-resizing')
+    delete document.body.dataset.rz
+    document.removeEventListener('selectstart', noSelect)
+  }, [])
+
+  const handlers = { onPointerMove: onMove, onPointerUp: end, onPointerCancel: end, onLostPointerCapture: (e: ReactPointerEvent) => { if (win.app === 'widget' && drag.current) end(e) } }
 
   // --- moving and resizing with a key held (modDrag.ts) ---
   //
@@ -523,7 +544,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     const ours = (ev: PointerEvent) => ev.isTrusted && ev.pointerId === press.id
     const take = () => {
       press.taken = true
-      drag.current = { mode, edge, startX: toUi(press.x), startY: toUi(press.y), x: win.x, y: win.y, w: win.w, h: win.h, moved: false }
+      drag.current = { mode, edge, pointerId: press.id, startX: toUi(press.x), startY: toUi(press.y), x: win.x, y: win.y, w: win.w, h: win.h, moved: false }
       try {
         el.setPointerCapture(press.id)
       } catch {
@@ -656,7 +677,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       ref={sectionRef}
       className={`window chrome-${chrome} ${focused ? 'is-focused' : ''} ${win.maximized ? 'is-max' : ''} ${win.minimized ? 'is-min' : ''} ${wm.shown(win) ? '' : 'is-away'} ${win.snap ? 'is-snapped' : ''} ${className}`}
       // --stack: the note's place in the phone layout's column (only that layout reads it).
-      style={{ ...style, ['--home-x' as string]: `${win.x}px`, ['--home-y' as string]: `${win.y}px`, ['--home-w' as string]: `${win.w}px`, left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z, ...(chrome === 'note' ? { ['--stack' as string]: stackOrder(wm.windows).indexOf(win.pid) } : {}) }}
+      style={{ ...style, ...(win.app === 'widget' ? { ['--widget-body-max' as string]: `${Math.max(140, viewH() - (win.want?.y ?? win.y) - 70)}px` } : {}), ['--home-x' as string]: `${win.x}px`, ['--home-y' as string]: `${win.y}px`, ['--home-w' as string]: `${win.w}px`, left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z, ...(chrome === 'note' ? { ['--stack' as string]: stackOrder(wm.windows).indexOf(win.pid) } : {}) }}
       onPointerDown={() => wm.focus(win.pid)}
       onPointerDownCapture={modPressDown}
       onContextMenuCapture={modContextMenu}

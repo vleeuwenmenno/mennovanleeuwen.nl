@@ -79,6 +79,11 @@ async function load(page: P) {
 }
 const api = async (key: string, value?: unknown) => {
   const state = await fetch(origin + '/api/state', { headers: { Cookie: `mvlos_sid=${sid2}`, 'X-MvL-Account': '1' } }).then(async r => { if (!r.ok) throw new Error('state read: ' + r.status); return r.json() })
+  if (key === 'widgets:placed' && state['widgets:state:v2']?.value?.schema === 2) {
+    const envelope = state['widgets:state:v2'].value
+    if (value === undefined) return envelope.placements
+    key = 'widgets:state:v2'; value = { ...envelope, placements: value }
+  }
   if (value === undefined) return state[key]?.value
   const response = await fetch(origin + '/api/state/' + key, { method: 'PUT', headers: { Cookie: `mvlos_sid=${sid2}`, Origin: origin, 'Content-Type': 'application/json', 'X-MvL-Account': '1' }, body: JSON.stringify({ value, base: state[key]?.updatedAt ?? 0 }) })
   if (!response.ok) throw new Error(`seed ${key}: ${response.status} ${await response.text()}`)
@@ -109,7 +114,7 @@ async function instrument(p: P) {
 async function quiet(p: P, label: string) {
   await sleep(1500)
   const r = await p.eval<{ saves: { widgets: number; windows: number }; puts: Record<string, number> }>(`({ saves: window.__saves, puts: window.__puts })`)
-  check(label + ': zero store saves and sync PUTs', r.saves.widgets === 0 && r.saves.windows === 0 && !r.puts['widgets:placed'] && !r.puts['windows:desktop'], r)
+  check(label + ': zero store saves and sync PUTs', r.saves.widgets === 0 && r.saves.windows === 0 && !r.puts['widgets:state:v2'] && !r.puts['windows:desktop'], r)
 }
 const clearCounts = (p: P) => p.eval(`(window.__saves = { widgets: 0, windows: 0 }, window.__puts = {}, 0)`)
 async function drag(p: P, pid: number, dx: number, dy: number, edge = false) {
@@ -216,12 +221,12 @@ try {
   await quiet(A, 'remote content growth and refitting')
   await scale(A, 2)
 
-  // The phone column owns placement; local avoidance must have no effect there.
+  // Mobile's shared grid owns placement; desktop avoidance preferences have no effect there.
   await resize(A, 390, 844)
   const phone = await widgets(A)
   await A.eval(`import('/src/os/widgetLayoutPrefs.ts').then(m => m.avoidWidgetOverlap.set(true))`)
   await sleep(500)
-  check('phone column ignores collision setting', JSON.stringify(await widgets(A)) === JSON.stringify(phone))
+  check('mobile grid ignores desktop collision setting', JSON.stringify(await widgets(A)) === JSON.stringify(phone))
   await quiet(A, 'phone resize and preference')
 
   // Actual React overlays, populated enough to reach their CSS viewport limits.
@@ -316,7 +321,7 @@ try {
   await quiet(E, 'second device receiving manual move')
   await load(D)
   const reloadPuts = await D.eval<Record<string, number>>(`window.__puts`)
-  check('enabled-avoidance reload sends no automatic sync writes', !reloadPuts['widgets:placed'] && !reloadPuts['windows:desktop'], reloadPuts)
+  check('enabled-avoidance reload sends no automatic sync writes', !reloadPuts['widgets:state:v2'] && !reloadPuts['windows:desktop'], reloadPuts)
   check('enabled-avoidance reload preserves full visible layout', isDeepStrictEqual(await geometry(D), preferred), { before: preferred, after: await geometry(D) })
   check('priority survives reload under account-local key', await D.eval(`localStorage.getItem('mvlos.u.1.widgets.layoutPriority')`) === 'widget:priorityB')
   await instrument(D)

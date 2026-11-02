@@ -118,21 +118,42 @@ const isRates = (v: unknown): v is Rates => !!v && typeof v === 'object' && !!(v
  * and kept for six hours), or the two sources directly when there is no server (a static build,
  * or the API failing).
  */
-async function fetchRates(): Promise<Rates | null> {
+export type RateAccess = {
+  signal?: AbortSignal
+  authorize: () => void
+  check?: () => void
+  readJson?: (response: Response) => Promise<any>
+  parseCache?: (text: string) => Promise<any>
+  checkCache?: (data: unknown) => Promise<void>
+}
+
+async function fetchRates(access?: RateAccess): Promise<Rates | null> {
+  const checkpoint = () => { access?.signal?.throwIfAborted(); access?.authorize() }
+  const request = async (url: string, init?: RequestInit) => {
+    checkpoint()
+    const response = await fetch(url, { ...init, signal: access?.signal })
+    try { checkpoint() } catch (error) { void response.body?.cancel().catch(() => {}); throw error }
+    return response
+  }
+  const decode = (r: Response) => access?.readJson ? access.readJson(r) : r.json()
+  checkpoint()
   try {
-    const r = await fetch('/api/fx', { headers: { Accept: 'application/json' } })
+    const r = await request('/api/fx', { headers: { Accept: 'application/json' } })
     if (r.ok) {
-      const data = await r.json()
-      if (isRates(data)) return { base: 'EUR', date: data.date, source: data.source, rates: data.rates, wide: data.wide }
-    }
+      const data = await decode(r)
+      checkpoint()
+      if (isRates(data)) return { base: 'EUR', date: data.date, source: data.source, rates: data.rates, ...(data.wide ? { wide: data.wide } : {}) }
+    } else void r.body?.cancel().catch(() => {})
   } catch {
     /* no server: ask the sources */
   }
+  checkpoint()
   // ECB reference rates via Frankfurter, topped up with open.er-api.com for currencies the ECB does not publish.
   const [ecb, wide] = await Promise.allSettled([
-    fetch('https://api.frankfurter.dev/v1/latest?base=EUR').then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
-    fetch('https://open.er-api.com/v6/latest/EUR').then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+    request('https://api.frankfurter.dev/v1/latest?base=EUR').then((r) => (r.ok ? decode(r) : (void r.body?.cancel().catch(() => {}), Promise.reject(r.status)))),
+    request('https://open.er-api.com/v6/latest/EUR').then((r) => (r.ok ? decode(r) : (void r.body?.cancel().catch(() => {}), Promise.reject(r.status)))),
   ])
+  checkpoint()
   const ecbRates: Record<string, number> = ecb.status === 'fulfilled' ? (ecb.value.rates ?? {}) : {}
   const rates: Record<string, number> = { ...(wide.status === 'fulfilled' ? wide.value.rates : {}), ...ecbRates, EUR: 1 }
   if (Object.keys(rates).length < 2) return null
@@ -141,26 +162,28 @@ async function fetchRates(): Promise<Rates | null> {
     date: ecb.status === 'fulfilled' ? ecb.value.date : new Date().toISOString().slice(0, 10),
     source: ecb.status === 'fulfilled' ? 'European Central Bank' : 'exchangerate-api.com',
     rates,
-    wide: ecb.status === 'fulfilled' ? Object.keys(rates).filter((c) => c !== 'EUR' && !(c in ecbRates)) : undefined,
+    ...(ecb.status === 'fulfilled' ? { wide: Object.keys(rates).filter((c) => c !== 'EUR' && !(c in ecbRates)) } : {}),
   }
 }
 
-export function loadRates(): Promise<Rates | null> {
-  if (ratesCache) return Promise.resolve(ratesCache)
+export async function loadRates(access?: RateAccess): Promise<Rates | null> {
+  access?.signal?.throwIfAborted()
+  if (ratesCache) { await access?.checkCache?.(ratesCache); access?.signal?.throwIfAborted(); return ratesCache }
   try {
-    const raw = JSON.parse(sessionStorage.getItem(RATES_KEY) ?? 'null')
+    const text = sessionStorage.getItem(RATES_KEY) ?? 'null'
+    const raw = access?.parseCache ? await access.parseCache(text) : JSON.parse(text)
     if (raw && Date.now() - raw.at < 6 * 3600_000 && isRates(raw.data)) return Promise.resolve((ratesCache = raw.data))
   } catch {
+    access?.signal?.throwIfAborted()
+    access?.check?.()
     /* fetch instead */
   }
-  ratesPromise ??= fetchRates()
-    .catch(() => null)
-    .then((data) => {
-      // A failure is not remembered: the next ask tries again.
-      if (!data) {
-        ratesPromise = null
-        return null
-      }
+  const load = () => fetchRates(access)
+    .catch((error) => { if (access) throw error; return null })
+    .then(async (data) => {
+      access?.signal?.throwIfAborted()
+      if (!data) return null
+      await access?.checkCache?.(data)
       ratesCache = data
       try {
         sessionStorage.setItem(RATES_KEY, JSON.stringify({ at: Date.now(), data }))
@@ -169,8 +192,15 @@ export function loadRates(): Promise<Rates | null> {
       }
       return data
     })
+  // An agent never borrows an unguarded request started by Spotlight or another call. Its
+  // cancellation must not abort somebody else's request, nor allow its own fallback to continue.
+  if (access) return load()
+  ratesPromise ??= load().finally(() => { ratesPromise = null })
   return ratesPromise
 }
+
+/** The same parser determines which calculator expressions can require exchange-rate I/O. */
+export const calculatorUsesRates = (input: string) => smartCalc(input, null, 'EUR')?.kind === 'pending'
 
 /** Where a rate between two currencies comes from: the ECB, unless either is one only the wider source has. */
 export const rateSource = (r: Rates, a: string, b: string) => (r.wide?.includes(a) || r.wide?.includes(b) ? 'exchangerate-api.com' : r.source)

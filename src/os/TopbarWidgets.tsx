@@ -4,7 +4,7 @@ import { timeAgo } from '../data/recents'
 import { fetchMinecraft, MC_ADDRESS, MC_PORT, mcNotificationsOn, setMcNotifications, useMinecraft, worldLine } from '../data/minecraft'
 import { BUILT, COMMIT, REPO, VERSION } from '../version'
 import { dayKey, eventsOn, eventTime, fetchEvents, openEvent, startOfDay, useCalendarVersion, useShownCalendarIds, type CalendarEvent } from '../data/calendar'
-import { connectGoogle, hasCalendar, signIn, signOut, useAccount } from './account'
+import { connectGoogle, hasCalendar, signIn, signInWithGoogle, signOut, useAccount } from './account'
 import { cvMode } from './cvMode'
 import { openContextMenu, type MenuItem } from './ContextMenu'
 import { reboot, shutdown } from './powerState'
@@ -475,6 +475,7 @@ function AccountBlock({ close }: { close: () => void }) {
       <div className="sys-user">
         <span className="muted">Guest</span>
         <button onClick={signIn}>Sign in with GitHub</button>
+        {account.signIn.google && <button onClick={signInWithGoogle}>Sign in with Google</button>}
       </div>
     )
   return null

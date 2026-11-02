@@ -168,7 +168,8 @@ function quarterPrecip(times: string[] | undefined, amounts: unknown[] | undefin
   }))
 }
 
-export async function fetchForecast(lat: number, lon: number, units: Units): Promise<Forecast> {
+export async function fetchForecast(lat: number, lon: number, units: Units, signal?: AbortSignal): Promise<Forecast> {
+  signal?.throwIfAborted()
   const key = `v3:${lat.toFixed(2)},${lon.toFixed(2)},${units}`
   const hit = forecasts.get(key)
   if (hit && Date.now() - hit.at < FORECAST_TTL) return hit
@@ -187,9 +188,10 @@ export async function fetchForecast(lat: number, lon: number, units: Units): Pro
     forecast_minutely_15: '16',
     ...(units === 'f' ? { temperature_unit: 'fahrenheit', wind_speed_unit: 'mph', precipitation_unit: 'inch' } : {}),
   })
-  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal: AbortSignal.timeout(10_000) })
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) })
   if (!res.ok) throw new Error(`Open-Meteo answered ${res.status}`)
   const d = await res.json()
+  signal?.throwIfAborted()
   const hoursRaw = d.hourly?.time as string[] | undefined
   const daysRaw = d.daily?.time as string[] | undefined
   // UV is hourly; take the current hour's value (or the next one) for the "now" tile.
@@ -331,8 +333,11 @@ export async function searchPlaces(q: string): Promise<Place[]> {
 }
 
 const HERE_KEY = 'mvlos.weather.here'
+let memoryHere: Place | null = null
+if (typeof window !== 'undefined') window.addEventListener('storage', event => { if (event.key === HERE_KEY || event.key === null) memoryHere = null })
 
 export function rememberedHere(): Place | null {
+  if (memoryHere) return memoryHere
   try {
     return JSON.parse(localStorage.getItem(HERE_KEY) ?? 'null')
   } catch {
@@ -340,11 +345,12 @@ export function rememberedHere(): Place | null {
   }
 }
 
-export function locate(): Promise<Place> {
+export function locate(allowed: () => boolean = () => true): Promise<Place> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('This browser has no location'))
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
+        if (!allowed()) return reject(new Error('Location request cancelled'))
         const lat = Math.round(pos.coords.latitude * 100) / 100
         const lon = Math.round(pos.coords.longitude * 100) / 100
         let name = `${lat}, ${lon}`
@@ -355,12 +361,15 @@ export function locate(): Promise<Place> {
         } catch {
           /* coordinates will do */
         }
+        if (!allowed()) return reject(new Error('Location request cancelled'))
         const place = { name, lat, lon }
+        memoryHere = place
         try {
           localStorage.setItem(HERE_KEY, JSON.stringify(place))
         } catch {
           /* asked again next time */
         }
+        window.dispatchEvent(new Event('mvlos:weather-here'))
         resolve(place)
       },
       (err) => reject(new Error(err.code === err.PERMISSION_DENIED ? 'Location not allowed' : 'Location unavailable')),
