@@ -410,6 +410,9 @@ function apply(state: State, action: Action): State {
         ws: NOTE_APPS.has(action.app) ? undefined : state.ws,
         // A CV app opened away from /cv (the Minecraft widget, a notification): here, on every page.
         anywhere: appHere(action.app) ? undefined : true,
+        // A widget added by hand is put where it opens, on this screen: that is its place, and a resize
+        // shows its share of the room without changing it (projectWidget), before any drag or reload.
+        ...(action.app === 'widget' ? { want: { ...action.geometry }, wantScreen: state.phone ? null : { vw: viewW(), vh: viewH() } } : {}),
       }
       return { ...state, touched: true, focused: win.pid, windows: [...state.windows, win], nextPid: state.nextPid + 1, topZ: z, unplaced: state.unplaced && [...state.unplaced, win.pid] }
     }
