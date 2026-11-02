@@ -9,7 +9,7 @@ import { getAccount, subscribeAccount } from '../../os/account'
 import { accountGuard } from '../../os/accountSpace'
 import { CUSTOM_KIND, isInstanceKind, supportsCapabilities, record, verifySnapshot, type InstanceKind } from './package'
 import { assertSource, sightTrustedSource, trustGate, TrustRefusal } from './sources'
-import { effectiveGrant, grantGeneration, grantLive, newGrant, newRevocation, revocationsOf, type TrustGrant } from './trust'
+import { effectiveGrant, grantGeneration, grantLive, newGrant, newRevocation, revocationsOf, type TrustGrant, type TrustRevocation } from './trust'
 import { admission, INSTANCE_ID, isTombstone, mergeInstallations as mergeRecords, normalizeInstallations as normalize, tombstone, type Installation, type Installations, type Revision } from './records'
 export type { Installation, Revision }
 /** Why an activation or recovery did not happen, so the UI can offer the right action. Messages stay user-readable. */
@@ -181,12 +181,32 @@ const checking = new Map<string, Promise<void>>()
 const evidenceListeners = new Set<() => void>()
 const notifyEvidence = () => evidenceListeners.forEach(listener => listener())
 const evidenceKey = (instance: string, revision: Revision, grant: TrustGrant) => JSON.stringify([getAccount().user?.id ?? 'guest', instance, revision.source, revision.snapshot.digest, grant.installation, grant.id])
-/** `deleted`: this device sees the trusted folder gone from its own storage (the full check then confirms and revokes). */
-export type TrustStatus = { state: 'none' } | { state: 'checking' } | { state: 'trusted' } | { state: 'refused'; reason: string; deleted?: true }
+/** `deleted`: this device sees the trusted folder gone from its own storage (the full check then confirms and revokes).
+ * `unsaved`: Revoke trust took effect here but could not be saved to the account yet (retry with revokeTrust). */
+export type TrustStatus = { state: 'none' } | { state: 'checking' } | { state: 'trusted' } | { state: 'refused'; reason: string; deleted?: true; unsaved?: true }
+
+// --- local revocation: Revoke trust takes effect in this tab before anything is saved ---
+//
+// The click denies every grant of that widget here at once, before the revocation is written, so a
+// full or blocked storage cannot leave it running: no evidence re-check and no stale account state
+// can undo the denial. It applies the causal rule ahead of saving: a grant counts here only if it saw
+// every revocation this tab made for the widget. A revocation that could not be saved stays pending,
+// is reported, and is saved by Revoke trust again (same id); no other device can have seen it, so
+// only a genuine Trust always click here, whose grant carries it as seen, counts again. Once saved, a
+// grant made anywhere after seeing it is a later decision and counts as usual.
+/** `ids`: the revocations this tab made for the widget. `epoch`: how many Revoke trust clicks here (a click to trust compares it). */
+type Denial = { ids: Set<string>; epoch: number; pending?: TrustRevocation; error?: string }
+const denials = new Map<string, Denial>()
+const denialKey = (instance: string) => `${getAccount().user?.id ?? 'guest'}\0${instance}`
+const notifyAll = () => { notifyGrants(); notifyEvidence() }
 /** The persistent trust of exactly this revision on this device now, without I/O. Only `trusted` runs it. */
 export function trustStatus(instance: string, revision: Revision | null, now = clock()): TrustStatus {
   const grant = persistentTrust(instance, revision)
   if (!grant || !revision) return { state: 'none' }
+  const denial = denials.get(denialKey(instance))
+  if (denial && ![...denial.ids].every(id => grant.after.includes(id))) return denial.pending
+    ? { state: 'refused', reason: `Trust is revoked on this device, but not saved to your account yet${denial.error ? `: ${denial.error}` : ''}`, unsaved: true }
+    : { state: 'refused', reason: 'Trust is revoked on this device' }
   const sight = sightTrustedSource(revision.source, revision.snapshot.manifest.id)
   if (sight.state === 'refused') return { state: 'refused', reason: sight.reason, ...(sight.definitive ? { deleted: true as const } : {}) }
   const key = evidenceKey(instance, revision, grant)
@@ -279,7 +299,15 @@ export async function trustBuildEligibility(revision: Revision): Promise<TrustEl
 }
 /** The revocations of an instance this tab has seen now. Captured at the person's click and pinned
  * into the grant, so nothing that arrives while the check runs counts as seen. */
-export const trustFrontier = (instance: string) => revocationsOf(canonicalTrust.get(), instance)
+/** What a click to trust has seen: the revocations (the account's and this tab's unsaved one) and how
+ * many local Revoke trust clicks. Captured at the click; anything newer at commit time aborts it. */
+export type TrustObserved = { revocations: readonly string[]; local: number }
+export const trustFrontier = (instance: string): TrustObserved => ({ revocations: withPending(revocationsOf(canonicalTrust.get(), instance), instance), local: denials.get(denialKey(instance))?.epoch ?? 0 })
+/** The account's revocations of an instance plus this tab's own not-yet-saved one: all of them were seen here. */
+const withPending = (ids: readonly string[], instance: string) => {
+  const pending = denials.get(denialKey(instance))?.pending
+  return [...new Set([...ids, ...(pending ? [pending.id] : [])])].sort()
+}
 /** A gesture is a real click or key press by the person, delivered by the browser (`isTrusted`),
  * never a synthetic event from script, an agent, activation, build, recovery or sync. */
 function genuine(gesture: unknown) {
@@ -287,9 +315,9 @@ function genuine(gesture: unknown) {
 }
 /** "Trust always": the person's own click on an eligible, installed custom widget. Re-checks the
  * canonical gate and the built bytes now, then records a grant pinned to this exact installation. */
-export async function trustInstallation(instance: string, revision: Revision, gesture: Event, observed: readonly string[] = trustFrontier(instance)) {
+export async function trustInstallation(instance: string, revision: Revision, gesture: Event, observed: TrustObserved = trustFrontier(instance)) {
   if (!genuine(gesture)) throw new Error('Trust needs your own click')
-  const seen = [...observed].sort()
+  const seen = [...observed.revocations].sort()
   if (!accountGuard() || getAccount().status !== 'user' || !getAccount().user) throw new Error('Sign in to trust a widget')
   const account = getAccount().user!.id
   if (!widgetsHydrated()) throw new InstallFailure('unhydrated', 'Widget state is not hydrated; retry after sync')
@@ -299,14 +327,21 @@ export async function trustInstallation(instance: string, revision: Revision, ge
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   if (installationVersion(instance).identity !== version.identity || version.identity !== eligibility.installation) throw new InstallFailure('conflict', 'Installation changed; build and trust again')
   let revokedMeanwhile = false
+  let made: TrustGrant | null = null
+  const denial = denials.get(denialKey(instance))
   updateTrust(trust => {
-    // A revocation that arrived after the click was not seen by the person: no grant, they decide again.
-    if (JSON.stringify(revocationsOf(trust, instance)) !== JSON.stringify(seen)) { revokedMeanwhile = true; return null }
-    if (persistentTrust(instance, revision, trust)) return null
-    const made = newGrant(trust, { instance, package: revision.snapshot.manifest.id, source: revision.source, digest: revision.snapshot.digest, installation: version.identity }, crypto.randomUUID(), Date.now(), seen)
-    return { grants: { [made.id]: made }, revoked: Object.fromEntries(seen.map(id => [id, trust.revoked[id]])), floors: { [instance]: grantGeneration(made) } }
+    // A revocation that arrived after the click, or a Revoke trust clicked here after it, was not seen
+    // by the person: no grant, they decide again.
+    if (JSON.stringify(withPending(revocationsOf(trust, instance), instance)) !== JSON.stringify(seen) || (denial?.epoch ?? 0) !== observed.local) { revokedMeanwhile = true; return null }
+    // A grant this tab revoked locally is never reused: the click makes a new one.
+    if (!denial && persistentTrust(instance, revision, trust)) return null
+    made = newGrant(trust, { instance, package: revision.snapshot.manifest.id, source: revision.source, digest: revision.snapshot.digest, installation: version.identity }, crypto.randomUUID(), Date.now(), seen)
+    // The grant carries every revocation it saw, this tab's unsaved one included, so saving it saves that too.
+    return { grants: { [made.id]: made }, revoked: Object.fromEntries(seen.map(id => [id, trust.revoked[id] ?? denial?.pending])), floors: { [instance]: grantGeneration(made) } }
   })
-  if (revokedMeanwhile) throw new Error('Trust was revoked on another device while this was being checked; look again, then choose Trust always again')
+  if (revokedMeanwhile) throw new Error('Trust was revoked while this was being checked; look again, then choose Trust always again')
+  // The pending revocation is now part of this grant's delta: queued with it, saved with it.
+  if (denial && made) { denial.pending = undefined; denial.error = undefined; notifyAll() }
   await canonicalTrust.flush?.()
   if (!accountGuard() || getAccount().user?.id !== account) throw new Error('Account changed')
   const grant = persistentTrust(instance, revision)
@@ -319,15 +354,23 @@ export async function trustInstallation(instance: string, revision: Revision, ge
  * device that has not seen it yet), plus this session's own Allow once grants. Immediate. */
 export async function revokeTrust(instance: string) {
   if (!accountGuard()) throw new Error('Account revoked')
+  // First, here and now: deny every grant of this widget and end Allow once, before trying to save.
+  const key = denialKey(instance)
+  const denial = denials.get(key) ?? { ids: new Set<string>(), epoch: 0 }
+  denial.epoch++
+  const revocation = denial.pending ?? newRevocation(instance, crypto.randomUUID(), Date.now())
+  denial.ids.add(revocation.id)
+  denial.pending = revocation
+  denials.set(key, denial)
   revokeSessionGrants(instance)
-  try {
-    updateTrust(() => {
-      const r = newRevocation(instance, crypto.randomUUID(), Date.now())
-      return { grants: {}, revoked: { [r.id]: r } }
-    })
-  } catch (error) { throw new Error(`Trust was not revoked: ${error instanceof Error ? error.message : 'storage failure'}. Allow once was ended; try again.`) }
-  notifyGrants()
-  try { await canonicalTrust.flush?.() } catch (error) { throw new Error(`Trust is revoked on this device but not saved to your account yet: ${error instanceof Error ? error.message : 'storage failure'}`) }
+  notifyAll()
+  const unsaved = (error: unknown) => {
+    if (denials.get(key) === denial && denial.pending === revocation) { denial.error = error instanceof Error ? error.message : 'storage failure'; notifyAll() }
+    return new Error(`Trust is revoked on this device, but not saved to your account yet: ${error instanceof Error ? error.message : 'storage failure'}. Revoke trust again to retry saving.`)
+  }
+  try { updateTrust(() => ({ grants: {}, revoked: { [revocation.id]: revocation } })) } catch (error) { throw unsaved(error) }
+  try { await canonicalTrust.flush?.() } catch (error) { throw unsaved(error) }
+  if (denials.get(key) === denial && denial.pending === revocation) { denial.pending = undefined; denial.error = undefined; notifyAll() }
 }
 
 if (typeof window !== 'undefined') for (const event of ['mvlos:forget', 'mvlos:account-changed']) window.addEventListener(event, () => { grants.clear(); notifyGrants() })

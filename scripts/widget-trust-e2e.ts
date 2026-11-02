@@ -14,7 +14,10 @@
 //   - same-size write under a rolled-back clock stops it; another tab of the same browser editing the same IndexedDB
 //     store (same length and timestamp) stops it after A re-reads IndexedDB, and the exact bytes back restore the
 //     existing grant only; a missed announcement is caught when the evidence runs out; a stalled re-read gives no
-//     access while unresolved and times out.
+//     access while unresolved and times out;
+//   - Revoke trust with this browser's storage full: denied in the same instant (trustStatus/hasAccess), nothing runs,
+//     reported unsaved with a retry; a passing re-check cannot undo it; Retry saves it and a reload stays untrusted;
+//     a deliberate Trust always click meanwhile saves the pending revocation with its new grant.
 // Seafile home (mock Seafile behind the real server, user 2, two browsers = two devices):
 //   - trusted on device A, it runs on device B without asking;
 //   - entries Seafile reports as anything but a plain file or folder (inside the folder or on an ancestor) and a
@@ -24,7 +27,8 @@
 //   - a read-only home mount and a link entry appearing stop it (no revocation); the folder deleted in Seafile: B loading
 //     then never runs and revokes, A stops, and putting the folder back plus a stale account copy does not restore it;
 //   - a visibility change drops evidence; with the wall clock set back and Seafile unreachable it still runs out;
-//   - a slow gate after A's click while B revokes (and A receives it): no grant; a new click trusts again.
+//   - a slow gate after A's click while B revokes (and A receives it): no grant; a new click trusts again;
+//   - a local Revoke trust clicked while A's Trust always click is still being checked wins.
 // Synthetic data, muted Chromium, scratch DATA_DIR. Exits 1 on any failure.
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -137,6 +141,8 @@ async function realClick(p: Page, sel: string, text?: string) {
   if (!hit) throw new Error(`covered: ${sel} ${text ?? ''}`)
   await p.clickText(sel, text)
 }
+const FULL = `window.__setItem??=Storage.prototype.setItem;Storage.prototype.setItem=function(){throw new DOMException('The quota has been exceeded.','QuotaExceededError')}`
+const ROOMY = `if(window.__setItem)Storage.prototype.setItem=window.__setItem`
 const instanceOf = (p: Page) => run<string>(p, `return Object.values(i.installations.get()).find(x=>x.kind==='custom')?.instance ?? ''`)
 /** Trusted with live evidence on this device (a recorded grant alone does not count). */
 const trusted = (p: Page, id: string) => run<boolean>(p, `return i.trustStatus(${JSON.stringify(id)}, i.installation(${JSON.stringify(id)})?.active ?? null).state==='trusted'`)
@@ -271,10 +277,48 @@ try {
   await other.close()
   await runs(p)
   check('reads work again and the exact bytes are back: it runs again with the same grant', await trusted(p, id))
+  // Revoke trust while this browser's storage is full: it takes effect here at once, before anything is saved.
+  const J = JSON.stringify(id)
+  const revokeNow = (pg: Page) => pg.eval<{ status: string; access: boolean; retained: boolean }>(`(async()=>{const i=${M.inst};const r=i.installation(${J}).active;[...document.querySelectorAll('${pkg} .wp-tool')].find(b=>b.textContent.trim()==='Revoke trust').click();return {status:i.trustStatus(${J},r).state,access:i.hasAccess(${J},r),retained:i.retainsTrust(${J})}})()`)
+  const revCount = await revocations(p, id)
+  await p.eval(FULL)
+  const denied = await revokeNow(p)
+  check('storage full: Revoke trust denies in the same instant, before saving (trustStatus refused, hasAccess false) though the account still holds the grant', denied.status === 'refused' && !denied.access && denied.retained, denied)
+  await sleep(2000)
+  const shown = await p.eval<{ text: string; retry: boolean }>(`({text:document.querySelector('${pkg}')?.textContent??'',retry:!!document.querySelector('${pkg} [data-trust-retry]')})`)
+  check('nothing runs after the click, and the unsaved revocation is reported with a retry', !shown.text.includes('all time') && shown.text.includes('not saved to your account yet') && shown.retry, shown.text.slice(0, 300))
+  const recheck = await run<{ ok: boolean; status: string; access: boolean }>(p, `const r=i.installation(${J}).active;const e=await i.trustEligibility(${J},r);await i.checkTrust(${J},r);return {ok:e.ok,status:i.trustStatus(${J},r).state,access:i.hasAccess(${J},r)}`)
+  check('a passing evidence re-check cannot undo the local denial', recheck.ok && recheck.status === 'refused' && !recheck.access, recheck)
+  await p.eval(ROOMY)
+  await p.eval(`document.querySelector('${pkg} [data-trust-retry]').click()`)
+  await p.waitFor(`(async()=>{const i=${M.inst};return !i.retainsTrust(${J})})()`, 20_000)
+  check('room again: Retry saves the revocation to the account', await noAccess(p, id) && await revocations(p, id) === revCount + 1)
+  await sleep(1200)
+  await boot(p)
+  await asks(p)
+  check('... and after a reload it stays untrusted', await noAccess(p, id) && !(await retains(p, id)))
+  await p.waitFor(`!!document.querySelector('${pkg} .wp-trust')`, 20_000)
+  await realClick(p, `${pkg} .wp-trust`)
+  await runs(p)
+  // Unsaved revocation, then a deliberate new click: the new grant carries that revocation as seen.
+  await p.eval(FULL)
+  check('storage full again: denied at once', !(await revokeNow(p)).access)
+  await p.eval(ROOMY)
+  await p.waitFor(`!!document.querySelector('${pkg} .wp-trust')`, 20_000)
+  await realClick(p, `${pkg} .wp-trust`)
+  await runs(p)
+  const retrust = await run<{ grants: number; revoked: number }>(p, `const t=c.canonicalTrust.get();return {grants:Object.values(t.grants).filter(g=>g.instance===${J}).length,revoked:Object.values(t.revoked).filter(r=>r.instance===${J}).length}`)
+  check('a new genuine click after an unsaved revoke trusts again, saving that revocation with the new grant (old grant gone)', await trusted(p, id) && retrust.grants === 1 && retrust.revoked === revCount + 2, retrust)
+  await sleep(1200)
+  await boot(p)
+  await runs(p)
+  check('... and that survives a reload', await trusted(p, id))
+
+  const revokedBeforeDelete = await revocations(p, id)
   await run(p, `const b=await import('/src/data/browserfs.ts');await b.removeBrowser(${JSON.stringify(base)})`)
   await asks(p)
   await p.waitFor(`(async()=>{const i=${M.inst};return !i.retainsTrust(${JSON.stringify(id)})})()`, 20_000)
-  check('source deleted: no access, and the trust is revoked for good (a revocation, not just a refusal)', await noAccess(p, id) && await revocations(p, id) === revokedBefore + 1)
+  check('source deleted: no access, and the trust is revoked for good (a revocation, not just a refusal)', await noAccess(p, id) && await revocations(p, id) === revokedBeforeDelete + 1)
   await run(p, `const b=await import('/src/data/browserfs.ts');const files=${JSON.stringify(files)};for(const [f,t] of Object.entries(files)){await b.mkdirBrowser(f.slice(0,f.lastIndexOf('/')),true);await b.writeBrowserFile(f,t)}`)
   await sleep(800)
   check('the same bytes put back do not bring trust back', await noAccess(p, id) && !(await retains(p, id)))
@@ -513,11 +557,27 @@ try {
   await pull(A)
   check('A received B\'s revocation while its check was still running', await revocations(A, sid) === revBefore + 1)
   mock.control.listDelay = 0
-  await A.waitFor(`(document.querySelector('${pkg}')?.textContent??'').includes('revoked on another device while this was being checked')`, 30_000)
+  await A.waitFor(`(document.querySelector('${pkg}')?.textContent??'').includes('revoked while this was being checked')`, 30_000)
   check('the delayed check made no grant: the revocation arrived after the click', await noAccess(A, sid) && !(await recorded(A, sid)) && !(await retains(A, sid)))
   await realClick(A, `${pkg} .wp-trust`)
   await runs(A)
   check('a new click after seeing it trusts it again', await trusted(A, sid))
+
+  // A local Revoke trust clicked after a Trust always click that is still being checked wins.
+  const S = JSON.stringify(sid)
+  await A.eval(FULL)
+  await A.eval(`[...document.querySelectorAll('${pkg} .wp-tool')].find(b=>b.textContent.trim()==='Revoke trust').click()`)
+  await asks(A)
+  await A.eval(ROOMY)
+  await A.waitFor(`!!document.querySelector('${pkg} .wp-trust')`, 30_000)
+  mock.control.listDelay = 2500
+  await realClick(A, `${pkg} .wp-trust`)
+  await sleep(300)
+  await A.eval(`[...document.querySelectorAll('${pkg} .wp-tool')].find(b=>b.textContent.trim()==='Revoke trust').click()`)
+  mock.control.listDelay = 0
+  await A.waitFor(`(document.querySelector('${pkg}')?.textContent??'').includes('revoked while this was being checked')`, 30_000)
+  await A.waitFor(`(async()=>{const i=${M.inst};return !i.retainsTrust(${S})})()`, 20_000)
+  check('Revoke trust clicked while a Trust always click was still being checked wins: no grant, no access', await noAccess(A, sid) && !(await retains(A, sid)))
 
   const errors = [...p.errors, ...p2.errors, ...A.errors, ...B.errors].filter((e) => !/ResizeObserver|Failed to fetch|NetworkError|net::ERR/.test(e))
   check('no page errors', errors.length === 0, errors)

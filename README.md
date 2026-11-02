@@ -4984,11 +4984,17 @@ copy of the account state do not restore it). Seafile changes made elsewhere are
 trusted for, so this is the same whatever order devices merge in), so a widget can be edited and
 trusted any number of times; **Revoke trust** stays available while any earlier decision is left.
 The revocations of that widget you had seen at the moment of your click are what the grant records:
-if another device revokes it while the check after your click is still running, no grant is made and
-you are asked to decide again. Only your own click (a browser-trusted event) creates trust: activation, builds, recovery, sync and the
+if it is revoked (on another device, or with Revoke trust here) while the check after your click is
+still running, no grant is made and you are asked to decide again. Only your own click (a browser-trusted event) creates trust: activation, builds, recovery, sync and the
 agents' `widget` command cannot (their activation is always `trust: false`). **Revoke trust** in the
 widget's toolbar (next to *Pause access*) ends trust and every Allow once grant for that widget at once,
-here and on other devices as soon as they sync. Removing the widget revokes too. Revocation is causal,
+here and on other devices as soon as they sync. It takes effect in this tab before it is saved: if the
+browser's storage is full or blocked, the widget still stops at once, nothing (a passing folder check, a
+stale copy of the account state) lets it run again here, and the banner says the revocation is not saved
+to your account yet, with *Retry saving the revocation* (Revoke trust again does the same). Until it is
+saved, other devices and a reload of this tab do not know about it. A deliberate **Trust always** click
+here meanwhile makes a new grant that carries the unsaved revocation, so saving that grant saves the
+revocation too. Removing the widget revokes too. Revocation is causal,
 not timed: every revocation has its own id, a grant lists the revocations its device had seen, and it
 counts only while it has seen all of them. A grant made on a device that had not seen a revocation
 (offline, a stale tab, a skewed clock) stays revoked, and a stale copy can never bring one back.

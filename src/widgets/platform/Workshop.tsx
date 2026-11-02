@@ -7,7 +7,7 @@ import { useWM, type WinState } from '../../os/wm'
 import { useAccount } from '../../os/account'
 import { ask } from '../../os/Dialogs'
 import { defaultBuild } from './defaults'
-import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, trustBuildEligibility, trustFrontier, trustInstallation, useInstallationPresence, useTrustStatus, type Revision, type TrustEligibility } from './installations'
+import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, trustBuildEligibility, trustFrontier, trustInstallation, useInstallationPresence, useTrustStatus, type Revision, type TrustObserved, type TrustEligibility } from './installations'
 import { CUSTOM_KIND, isInstanceKind, buildPackage, descriptor, supportsCapabilities, type Descriptor } from './package'
 import { cloneDefault, cloneTemplate, readSource, sourceIdentity, sourcePath, WIDGET_HOME } from './sources'
 import { execute } from './runtime'
@@ -82,7 +82,7 @@ export function Workshop({ win }: { win: WinState }) {
   const trustResult = trustCheck?.digest === trustKey ? trustCheck.result : null
   /** What the person decided at their click, captured before activation waits for anything: whether
    * to trust, the click itself, and the revocations of that widget they had seen then. */
-  type TrustIntent = { want: boolean; gesture: Event; observed: readonly string[] }
+  type TrustIntent = { want: boolean; gesture: Event; observed: TrustObserved }
   const intentAt = (id: string, gesture: Event): TrustIntent => ({ want: trustChoice, gesture, observed: trustFrontier(id) })
   /** After an activation: trust it too when the person ticked the box (their click is the gesture). */
   const trustAfter = async (id: string, value: Revision, intent: TrustIntent) => {
