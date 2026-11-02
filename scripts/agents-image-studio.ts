@@ -8,11 +8,11 @@ import { readFileSync } from 'node:fs'
 import { Server } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
 import { applyPresetRules, bucketSize, presetRules, promptTokens, sizeBuckets, SIZE_LIMITS, variantFor } from '../src/data/modelFamilies.ts'
-import { inpaintSettingsOf } from '../src/data/imageModels.ts'
+import { detectedImageFamily, inpaintSettingsOf, loadsAsCheckpoint, presetModels, resolveImageAssets } from '../src/data/imageModels.ts'
 import { applyRecipe, defaultStudioForm, formFromSettings, normalizeStudioForm, promptWithEmbeddings, sourceSize, studioProblems, studioRecipe, studioRunInput, variantPreset, type StudioCatalog } from '../src/data/imageStudio.ts'
 import type { ImagePreset } from '../src/data/imageModels.ts'
 
-const PRESETS: ImagePreset[] = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo']
+const PRESETS: ImagePreset[] = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo', 'moss_image']
 
 // --- the shared rules ------------------------------------------------------------------------------
 {
@@ -42,6 +42,11 @@ const PRESETS: ImagePreset[] = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'kre
   assert.deepEqual(applyPresetRules({ preset: 'sdxl', negative_prompt: 'blur', cfg: 6, clip_skip: 2, clip: 'c', vae: 'v', checkpoint_vae: 'cv' }), { preset: 'sdxl', negative_prompt: 'blur', cfg: 6, clip_skip: 2, checkpoint_vae: 'cv' })
   assert.deepEqual(applyPresetRules({ preset: 'nonsense', cfg: 9 }), { preset: 'nonsense', cfg: 9 }, 'unknown presets are left for the server to refuse')
   assert.ok(promptTokens('masterpiece, best quality, 1girl') >= 6 && promptTokens('') === 0)
+  // MOSS Image: one diffusion workflow, model-only LoRAs, no clip skip or embeddings, 0.6 hires strength.
+  assert.equal(presetRules('moss_image').variants, null); assert.equal(presetRules('moss_image').hiresDenoise, 0.6); assert.equal(presetRules('sdxl').hiresDenoise, 0.35)
+  assert.equal(defaultStudioForm('moss_image').hires.denoise, 0.6)
+  assert.deepEqual([defaultStudioForm('moss_image').steps, defaultStudioForm('moss_image').cfg, defaultStudioForm('moss_image').sampler, defaultStudioForm('moss_image').scheduler], [25, 2.5, 'er_sde', 'simple'])
+  assert.deepEqual(applyPresetRules({ preset: 'moss_image', negative_prompt: 'nsfw', cfg: 2.5, clip_skip: 2, checkpoint_vae: 'cv', clip: 'c', vae: 'v' }), { preset: 'moss_image', negative_prompt: 'nsfw', cfg: 2.5, clip: 'c', vae: 'v' }, 'MOSS keeps its negative, drops clip skip and checkpoint VAE')
   console.log('PASS shared family rules: encoder/VAE, negatives and CFG 1, clip skip, embeddings, model-only LoRAs, variants, size buckets, token estimate')
 }
 
@@ -106,19 +111,35 @@ const catalog: StudioCatalog = {
   assert.equal(inpaintSettingsOf(recorded).checkpoint_vae, 'vae/x.safetensors'); assert.equal(inpaintSettingsOf(recorded).clip_skip, 2)
   assert.ok(!('checkpoint_vae' in inpaintSettingsOf({ ...recorded, checkpoint_vae: undefined, clip_skip: 1 })) && !('clip_skip' in inpaintSettingsOf({ ...recorded, clip_skip: 1 })))
   assert.deepEqual(inpaintSettingsOf({ operation: 'remove' } as never), {})
+  // MOSS Image: detection by name or metadata, files from both folders, its encoder and VAE picked automatically.
+  for (const name of ['MOSS Image/nsfw/x.safetensors', 'moss_image_v1.safetensors', 'MOSS-Image', 'mossImage.safetensors']) assert.equal(detectedImageFamily(name), 'moss_image', name)
+  assert.notEqual(detectedImageFamily('moss_garden_sdxl.safetensors'), 'moss_image')
+  const mossCatalog: StudioCatalog = { ...catalog, checkpoints: [...catalog.checkpoints, 'MOSS Image/moss image/realism.safetensors'], diffusionModels: [...catalog.diffusionModels, 'MOSS Image/nsfw/fineview.safetensors'], clips: [...catalog.clips, 'enc/qwen3.5_9b_w4a8_gptq.safetensors'], vaes: [...catalog.vaes, 'vae/flux2-vae_small.safetensors'], samplers: [...catalog.samplers!, 'er_sde'], nodes: [...catalog.nodes!, 'EmptyFlux2LatentImage'], clipTypes: ['krea2', 'lumina2', 'moss_image'] }
+  assert.deepEqual(presetModels('moss_image', mossCatalog).filter((m) => m.startsWith('MOSS')), ['MOSS Image/nsfw/fineview.safetensors', 'MOSS Image/moss image/realism.safetensors'])
+  assert.ok(!presetModels('z_image', mossCatalog).includes('MOSS Image/moss image/realism.safetensors'))
+  const moss = resolveImageAssets({ preset: 'moss_image', model: 'MOSS Image/moss image/realism.safetensors', clip: '', vae: '' }, mossCatalog)
+  assert.deepEqual(moss.errors, []); assert.equal(moss.effective.clip, 'enc/qwen3.5_9b_w4a8_gptq.safetensors'); assert.equal(moss.effective.vae, 'vae/flux2-vae_small.safetensors')
+  assert.ok(resolveImageAssets({ preset: 'moss_image', model: 'MOSS Image/nsfw/fineview.safetensors', clip: 'enc/qwen_3_4b.safetensors', vae: 'vae/ae.safetensors' }, mossCatalog).errors.length === 2, 'Z-Image encoder and Flux 1 VAE are refused for MOSS')
+  assert.equal(resolveImageAssets({ preset: 'z_image', model: 'Z-Image-Turbo/zit.safetensors', clip: '', vae: '' }, mossCatalog).effective.clip, 'enc/qwen_3_4b.safetensors', 'the MOSS encoder does not confuse Z-Image')
+  assert.ok(resolveImageAssets({ preset: 'sdxl', model: 'MOSS Image/moss image/realism.safetensors', clip: '', vae: '' }, mossCatalog).errors.length, 'a MOSS checkpoint is not an SDXL checkpoint')
+  assert.equal(loadsAsCheckpoint('moss_image', 'MOSS Image/moss image/realism.safetensors', mossCatalog), true); assert.equal(loadsAsCheckpoint('moss_image', 'MOSS Image/nsfw/fineview.safetensors', mossCatalog), false)
+  const mossForm = { ...defaultStudioForm('moss_image'), prompt: 'a lighthouse', model: 'MOSS Image/nsfw/fineview.safetensors' }
+  assert.deepEqual(studioProblems(mossForm, { configured: true, catalog: mossCatalog }), [])
+  assert.ok(studioProblems(mossForm, { configured: true, catalog: { ...mossCatalog, nodes: mossCatalog.nodes!.filter((n) => n !== 'EmptyFlux2LatentImage') } }).some((p) => /0\.42/.test(p)), 'an old ComfyUI is named')
+  assert.ok(studioProblems({ ...mossForm, loras: [{ name: 'style.safetensors', weight: 1 }] }, { configured: true, catalog: { ...mossCatalog, nodes: mossCatalog.nodes!.filter((n) => n !== 'LoraLoaderModelOnly') } }).some((p) => /MOSS Image needs a model-only LoRA loader/.test(p)))
   console.log('PASS Studio form: saved copies normalized, variants, validation reasons, request with embeddings and family rules, recipes with their source, Use these settings')
 }
 
 // --- the endpoint, against the real server and a synthetic ComfyUI -----------------------------------
 const png = readFileSync(new URL('./fixtures/agent-image-sources/source.png', import.meta.url))
 const options: Record<string, Record<string, unknown>> = {
-  CheckpointLoaderSimple: { ckpt_name: [['SDXL/studio.safetensors']] }, UNETLoader: { unet_name: [['Krea2/Turbo/fast.safetensors', 'Z-Image-Turbo/zit.safetensors']] },
-  CLIPLoader: { clip_name: [['enc/qwen3-vl-4b.safetensors', 'enc/qwen_3_4b.safetensors']], type: [['krea2', 'lumina2']] }, VAELoader: { vae_name: [['vae/qwen_image_vae.safetensors', 'vae/ae.safetensors', 'vae/sdxl_vae.safetensors']] },
-  KSampler: { sampler_name: [['euler', 'euler_ancestral', 'dpmpp_2m']], scheduler: [['simple', 'beta', 'karras', 'normal']] },
+  CheckpointLoaderSimple: { ckpt_name: [['SDXL/studio.safetensors', 'MOSS Image/moss image/realism.safetensors']] }, UNETLoader: { unet_name: [['Krea2/Turbo/fast.safetensors', 'Z-Image-Turbo/zit.safetensors', 'MOSS Image/nsfw/fineview.safetensors']] },
+  CLIPLoader: { clip_name: [['enc/qwen3-vl-4b.safetensors', 'enc/qwen_3_4b.safetensors', 'enc/qwen3.5_9b_w4a8_gptq.safetensors']], type: [['krea2', 'lumina2', 'moss_image']] }, VAELoader: { vae_name: [['vae/qwen_image_vae.safetensors', 'vae/ae.safetensors', 'vae/sdxl_vae.safetensors', 'vae/flux2-vae_small.safetensors']] },
+  KSampler: { sampler_name: [['euler', 'euler_ancestral', 'dpmpp_2m', 'er_sde']], scheduler: [['simple', 'beta', 'karras', 'normal']] },
   LoraLoader: { lora_name: [['style.safetensors']] }, LoraLoaderModelOnly: { lora_name: [['style.safetensors']] },
   ImageScale: { upscale_method: [['lanczos']], crop: [['center', 'disabled']] }, LoadImage: { image: [[]] },
 }
-const NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'CLIPSetLastLayer', 'ModelSamplingDiscrete']
+const NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'EmptyFlux2LatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'CLIPSetLastLayer', 'ModelSamplingDiscrete']
 const graphs: any[] = []
 const deletions: string[] = []
 let hold = false
@@ -220,6 +241,7 @@ try {
   g = lastGraph()
   assert.equal(g['2'].inputs.type, 'lumina2'); assert.equal(g['5'].class_type, 'CLIPTextEncode'); assert.equal(g['5'].inputs.text, ''); assert.equal(g['7'].inputs.cfg, 1)
 
+
   // SDXL checkpoint: clip skip, a custom VAE, LoRA on model and encoder, the negative kept; stale workflow encoder/VAE dropped.
   r = await run({ preset: 'sdxl', model: 'SDXL/studio.safetensors', clip: 'enc/qwen_3_4b.safetensors', vae: 'vae/ae.safetensors', checkpoint_vae: 'vae/sdxl_vae.safetensors', prompt: 'portrait', negative_prompt: 'lowres', cfg: 6, clip_skip: 2, steps: 25, sampler: 'dpmpp_2m', scheduler: 'karras', width: 832, height: 1216, loras: [{ name: 'style.safetensors', weight: 1 }] })
   assert.equal(r.status, 200, r.text)
@@ -291,6 +313,28 @@ try {
   const row = database().prepare('SELECT quick, title FROM agent_threads WHERE id = ?').get(mine.thread) as { quick: number; title: string }
   assert.deepEqual({ ...row }, { quick: 2, title: 'Image Studio' })
   console.log('PASS Studio thread: no chat route reads, adopts, renames, sends to or deletes it; history stays')
+
+  // MOSS Image from diffusion_models: UNETLoader, moss_image encoder, FLUX.2 VAE and latent, negative kept, model-only LoRA, no clip skip.
+  r = await run({ preset: 'moss_image', model: 'MOSS Image/nsfw/fineview.safetensors', prompt: 'a cinematic photo style lighthouse at dusk', negative_prompt: 'worst quality, watermark', cfg: 2.5, clip_skip: 2, steps: 25, sampler: 'er_sde', scheduler: 'simple', width: 1024, height: 1024, loras: [{ name: 'style.safetensors', weight: 0.8 }] })
+  assert.equal(r.status, 200, r.text)
+  g = lastGraph()
+  assert.equal(g['1'].class_type, 'UNETLoader'); assert.equal(g['1'].inputs.unet_name, 'MOSS Image/nsfw/fineview.safetensors')
+  assert.deepEqual(g['2'].inputs, { clip_name: 'enc/qwen3.5_9b_w4a8_gptq.safetensors', type: 'moss_image', device: 'default' })
+  assert.equal(g['3'].inputs.vae_name, 'vae/flux2-vae_small.safetensors'); assert.deepEqual(g['8'].inputs.vae, ['3', 0])
+  assert.equal(g['6'].class_type, 'EmptyFlux2LatentImage'); assert.equal(g['5'].class_type, 'CLIPTextEncode'); assert.equal(g['5'].inputs.text, 'worst quality, watermark')
+  assert.deepEqual([g['7'].inputs.steps, g['7'].inputs.cfg, g['7'].inputs.sampler_name, g['7'].inputs.scheduler], [25, 2.5, 'er_sde', 'simple'])
+  assert.equal(byClass(g, 'CLIPSetLastLayer').length, 0); assert.equal(byClass(g, 'LoraLoader').length, 0)
+  assert.deepEqual(byClass(g, 'LoraLoaderModelOnly').map((n) => [n.inputs.lora_name, n.inputs.strength_model]), [['style.safetensors', 0.8]])
+  // MOSS Image from models/checkpoints: MODEL from CheckpointLoaderSimple, encoder and VAE still separate.
+  r = await run({ preset: 'moss_image', model: 'MOSS Image/moss image/realism.safetensors', prompt: 'a portrait', steps: 25, cfg: 2.5, sampler: 'er_sde', scheduler: 'simple', width: 1024, height: 1024 })
+  assert.equal(r.status, 200, r.text)
+  g = lastGraph()
+  assert.equal(g['1'].class_type, 'CheckpointLoaderSimple'); assert.equal(g['1'].inputs.ckpt_name, 'MOSS Image/moss image/realism.safetensors')
+  assert.equal(g['2'].inputs.type, 'moss_image'); assert.deepEqual(g['4'].inputs.clip, ['2', 0], 'the encoder is CLIPLoader, never the checkpoint')
+  assert.deepEqual(g['8'].inputs.vae, ['3', 0], 'the VAE is VAELoader, never the checkpoint'); assert.equal(g['6'].class_type, 'EmptyFlux2LatentImage')
+  const mossImage = r.events.find((e) => e.type === 'image').image
+  assert.equal(mossImage.settings.preset, 'moss_image'); assert.equal(mossImage.settings.vae, 'vae/flux2-vae_small.safetensors')
+  console.log('PASS Studio MOSS Image graphs: diffusion model and diffusion-only checkpoint, moss_image encoder, FLUX.2 VAE and latent, model-only LoRA')
 
   // Deleting the account (which signs it out everywhere, as a ban does) stops its running Studio job and deletes its queued prompt.
   await ok('PUT', '/api/agents/images/settings', { url: comfyUrl, preset: 'sdxl' }, 1)

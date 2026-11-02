@@ -55,7 +55,7 @@ export function visibleModelAssets(assets: readonly ModelAsset[], folder: string
   const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean)
   return assets.filter((a) => words.length ? words.every((word) => `${a.folder}/${a.name}`.toLocaleLowerCase().includes(word)) : a.folder === folder)
 }
-export type ImagePreset = 'sd15' | 'sdxl' | 'z_image' | 'z_image_turbo' | 'krea2_raw' | 'krea2_turbo'
+export type ImagePreset = 'sd15' | 'sdxl' | 'z_image' | 'z_image_turbo' | 'krea2_raw' | 'krea2_turbo' | 'moss_image'
 export type ImageLora = { name: string; weight: number }
 export type ImageLoraHint = { name: string; baseModel: string; triggers: string[] }
 export type ImageConfig = { loras: ImageLora[]; preset: ImagePreset; model: string; clip: string; vae: string; width: number; height: number; seed: number | null }
@@ -66,6 +66,7 @@ export const IMAGE_PRESETS: { id: ImagePreset; title: string; detail: string; re
   { id: 'z_image', title: 'Z-Image', detail: '1024 px · 20 steps · CFG 4 · Euler / simple', requirements: 'A Z-Image diffusion model, matching lumina2 text encoder and VAE. Positive and negative prompts.', size: 1024 },
   { id: 'z_image_turbo', title: 'Z-Image Turbo', detail: '1024 px · 8 steps · CFG 1 · Euler / simple', requirements: 'A Z-Image Turbo diffusion model, matching lumina2 text encoder and VAE. Positive prompt only.', size: 1024 },
   { id: 'krea2_raw', title: 'Krea2 Raw', detail: '1024 px · 52 steps · CFG 3.5 · Euler / simple', requirements: 'A Krea2 Raw diffusion model, matching krea2 text encoder and separate VAE. Positive and negative prompts.', size: 1024 },
+  { id: 'moss_image', title: 'MOSS Image', detail: '1024 px · 25 steps · CFG 2.5 · ER-SDE / simple', requirements: 'A MOSS Image diffusion model (from diffusion_models or a diffusion-only file in checkpoints), the Qwen3.5 9B text encoder loaded as moss_image and the FLUX.2 small VAE. Positive and negative prompts; LoRAs are model-only. Needs ComfyUI 0.42 or newer.', size: 1024 },
   { id: 'krea2_turbo', title: 'Krea2 Turbo', detail: '1024 px · 8 steps · CFG 1 · Euler ancestral / beta', requirements: 'A Krea2 Turbo diffusion model, matching krea2 text encoder and separate VAE. Positive prompt only; zeroed negative conditioning.', size: 1024 },
 ]
 
@@ -74,6 +75,7 @@ export function imagePresetSpec(preset: ImagePreset) {
   switch (preset) {
     case 'krea2_raw': return { clipType: 'krea2', steps: 52, cfg: 3.5, sampler: 'euler', scheduler: 'simple', negative: true, zeroNegative: false }
     case 'krea2_turbo': return { clipType: 'krea2', steps: 8, cfg: 1, sampler: 'euler_ancestral', scheduler: 'beta', negative: false, zeroNegative: true }
+    case 'moss_image': return { clipType: 'moss_image', steps: 25, cfg: 2.5, sampler: 'er_sde', scheduler: 'simple', negative: true, zeroNegative: false }
     case 'z_image': return { clipType: 'lumina2', steps: 20, cfg: 4, sampler: 'euler', scheduler: 'simple', negative: true, zeroNegative: false }
     case 'z_image_turbo': return { clipType: 'lumina2', steps: 8, cfg: 1, sampler: 'euler', scheduler: 'simple', negative: false, zeroNegative: false }
     case 'sd15': return { clipType: '', steps: 20, cfg: 7, sampler: 'dpmpp_2m', scheduler: 'karras', negative: true, zeroNegative: false }
@@ -86,12 +88,33 @@ export type ImageAssetField = 'model' | 'clip' | 'vae'
 export type ImageModelHint = { name: string; category: 'checkpoints' | 'diffusionModels'; baseModel: string }
 export type ImageAssetCatalog = { inpaint?: boolean; inpaintError?: string; autoMask?: boolean; autoMaskError?: string; remove?: boolean; removeError?: string; upscalers?: string[]; upscale?: boolean; upscaleError?: string; checkpoints: string[]; diffusionModels: string[]; clips: string[]; vaes: string[]; loras?: string[]; loraHints?: ImageLoraHint[]; modelHints?: ImageModelHint[]; samplers?: string[]; schedulers?: string[] }
 export type ImageSelection = { value: string; automatic: boolean; reason: string; candidates: string[]; error?: string }
+/** A MOSS Image model, LoRA or base-model name: "MOSS Image", "moss_image", "MOSS-Image", "moss.image". */
+export const isMossImageName = (name: string) => name.toLowerCase().replace(/[\s._-]+/g, '').includes('mossimage')
+/**
+ * The catalog folders a preset's models come from. MOSS Image files also sit in models/checkpoints,
+ * but those carry the diffusion model only: the graph loads MODEL from them and still takes the text
+ * encoder from CLIPLoader and the VAE from VAELoader.
+ */
+export function presetModelCategories(preset: ImagePreset): ('checkpoints' | 'diffusionModels')[] {
+  return preset === 'moss_image' ? ['diffusionModels', 'checkpoints'] : imagePresetSpec(preset).clipType ? ['diffusionModels'] : ['checkpoints']
+}
+/** The installed models a preset can run, in catalog order (diffusion models first for MOSS Image). */
+export function presetModels(preset: ImagePreset, catalog: Pick<ImageAssetCatalog, 'checkpoints' | 'diffusionModels'>): string[] {
+  return [...new Set(presetModelCategories(preset).flatMap((c) => catalog[c] ?? []))]
+}
+/** MOSS Image in models/checkpoints loads through CheckpointLoaderSimple (MODEL only); everything else in its folder's loader. */
+export function loadsAsCheckpoint(preset: ImagePreset, model: string, catalog?: Partial<Pick<ImageAssetCatalog, 'checkpoints' | 'diffusionModels'>>) {
+  if (!imagePresetSpec(preset).clipType) return true
+  return preset === 'moss_image' && !!catalog?.checkpoints?.includes(model) && !catalog.diffusionModels?.includes(model)
+}
 const assetKey = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 const assetLeaf = (name: string) => name.split(/[\\/]/).at(-1)!.replace(/\.[^.]+$/, '')
 /** Diffu's family/style hints, deliberately excluding video and unsupported architectures first.
  * These are catalog/name hints, not an inspection of tensor shapes or a quality ranking. */
 export function detectedImageFamily(name: string): ImagePreset | 'krea2' | 'unsupported' | undefined {
   const key = assetKey(name)
+  // MOSS Image files and their Civitai base model read "MOSS Image", "moss_image" or "MOSS-Image".
+  if (isMossImageName(name)) return 'moss_image'
   if (/ltx|hunyuanvideo|cogvideo|minimax|wanvideo|wan[12]|flux|anima|qwenimage|stablecascade|sd3/.test(key)) return 'unsupported'
   if (key.includes('krea2')) return key.includes('turbo') ? 'krea2_turbo' : key.includes('raw') ? 'krea2_raw' : 'krea2'
   if (key.includes('zimage') || /(?:^|[\W_])zit(?:[\W_\d]|$)/i.test(name)) return key.includes('turbo') || /(?:^|[\W_])zit/i.test(name) ? 'z_image_turbo' : 'z_image'
@@ -100,11 +123,11 @@ export function detectedImageFamily(name: string): ImagePreset | 'krea2' | 'unsu
   return undefined
 }
 export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatalog) {
-  const spec = imagePresetSpec(config.preset), krea = spec.clipType === 'krea2'
-  const category = spec.clipType ? 'diffusionModels' : 'checkpoints'
-  const models = catalog[category]
+  const spec = imagePresetSpec(config.preset), krea = spec.clipType === 'krea2', moss = config.preset === 'moss_image'
+  const categories = presetModelCategories(config.preset)
+  const models = presetModels(config.preset, catalog)
   const family = (name: string) => {
-    const hint = catalog.modelHints?.find((h) => h.category === category && h.name.replaceAll('\\', '/') === name.replaceAll('\\', '/'))
+    const hint = catalog.modelHints?.find((h) => categories.includes(h.category) && h.name.replaceAll('\\', '/') === name.replaceAll('\\', '/'))
     const fromName = detectedImageFamily(name), fromMetadata = detectedImageFamily(hint?.baseModel ?? '')
     if (fromMetadata && fromName && fromMetadata !== fromName && !(fromMetadata === 'krea2' && fromName.startsWith('krea2')) && !(fromName === 'krea2' && fromMetadata.startsWith('krea2'))) return 'unsupported'
     return fromMetadata === 'krea2' && fromName?.startsWith('krea2') ? fromName : fromMetadata ?? fromName
@@ -113,11 +136,13 @@ export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatal
   const clipScore = (name: string) => {
     const key = assetKey(assetLeaf(name))
     if (/minimax|ltx|wan[12]/.test(assetKey(name))) return 0
+    if (moss) return key.includes('qwen359b') ? key.startsWith('qwen359bw4a8') ? 2 : 1 : 0
     const match = krea ? key.includes('qwen3vl4b') : key.includes('qwen34b') && !key.includes('vl')
     return match ? key === (krea ? 'qwen3vl4b' : 'qwen34b') ? 2 : 1 : 0
   }
   const vaeScore = (name: string) => {
     const key = assetKey(name), leaf = assetKey(assetLeaf(name))
+    if (moss) return leaf === 'flux2vaesmall' ? 2 : key.includes('flux2') && key.includes('vae') ? 1 : 0
     if (/minimax|ltx|wan[12]|flux2/.test(key)) return 0
     return krea ? leaf === 'qwenimagevae' ? 2 : key.includes('qwenimagevae') || key.includes('krea2') && key.includes('vae') ? 1 : 0 : leaf === 'ae' ? 1 : key.includes('zimage') && key.includes('vae') ? 2 : 0
   }
@@ -127,8 +152,8 @@ export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatal
     if (manual) {
       const knownFamily = field === 'model' ? family(manual) : undefined
       const incompatible = field === 'model' ? knownFamily && knownFamily !== config.preset && !(knownFamily === 'krea2' && krea)
-        : field === 'clip' ? /minimax|ltx|wan[12]|gemma|mistral|t5|qwen306b|qwen25vl/.test(assetKey(manual)) || /^(clipl|clipg)$/.test(assetKey(assetLeaf(manual))) || (krea ? assetKey(manual).includes('qwen34b') : assetKey(manual).includes('qwen3vl4b'))
-        : krea ? assetKey(assetLeaf(manual)) === 'ae' || /flux|zimage|sdxl|sd15|ltx|wan[12]|minimax/.test(assetKey(manual)) : /qwenimage|krea2|flux2|ltx|wan[12]|minimax/.test(assetKey(manual))
+        : field === 'clip' ? /minimax|ltx|wan[12]|gemma|mistral|t5|qwen306b|qwen25vl/.test(assetKey(manual)) || /^(clipl|clipg)$/.test(assetKey(assetLeaf(manual))) || (moss ? /qwen34b|qwen3vl4b/.test(assetKey(manual)) : assetKey(manual).includes('qwen359b') || (krea ? assetKey(manual).includes('qwen34b') : assetKey(manual).includes('qwen3vl4b')))
+        : moss ? assetKey(assetLeaf(manual)) === 'ae' || /qwenimage|krea2|zimage|sdxl|sd15|ltx|wan[12]|minimax/.test(assetKey(manual)) : krea ? assetKey(assetLeaf(manual)) === 'ae' || /flux|zimage|sdxl|sd15|ltx|wan[12]|minimax/.test(assetKey(manual)) : /qwenimage|krea2|flux2|ltx|wan[12]|minimax/.test(assetKey(manual))
       const error = !values.includes(manual) ? `Selected ${field} is not installed on this backend.` : incompatible ? `Selected ${field} is known to belong to a different workflow. ${guidance}` : undefined
       return { value: manual, automatic: false, candidates: ranked, reason: score(manual) ? 'Manual choice · matches catalog/name hints.' : 'Manual choice · compatibility is unverified; check the model documentation.', error }
     }
@@ -145,14 +170,14 @@ export function resolveImageAssets(config: ImageAssets, catalog: ImageAssetCatal
   const modelGuidance = `Use a ${IMAGE_PRESETS.find((p) => p.id === config.preset)!.title} model.${unmarkedKrea.length ? ` The raw/turbo variant of ${unmarkedKrea.join(', ')} is not in the name or the metadata, so it matches neither Krea2 preset on its own: the preset decides the recipe (Krea2 Raw 52 steps CFG 3.5, Krea2 Turbo 8 steps CFG 1), and the file is not "raw" or "turbo" by itself.` : ''}`
   const selection = {
     model: resolve('model', models, modelScore, modelGuidance),
-    clip: spec.clipType ? resolve('clip', catalog.clips, clipScore, krea ? 'Diffu recommends Qwen3-VL 4B.' : 'Diffu recommends Qwen 3 4B (not VL).') : { value: '', automatic: true, reason: 'Built into the checkpoint.', candidates: [] },
-    vae: spec.clipType ? resolve('vae', catalog.vaes, vaeScore, krea ? 'Diffu requires a Qwen Image/Krea2 VAE; ae.safetensors is not suitable.' : 'Use a Z-Image VAE or the documented Flux 1 ae.safetensors fallback.') : { value: '', automatic: true, reason: 'Built into the checkpoint.', candidates: [] },
+    clip: spec.clipType ? resolve('clip', catalog.clips, clipScore, moss ? 'MOSS Image needs the Qwen3.5 9B encoder (qwen3.5_9b_w4a8_gptq.safetensors).' : krea ? 'Diffu recommends Qwen3-VL 4B.' : 'Diffu recommends Qwen 3 4B (not VL).') : { value: '', automatic: true, reason: 'Built into the checkpoint.', candidates: [] },
+    vae: spec.clipType ? resolve('vae', catalog.vaes, vaeScore, moss ? 'MOSS Image decodes with the FLUX.2 small VAE (flux2-vae_small.safetensors).' : krea ? 'Diffu requires a Qwen Image/Krea2 VAE; ae.safetensors is not suitable.' : 'Use a Z-Image VAE or the documented Flux 1 ae.safetensors fallback.') : { value: '', automatic: true, reason: 'Built into the checkpoint.', candidates: [] },
   } satisfies Record<ImageAssetField, ImageSelection>
   return { effective: { ...config, model: selection.model.value, clip: spec.clipType ? selection.clip.value : config.clip, vae: spec.clipType ? selection.vae.value : config.vae }, selection, errors: Object.values(selection).flatMap((s) => 'error' in s && s.error ? [s.error] : []) }
 }
 
 /** Built-in KSampler samplers this app sends. Civitai example settings map onto these (src/data/modelFamilies.ts); each must also be installed. */
-export const IMAGE_SAMPLERS = ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde', 'dpmpp_2m_sde', 'dpmpp_2s_ancestral', 'heun', 'dpm_2', 'dpm_2_ancestral', 'lms', 'ddim', 'uni_pc', 'lcm', 'deis'] as const
+export const IMAGE_SAMPLERS = ['euler', 'er_sde', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde', 'dpmpp_2m_sde', 'dpmpp_2s_ancestral', 'heun', 'dpm_2', 'dpm_2_ancestral', 'lms', 'ddim', 'uni_pc', 'lcm', 'deis'] as const
 export const IMAGE_SCHEDULERS = ['simple', 'karras', 'normal', 'sgm_uniform', 'beta', 'exponential', 'ddim_uniform', 'kl_optimal'] as const
 export type ImageSampling = { steps: number; cfg: number; sampler: string; scheduler: string }
 export type HiresSettings = ImageSampling & { base_width: number; base_height: number; width: number; height: number; denoise: number; seed: number; upscale_model?: string }
@@ -175,7 +200,7 @@ export function recommendedImageSampling(preset: ImagePreset, model: string, cat
   const spec = imagePresetSpec(preset)
   const label = assetKey(`${model} ${catalog?.modelHints?.find((h) => h.name.replaceAll('\\', '/') === model.replaceAll('\\', '/'))?.baseModel ?? ''}`)
   const pony = preset === 'sdxl' && label.includes('pony')
-  const samplers = preset === 'sd15' ? ['dpmpp_2m', 'euler_ancestral', 'euler'] : preset === 'sdxl' ? ['dpmpp_2m', 'dpmpp_3m_sde', 'euler'] : preset === 'krea2_turbo' ? ['euler_ancestral', 'euler'] : preset === 'krea2_raw' ? ['euler'] : preset === 'z_image_turbo' ? ['euler', 'euler_ancestral', 'dpmpp_sde'] : ['euler', 'dpmpp_2m', 'dpmpp_sde']
-  const schedulers = preset === 'sd15' ? ['karras', 'normal', 'simple'] : preset === 'sdxl' ? ['karras', 'sgm_uniform', 'normal', 'simple'] : preset === 'krea2_turbo' ? ['beta', 'simple'] : preset === 'krea2_raw' ? ['simple'] : ['simple', 'sgm_uniform', 'normal']
+  const samplers = preset === 'moss_image' ? ['er_sde', 'euler'] : preset === 'sd15' ? ['dpmpp_2m', 'euler_ancestral', 'euler'] : preset === 'sdxl' ? ['dpmpp_2m', 'dpmpp_3m_sde', 'euler'] : preset === 'krea2_turbo' ? ['euler_ancestral', 'euler'] : preset === 'krea2_raw' ? ['euler'] : preset === 'z_image_turbo' ? ['euler', 'euler_ancestral', 'dpmpp_sde'] : ['euler', 'dpmpp_2m', 'dpmpp_sde']
+  const schedulers = preset === 'moss_image' ? ['simple', 'normal'] : preset === 'sd15' ? ['karras', 'normal', 'simple'] : preset === 'sdxl' ? ['karras', 'sgm_uniform', 'normal', 'simple'] : preset === 'krea2_turbo' ? ['beta', 'simple'] : preset === 'krea2_raw' ? ['simple'] : ['simple', 'sgm_uniform', 'normal']
   return { steps: pony ? 12 : preset === 'sd15' ? 20 : spec.steps, cfg: pony ? 5.5 : spec.cfg, sampler: samplers.find((s) => !catalog?.samplers || catalog.samplers.includes(s)) ?? '', scheduler: schedulers.find((s) => !catalog?.schedulers || catalog.schedulers.includes(s)) ?? '' }
 }

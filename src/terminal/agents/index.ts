@@ -48,6 +48,8 @@ const AGENTS_MAN = `{c:bold}NAME{/}
        /images profile lists style profiles; select <id|none>, save {"name":"…","description":"…"},
        reset <id> or delete <id> manages them. /memory reset-images forgets image observations.
        Krea2 presets are krea2_raw and krea2_turbo; both need installed model, clip and vae.
+       MOSS Image is moss_image: a MOSS diffusion model (diffusion_models or checkpoints), the
+       Qwen3.5 9B encoder and the FLUX.2 small VAE. /images set {"preset":"moss_image"} picks it.
        Generated images keep their private download URL, settings and metadata link, with an inline
        preview below in interactive sessions. /images art on|off controls it (on by default,
        remembered for this account in this browser). Previews use at most 48 columns and 24 rows;

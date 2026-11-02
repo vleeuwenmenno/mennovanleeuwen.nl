@@ -107,6 +107,12 @@ try {
   assert.equal(familyOf('ZImageTurbo'), 'z_image_turbo'); assert.equal(familyOf('SDXL 1.0'), 'sdxl'); assert.equal(familyOf('SD 1.5'), 'sd15'); assert.equal(familyOf('Pony'), 'pony')
   assert.equal(familyOf('Anima'), 'anima'); assert.equal(MODEL_FAMILIES.anima.supported, false); assert.equal(familyOf('MiniMax H3'), 'minimax_h3'); assert.equal(MODEL_FAMILIES.minimax_h3.supported, false)
   assert.equal(familyOf(''), null); assert.equal(familyOf('Hunyuan 1'), null)
+  // MOSS Image: Civitai base model, or the file name alone when there is no metadata; never mistaken for Flux.
+  for (const base of ['MOSS Image', 'moss_image', 'MOSS-Image']) assert.equal(familyOf(base), 'moss_image', base)
+  assert.equal(familyOf('', { name: 'MOSS Image/moss image/realismByStableYogi_v15INT8.safetensors' }), 'moss_image')
+  assert.equal(familyOf('Other', { name: 'moss_image_lora.safetensors' }), 'moss_image'); assert.equal(familyOf('Flux.2 D'), 'flux')
+  assert.equal(MODEL_FAMILIES.moss_image.supported, true); assert.equal(MODEL_FAMILIES.moss_image.preset, 'moss_image')
+  assert.deepEqual(mapA1111Sampler('ER SDE'), { rawSampler: 'ER SDE', rawSchedule: '', sampler: 'er_sde', scheduler: null })
   // Consensus: combined and separate names agree; unmapped and uninstalled samplers are reported, not used.
   const c = exampleConsensus([{ sampler: 'DPM++ 2M', 'Schedule type': 'Karras', steps: 20, cfgScale: 5, clipSkip: 2 }, { sampler: 'DPM++ 2M Karras', steps: 30, cfgScale: '7', clipSkip: 2 }, { sampler: 'Euler a', steps: 25 }, null, { prompt: 'no settings' }])
   assert.deepEqual([c.images, c.total, c.sampler?.agree, c.sampler?.comfy, c.steps, c.cfg, c.clipSkip], [3, 5, 2, { sampler: 'dpmpp_2m', scheduler: 'karras' }, 25, 6, 2])
@@ -176,6 +182,14 @@ const { pixelQuality, parseVisionVerdict, checkImageQuality, QualityRetry, QUALI
   const turbo = recommend('diffusionModels', 'z_image_turbo', exampleConsensus([{ sampler: 'Euler', steps: 9, cfgScale: 3, clipSkip: 2 }, { sampler: 'Euler', steps: 9, cfgScale: 3, clipSkip: 2 }]), installed, false)
   assert.deepEqual([turbo.preset, turbo.cfg, turbo.clip_skip, turbo.steps], ['z_image_turbo', 1, 1, 9], 'Turbo keeps CFG 1; diffusion presets have no clip skip')
   assert.equal(recommend('checkpoints', 'noobai_vpred', null, installed, true).v_prediction, true)
+  // MOSS Image runs its own preset from diffusion_models and from diffusion-only files in checkpoints, with no clip skip.
+  const mossInstalled = { samplers: [...installed.samplers, 'er_sde'], schedulers: [...installed.schedulers, 'simple'] }
+  for (const category of ['diffusionModels', 'checkpoints'] as const) {
+    const moss = recommend(category, 'moss_image', exampleConsensus([{ sampler: 'Euler', steps: 30, cfgScale: 3, clipSkip: 2 }, { sampler: 'Euler', steps: 30, cfgScale: 3, clipSkip: 2 }]), mossInstalled, false)
+    assert.deepEqual([moss.preset, moss.clip_skip, moss.steps, moss.cfg], ['moss_image', 1, 30, 3], `MOSS from ${category}`)
+    const plainMoss = recommend(category, 'moss_image', null, mossInstalled, false)
+    assert.deepEqual([plainMoss.sampler, plainMoss.scheduler, plainMoss.steps, plainMoss.cfg, plainMoss.width], ['er_sde', 'simple', 25, 2.5, 1024])
+  }
   assert.equal(recommend('diffusionModels', 'sdxl', null, installed, false).preset, null, 'a separate diffusion model never gets a checkpoint preset')
   // A raw/turbo split follows the effective preset; examples from the other variant are not used.
   assert.equal(variantFor('krea2', 'krea2_raw'), 'krea2_raw'); assert.equal(variantFor('krea2_turbo', 'krea2_raw'), 'krea2_raw'); assert.equal(variantFor('krea2', 'sdxl'), 'krea2')

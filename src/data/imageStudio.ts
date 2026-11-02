@@ -4,7 +4,7 @@
 // scripts/agents-image-studio.ts checks the same functions the Studio runs.
 
 import { applyPresetRules, isTurbo, presetFamily, presetRules, SIZE_LIMITS, type Recommended } from './modelFamilies.ts'
-import { IMAGE_PRESETS, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, imagePresetSpec, recommendedImageSampling, resolveImageAssets, type DiffusionImageSettings, type ImageAssetCatalog, type ImageGenerationSettings, type ImagePreset } from './imageModels.ts'
+import { IMAGE_PRESETS, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, imagePresetSpec, presetModels, recommendedImageSampling, resolveImageAssets, type DiffusionImageSettings, type ImageAssetCatalog, type ImageGenerationSettings, type ImagePreset } from './imageModels.ts'
 
 /** The live catalog as /api/agents/images/catalog sends it: the asset lists plus the node checks. */
 export type StudioCatalog = ImageAssetCatalog & { nodes?: string[]; clipTypes?: string[]; img2img?: boolean }
@@ -54,7 +54,7 @@ export const STEP_PRESETS = [10, 25, 40, 80] as const
 
 export function defaultStudioForm(preset: ImagePreset = 'sdxl'): StudioForm {
   const spec = imagePresetSpec(preset), edge = presetRules(preset).edge
-  return { preset, variant: 'auto', model: '', clip: '', vae: '', checkpointVae: '', loras: [], embeddings: [], prompt: '', negative: '', width: edge, height: edge, aspectLock: false, batch: 1, seed: -1, seedLock: false, steps: spec.steps, cfg: spec.cfg, sampler: spec.sampler, scheduler: spec.scheduler, denoise: 0.6, clipSkip: 1, source: null, hires: { on: false, scale: 1.5, denoise: 0.35, steps: 15, upscaleModel: '' }, edited: false, recipe: null }
+  return { preset, variant: 'auto', model: '', clip: '', vae: '', checkpointVae: '', loras: [], embeddings: [], prompt: '', negative: '', width: edge, height: edge, aspectLock: false, batch: 1, seed: -1, seedLock: false, steps: spec.steps, cfg: spec.cfg, sampler: spec.sampler, scheduler: spec.scheduler, denoise: 0.6, clipSkip: 1, source: null, hires: { on: false, scale: 1.5, denoise: presetRules(preset).hiresDenoise, steps: 15, upscaleModel: '' }, edited: false, recipe: null }
 }
 
 const clamp = (v: unknown, [min, max]: readonly [number, number], fallback: number, step = 0) => {
@@ -179,7 +179,7 @@ export function studioProblems(form: StudioForm, ctx: { configured: boolean; cat
   const spec = imagePresetSpec(form.preset), rules = presetRules(form.preset)
   if (!form.prompt.trim()) out.push('Write a prompt.')
   const resolved = resolveImageAssets({ preset: form.preset, model: form.model, clip: form.clip, vae: form.vae }, catalog)
-  const models = spec.clipType ? catalog.diffusionModels : catalog.checkpoints
+  const models = presetModels(form.preset, catalog)
   if (!models.length) out.push(spec.clipType ? 'This ComfyUI has no diffusion models for this workflow.' : 'This ComfyUI has no checkpoints installed.')
   else if (!resolved.effective.model) out.push(resolved.selection.model.error ?? 'Choose a model.')
   else if (resolved.selection.model.error) out.push(resolved.selection.model.error)
@@ -193,12 +193,14 @@ export function studioProblems(form: StudioForm, ctx: { configured: boolean; cat
   if (!form.sampler || !studioSamplers(catalog).includes(form.sampler)) out.push('Choose a sampler this ComfyUI has.')
   if (!form.scheduler || !studioSchedulers(catalog).includes(form.scheduler)) out.push('Choose a scheduler this ComfyUI has.')
   if (form.loras.length) {
-    if (nodes && !nodes.includes('LoraLoaderModelOnly') && (spec.clipType === 'krea2' || !nodes.includes('LoraLoader'))) out.push(spec.clipType === 'krea2' ? 'Krea2 needs a model-only LoRA loader (LoraLoaderModelOnly).' : 'This ComfyUI has no LoRA loader.')
+    const modelOnly = spec.clipType === 'krea2' || spec.clipType === 'moss_image'
+    if (nodes && !nodes.includes('LoraLoaderModelOnly') && (modelOnly || !nodes.includes('LoraLoader'))) out.push(modelOnly ? `${IMAGE_PRESETS.find((p) => p.id === form.preset)!.title} needs a model-only LoRA loader (LoraLoaderModelOnly).` : 'This ComfyUI has no LoRA loader.')
     const missing = form.loras.filter((l) => catalog.loras && !catalog.loras.includes(l.name))
     if (missing.length) out.push(`Not installed: ${missing.map((l) => l.name).join(', ')}.`)
   }
   if (form.clipSkip > 1 && rules.clipSkip && nodes && !nodes.includes('CLIPSetLastLayer')) out.push('This ComfyUI lacks CLIPSetLastLayer, so clip skip must be 1.')
   if (form.width * form.height > SIZE_LIMITS.area) out.push(`The size is over the ${SIZE_LIMITS.area.toLocaleString('en')}-pixel limit (1536 × 1024).`)
+  if (form.preset === 'moss_image' && nodes && !nodes.includes('EmptyFlux2LatentImage')) out.push('MOSS Image needs ComfyUI 0.42 or newer (EmptyFlux2LatentImage is missing).')
   if (form.source && catalog.img2img === false) out.push('This ComfyUI lacks LoadImage, ImageScale or VAEEncode for image-to-image.')
   if (form.hires.on) {
     if (form.hires.upscaleModel && !(catalog.upscalers ?? []).includes(form.hires.upscaleModel)) out.push('The upscale model is not installed any more.')

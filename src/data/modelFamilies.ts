@@ -7,7 +7,7 @@
 
 import { imagePresetSpec, type ImagePreset } from './imageModels.ts'
 
-export type FamilyId = 'illustrious' | 'noobai' | 'noobai_vpred' | 'pony' | 'sdxl' | 'sd15' | 'krea2_turbo' | 'krea2_raw' | 'krea2' | 'z_image_turbo' | 'z_image' | 'flux' | 'anima' | 'minimax_h3'
+export type FamilyId = 'illustrious' | 'noobai' | 'noobai_vpred' | 'pony' | 'sdxl' | 'sd15' | 'krea2_turbo' | 'krea2_raw' | 'krea2' | 'z_image_turbo' | 'z_image' | 'flux' | 'anima' | 'minimax_h3' | 'moss_image'
 export type FamilyDefaults = {
   id: FamilyId
   label: string
@@ -42,6 +42,7 @@ export const MODEL_FAMILIES: Record<FamilyId, FamilyDefaults> = {
   krea2: f({ id: 'krea2', label: 'Krea 2', preset: null, supported: true, sampler: 'euler_ancestral', scheduler: 'beta', steps: 8, stepsRange: [6, 52], cfg: 1, cfgRange: [1, 3.5], clipSkip: 1, width: 1024, height: 1024, notes: 'Raw or turbo is not in the name or metadata: the preset decides (Krea2 Turbo 8 steps CFG 1, Krea2 Raw 52 steps CFG 3.5).' }),
   z_image_turbo: f({ id: 'z_image_turbo', label: 'Z-Image Turbo', preset: 'z_image_turbo', supported: true, sampler: 'euler', scheduler: 'simple', steps: 8, stepsRange: [6, 10], cfg: 1, cfgRange: [1, 1], clipSkip: 1, width: 1024, height: 1024, notes: 'Few steps, CFG 1, positive prompt only.' }),
   z_image: f({ id: 'z_image', label: 'Z-Image', preset: 'z_image', supported: true, sampler: 'euler', scheduler: 'simple', steps: 20, stepsRange: [20, 30], cfg: 4, cfgRange: [3, 5], clipSkip: 1, width: 1024, height: 1024, notes: 'Rich natural-language prompts.' }),
+  moss_image: f({ id: 'moss_image', label: 'MOSS Image', preset: 'moss_image', supported: true, sampler: 'er_sde', scheduler: 'simple', alternative: 'euler/simple', steps: 25, stepsRange: [20, 30], cfg: 2.5, cfgRange: [2, 3.5], clipSkip: 1, width: 1024, height: 1024, notes: 'Long natural-language prompts work well (the Qwen3.5 encoder reads about 4K tokens); keep negative prompts short. Qwen3.5 9B encoder as moss_image and the FLUX.2 small VAE. LoRAs are model-only; no clip skip or embeddings.' }),
   flux: f({ id: 'flux', label: 'Flux', preset: null, supported: false, sampler: 'euler', scheduler: 'simple', steps: 20, stepsRange: [20, 30], cfg: 1, cfgRange: [1, 1], clipSkip: 1, width: 1024, height: 1024, notes: 'Not a supported preset in this app (Flux uses its own guidance node).' }),
   anima: f({ id: 'anima', label: 'Anima', preset: null, supported: false, sampler: 'euler', scheduler: 'simple', steps: 30, stepsRange: [20, 40], cfg: 4, cfgRange: [3, 5], clipSkip: 1, width: 1024, height: 1024, notes: 'Not a supported preset in this app: Anima needs its own workflow.' }),
   minimax_h3: f({ id: 'minimax_h3', label: 'MiniMax H3', preset: null, supported: false, sampler: 'euler', scheduler: 'simple', steps: 30, stepsRange: [20, 40], cfg: 4, cfgRange: [3, 5], clipSkip: 1, width: 1024, height: 1024, notes: 'Not a supported preset in this app: MiniMax H3 is a video/audio family.' }),
@@ -76,7 +77,10 @@ export function familyOf(baseModel: string, hints: { name?: string; tags?: strin
   const b = key(baseModel)
   const words = [hints.name ?? '', ...(hints.tags ?? [])].join(' ')
   const w = key(words)
-  if (!b) return null
+  // MOSS Image files are named for their family ("MOSS Image/…", "moss_image"), metadata or not.
+  if (!b || b === 'other') return w.includes('mossimage') ? 'moss_image' : null
+  // Before flux: MOSS Image decodes with the FLUX.2 VAE but is its own family.
+  if (b.includes('mossimage')) return 'moss_image'
   if (b.startsWith('illustrious')) return hints.vpred ? 'noobai_vpred' : 'illustrious'
   if (b.startsWith('noobai')) return hints.vpred || b.includes('vpred') ? 'noobai_vpred' : 'noobai'
   if (b.startsWith('pony')) return 'pony'
@@ -94,13 +98,13 @@ export function familyOf(baseModel: string, hints: { name?: string; tags?: strin
 // --- A1111 / Civitai sampler names to ComfyUI ---------------------------------------------------
 
 /** ComfyUI KSampler sampler names this mapping can produce. */
-const COMFY_SAMPLERS = new Set(['euler', 'euler_ancestral', 'heun', 'heunpp2', 'dpm_2', 'dpm_2_ancestral', 'lms', 'dpm_fast', 'dpm_adaptive', 'dpmpp_2s_ancestral', 'dpmpp_sde', 'dpmpp_sde_gpu', 'dpmpp_2m', 'dpmpp_2m_sde', 'dpmpp_2m_sde_gpu', 'dpmpp_3m_sde', 'dpmpp_3m_sde_gpu', 'ddpm', 'lcm', 'ipndm', 'deis', 'ddim', 'uni_pc', 'uni_pc_bh2', 'euler_cfg_pp', 'euler_ancestral_cfg_pp', 'res_multistep'])
+const COMFY_SAMPLERS = new Set(['euler', 'er_sde', 'euler_ancestral', 'heun', 'heunpp2', 'dpm_2', 'dpm_2_ancestral', 'lms', 'dpm_fast', 'dpm_adaptive', 'dpmpp_2s_ancestral', 'dpmpp_sde', 'dpmpp_sde_gpu', 'dpmpp_2m', 'dpmpp_2m_sde', 'dpmpp_2m_sde_gpu', 'dpmpp_3m_sde', 'dpmpp_3m_sde_gpu', 'ddpm', 'lcm', 'ipndm', 'deis', 'ddim', 'uni_pc', 'uni_pc_bh2', 'euler_cfg_pp', 'euler_ancestral_cfg_pp', 'res_multistep'])
 const COMFY_SCHEDULERS = new Set(['simple', 'sgm_uniform', 'karras', 'exponential', 'ddim_uniform', 'beta', 'normal', 'linear_quadratic', 'kl_optimal'])
 const A1111_SAMPLERS: Record<string, string> = {
   'euler a': 'euler_ancestral', 'euler ancestral': 'euler_ancestral', euler: 'euler', heun: 'heun', lms: 'lms',
   dpm2: 'dpm_2', 'dpm2 a': 'dpm_2_ancestral', 'dpm++ 2s a': 'dpmpp_2s_ancestral', 'dpm++ 2m': 'dpmpp_2m', 'dpm++ sde': 'dpmpp_sde',
   'dpm++ 2m sde': 'dpmpp_2m_sde', 'dpm++ 2m sde gpu': 'dpmpp_2m_sde_gpu', 'dpm++ 3m sde': 'dpmpp_3m_sde', 'dpm fast': 'dpm_fast', 'dpm adaptive': 'dpm_adaptive',
-  ddim: 'ddim', ddpm: 'ddpm', unipc: 'uni_pc', 'uni pc': 'uni_pc', lcm: 'lcm', deis: 'deis', ipndm: 'ipndm',
+  ddim: 'ddim', ddpm: 'ddpm', 'er sde': 'er_sde', 'er-sde': 'er_sde', unipc: 'uni_pc', 'uni pc': 'uni_pc', lcm: 'lcm', deis: 'deis', ipndm: 'ipndm',
 }
 const A1111_SCHEDULES: Record<string, string> = { karras: 'karras', exponential: 'exponential', 'sgm uniform': 'sgm_uniform', simple: 'simple', normal: 'normal', beta: 'beta', 'ddim uniform': 'ddim_uniform', 'kl optimal': 'kl_optimal', 'linear quadratic': 'linear_quadratic' }
 /** Schedule suffixes a combined A1111 name can carry ("DPM++ 2M Karras"), longest first. */
@@ -244,11 +248,13 @@ export type PresetRules = {
   counter: 'tokens' | 'chars'
   /** The base edge the size buckets are built around. */
   edge: number
+  /** The Studio's default hires-fix denoise (MOSS Image refines at about 0.6 for a 1.5x pass). */
+  hiresDenoise: number
 }
 export function presetRules(preset: ImagePreset): PresetRules {
   const spec = imagePresetSpec(preset), diffusion = Boolean(spec.clipType)
   const variants = preset.startsWith('krea2') ? (['krea2_raw', 'krea2_turbo'] as const) : preset.startsWith('z_image') ? (['z_image', 'z_image_turbo'] as const) : null
-  return { encoder: diffusion, vae: diffusion ? 'required' : 'builtin', negative: spec.negative, fixedCfg: spec.negative ? null : 1, clipSkip: !diffusion, embeddings: !diffusion, loraClip: !diffusion, variants, counter: diffusion ? 'chars' : 'tokens', edge: preset === 'sd15' ? 512 : 1024 }
+  return { encoder: diffusion, vae: diffusion ? 'required' : 'builtin', negative: spec.negative, fixedCfg: spec.negative ? null : 1, clipSkip: !diffusion, embeddings: !diffusion, loraClip: !diffusion, variants, counter: diffusion ? 'chars' : 'tokens', edge: preset === 'sd15' ? 512 : 1024, hiresDenoise: preset === 'moss_image' ? 0.6 : 0.35 }
 }
 /** Whether a preset is the turbo half of its pair. */
 export const isTurbo = (preset: ImagePreset) => preset === 'krea2_turbo' || preset === 'z_image_turbo'
@@ -257,7 +263,7 @@ export const presetFamily = (preset: ImagePreset): FamilyDefaults => MODEL_FAMIL
 
 /** The request fields the rules touch. Everything else passes through unchanged. */
 type RuleFields = { preset?: unknown; negative_prompt?: unknown; cfg?: unknown; clip_skip?: unknown; clip?: unknown; vae?: unknown; checkpoint_vae?: unknown; hires?: unknown }
-const PRESET_IDS: readonly string[] = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo']
+const PRESET_IDS: readonly string[] = ['sd15', 'sdxl', 'z_image', 'z_image_turbo', 'krea2_raw', 'krea2_turbo', 'moss_image']
 /**
  * A request as its preset runs it: no negative prompt (and CFG 1, the hires pass's too) where there
  * are no negatives, no clip skip outside checkpoints, no encoder or workflow VAE for a checkpoint and

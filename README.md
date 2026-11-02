@@ -3468,6 +3468,9 @@ Recommendations follow Diffu's family/style detection and asset rules: Krea2 req
 Raw/Turbo family hint, Qwen3-VL 4B, and a Qwen Image/Krea2 VAE. Z-Image uses Qwen 3 4B and a
 Z-Image VAE or the documented Flux 1 `ae.safetensors` fallback; that fallback is never recommended
 for Krea2. See the [ComfyUI Z-Image example](https://comfyanonymous.github.io/ComfyUI_examples/z_image/).
+MOSS Image is recognized by "MOSS Image", "moss_image" or "MOSS-Image" in the path or base model
+and uses the Qwen3.5 9B encoder (`qwen3.5_9b_w4a8_gptq.safetensors`) with the FLUX.2 small VAE
+(`flux2-vae_small.safetensors`); its models may sit in `diffusion_models` or `checkpoints`.
 SD 1.5/SDXL use complete checkpoints. Video, Flux, Anima and other recognized unsupported
 families are excluded. Exact canonical encoder/VAE names rank ahead of variant names; model
 weights are not ranked by supposed quality, precision, filename order or hardware assumptions.
@@ -3510,7 +3513,7 @@ The CLI also supports `/images show`, `/images reset`, and
 `/images show` reports resolved values, automatic/manual state and guidance. Removing overrides
 with `/images reset` restores account inheritance, including its automatic intent.
 A workflow/model change can be supplied together in that JSON; separate diffusion workflows also
-need a compatible installed `clip` and `vae`. Krea2 preset IDs are `krea2_raw` and `krea2_turbo`. Unknown fields, unsupported presets and absent models
+need a compatible installed `clip` and `vae`. Krea2 preset IDs are `krea2_raw` and `krea2_turbo`; MOSS Image is `moss_image`. Unknown fields, unsupported presets and absent models
 are rejected by the shared server. Opening `/images` before the first message creates the session.
 The model can discover effective settings through `list_image_models`; it cannot reconfigure the
 backend or persist session settings. Explicit supported model/components, sampling and
@@ -3663,6 +3666,15 @@ Z-Image Turbo uses 8 Euler/simple steps, CFG 1 and only a positive prompt; Z-Ima
 SD 1.5 uses 20 steps/CFG 7 and SDXL uses 25 steps/CFG 7, preferring DPM++ 2M/Karras.
 A recognized Pony checkpoint follows Diffu’s 12 steps/CFG 5.5 recommendation. Sampler/scheduler
 preferences fall back only to supported installed options. Choose the family that matches the actual model:
+MOSS Image (`moss_image`, ComfyUI 0.42 or newer, native nodes) follows ComfyUI's bundled MOSS
+templates: the model, a `moss_image` CLIPLoader with the Qwen3.5 9B encoder, `EmptyFlux2LatentImage`,
+KSampler at 25 steps, CFG 2.5, `er_sde`/`simple`, and the FLUX.2 small VAE. Negative prompts are
+supported; prompts can be long (about 4K tokens). MOSS files in `models/checkpoints` hold the
+diffusion model only, so `CheckpointLoaderSimple` supplies just MODEL and the encoder and VAE always
+come from CLIPLoader and VAELoader. Its LoRAs are model-only (`LoraLoaderModelOnly`); clip skip and
+embeddings do not apply. The Studio's hires pass defaults to 0.6 strength for MOSS. Not yet built:
+the template's TextGenerate prompt enhancer, SkipLayerGuidanceDiTSimple, MOSSImageLayoutPrompt
+boxes, TextEncodeMOSSImageEdit and MOSSImageControl.
 Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; prompt enhancement, image-to-image and LoRAs are not included. Matching model, encoder and VAE files must be installed and resolved automatically or selected manually; filenames alone do not establish compatibility. Discovery reads only the ten required classes via ComfyUI's
 `/object_info/{node_class}`, avoiding unrelated custom-node catalogs. Responses are limited to
 1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
@@ -3845,7 +3857,8 @@ The facts come from three places:
   that account and key (never the key itself), so no other account or key is served them.
 - **Family defaults** (`src/data/modelFamilies.ts`), keyed by base model: Illustrious and NoobAI
   (Euler a or DPM++ 2M Karras, about 26 steps, CFG 5, clip skip 2), Pony (needs score tags),
-  SDXL, SD 1.5, Krea 2 turbo and raw, Z-Image and Z-Image Turbo (CFG 1, few steps). Flux, Anima and
+  SDXL, SD 1.5, Krea 2 turbo and raw, Z-Image and Z-Image Turbo (CFG 1, few steps), MOSS Image
+  (25 steps, CFG 2.5, er_sde/simple, from either model folder). Flux, Anima and
   MiniMax H3 are reported as not supported here.
 
 The result's `recommended` block (preset, sampler, scheduler, steps, CFG, clip skip, size) says its
@@ -4355,7 +4368,8 @@ The family rules are shared with the server (`presetRules`/`applyPresetRules` in
 - Only diffusion models get a separate encoder.
 - Turbo workflows hide the negative prompt and fix CFG at 1.
 - Clip skip and embeddings are for SD 1.5/SDXL checkpoints only.
-- Diffusion models (so Krea2 always) take model-only LoRAs.
+- Diffusion models (so Krea2 and MOSS Image always) take model-only LoRAs.
+- A MOSS Image pick runs the MOSS workflow whichever folder its file is in.
 
 A new model on an untouched form takes its recipe straight away: model_details' Civitai example
 consensus when there is one, else the family's defaults. If you changed the sampling by hand

@@ -415,7 +415,7 @@ try {
   assert.equal(visibleModelAssets(assets, '', 'absent').length, 0)
   console.log('PASS model browser paths, folder counts, duplicate basenames, exact backslash identifiers and global search')
   await server.start()
-  const { imageWorkflow, saveImageSettings, generateImage } = await import('../server/agentImages.ts')
+  const { imageWorkflow, saveImageSettings, generateImage, PRESETS } = await import('../server/agentImages.ts')
   const { decide } = await import('../server/agents.ts')
   const { imagePromptSection, DIFFU_IMAGE_PROMPT_MARKER } = await import('../server/agentImagePrompt.ts')
   const { usedBytes } = await import('../server/quota.ts')
@@ -443,7 +443,7 @@ try {
   assert.deepEqual(catalog.samplers, ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'])
   assert.deepEqual(catalog.schedulers, ['simple', 'beta', 'karras', 'normal', 'sgm_uniform'])
   assert.deepEqual(new Set(catalog.nodes), new Set(Object.keys(info)))
-  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'LoadImageMask', 'MaskToImage', 'ImageToMask', 'SetLatentNoiseMask', 'ImageCompositeMasked', 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete'])
+  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'LoadImageMask', 'MaskToImage', 'ImageToMask', 'SetLatentNoiseMask', 'ImageCompositeMasked', 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete', 'EmptyFlux2LatentImage'])
   // Without the ComfyUI-RMBG nodes, automatic masks and LaMa removal are reported off, nothing else changes.
   assert.equal(catalog.autoMask, false); assert.match(catalog.autoMaskError, /SAM3Segment or SAM2Segment/); assert.equal(catalog.remove, false)
   assert.ok(Buffer.byteLength(irrelevantCatalog) > 8 * 1024 * 1024)
@@ -495,6 +495,20 @@ try {
     else assert.equal(imageWorkflow({ ...settings, preset, clip: 'encoder.safetensors', vae: 'vae.safetensors' }, { prompt: 'fallback', loras: chain }, { nodes: [fallback] }).graph['10'].class_type, fallback)
   }
   assert.throws(() => imageWorkflow(settings, { prompt: 'missing loader', loras: chain }, { nodes: [] }), /no LoRA loader/)
+  // MOSS Image (agent tool and Studio share this builder): FLUX.2 latent, moss_image encoder, model-only LoRAs only,
+  // and a diffusion-only file from models/checkpoints loads its MODEL through CheckpointLoaderSimple.
+  {
+    const moss = { ...settings, preset: 'moss_image' as const, model: 'MOSS Image/realism.safetensors', clip: 'qwen3.5_9b_w4a8_gptq.safetensors', vae: 'flux2-vae_small.safetensors' }
+    const unet = imageWorkflow(moss, { prompt: 'a long natural-language prompt', negative_prompt: 'watermark', loras: [{ name: loraNames[0], weight: 0.8 }] }).graph
+    assert.equal(unet['1'].class_type, 'UNETLoader'); assert.equal(unet['2'].inputs.type, 'moss_image'); assert.equal(unet['6'].class_type, 'EmptyFlux2LatentImage')
+    assert.deepEqual([unet['7'].inputs.steps, unet['7'].inputs.cfg, unet['7'].inputs.sampler_name, unet['7'].inputs.scheduler], [25, 2.5, 'er_sde', 'simple'])
+    assert.equal(unet['5'].inputs.text, 'watermark'); assert.equal(unet['10'].class_type, 'LoraLoaderModelOnly')
+    const ckpt = imageWorkflow(moss, { prompt: 'x' }, { nodes: ['LoraLoaderModelOnly'], checkpoints: [moss.model], diffusionModels: [] }).graph
+    assert.equal(ckpt['1'].class_type, 'CheckpointLoaderSimple'); assert.deepEqual(ckpt['4'].inputs.clip, ['2', 0]); assert.deepEqual(ckpt['8'].inputs.vae, ['3', 0])
+    assert.throws(() => imageWorkflow(moss, { prompt: 'x', loras: chain }, { nodes: ['LoraLoader'] }), /MOSS Image requires a model-only LoRA loader/)
+    assert.throws(() => imageWorkflow(moss, { prompt: 'x', clip_skip: 2 }), /clip_skip applies/)
+    assert.ok(PRESETS.includes('moss_image'), 'generate_image and list_image_models offer moss_image')
+  }
   assert.equal(imageWorkflow(settings, { prompt: 'default weight', loras: [{ name: loraNames[0] }] }).graph['10'].inputs.strength_model, 1)
   for (const loras of [null, {}, Array.from({ length: 6 }, () => chain[0]), [{ name: 'a', weight: NaN }], [{ name: 'a', weight: Infinity }], [{ name: 'a', weight: -0.1 }], [{ name: 'a', weight: 2.1 }], [{ name: 'a', weight: '1' }]]) {
     const { validateImageOverrides } = await import('../server/agentImages.ts')
