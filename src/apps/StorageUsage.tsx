@@ -68,7 +68,7 @@ export function StorageUsage() {
           {report.over && <p className="storage-error">Your storage is full: new things can't be saved until you delete some, such as old Agents threads or generated pictures. Everything you have stays readable.</p>}
           {!report.complete && <p className="muted set-help">Some parts couldn't be measured just now, so the total is unknown. Try Refresh.</p>}
           {report.used === 0 ? (
-            <p className="muted">Nothing stored on the server yet.</p>
+            <p className="muted">Nothing counted toward your storage limit yet. The server may still keep records the limit leaves out (below).</p>
           ) : (
             <ul className="set-list storage-parts" aria-label="What uses your storage">
               {parts.map((p) => (

@@ -59,6 +59,10 @@ try {
   add('masks', maskBody.length + Buffer.byteLength(details))
   const imageBody = randomBytes(5000), metadata = JSON.stringify({ prompt: 'a ☕ cup' })
   db.prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata) VALUES (?, ?, ?, ?, ?, ?)').run(randomUUID(), thread, 'i.png', imageBody, now, metadata); add('images', imageBody.length + chars(metadata))
+  // A picture uploaded to Image Studio is kept in its hidden thread (quick = 2) and counts with the generated ones.
+  const studio = randomUUID(), upload = randomBytes(1500)
+  db.prepare('INSERT INTO agent_threads (id, user_id, title, mode, model, archived, created_at, updated_at, quick) VALUES (?, 1, ?, ?, ?, 0, ?, ?, 2)').run(studio, 'Image Studio', 'quick', '', now, now)
+  db.prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata) VALUES (?, ?, ?, ?, ?, NULL)').run(randomUUID(), studio, 'upload.png', upload, now); add('images', upload.length)
   const icon = randomBytes(900)
   db.prepare('INSERT INTO agent_icons (user_id, slug, prompt, body, created_at, updated_at) VALUES (1, ?, ?, ?, ?, ?)').run('cup', 'a cup ☕', icon, now, now); add('icons', icon.length + chars('a cup ☕') + chars('cup'))
   const found = randomBytes(1200)

@@ -73,7 +73,7 @@ const PARTS = [
   { id: 'settings', store: 'settings', label: 'Desktop and app settings', purpose: 'Your synced desktop, dock, notes, launchers and app settings', unit: 'items' },
   { id: 'messages', store: 'messages', label: 'Agents conversations', purpose: 'Messages, thinking and tool calls in your Agents threads', unit: 'messages' },
   { id: 'files', store: 'messages', label: 'Files in conversations', purpose: 'Pictures and files sent in Agents threads, and gpt-image pictures, kept as text', unit: 'messages with files' },
-  { id: 'images', store: 'images', label: 'Generated pictures', purpose: 'Pictures made with ComfyUI in Agents and Image Studio', unit: 'pictures' },
+  { id: 'images', store: 'images', label: 'Generated pictures', purpose: 'Pictures made with ComfyUI in Agents and Image Studio, and pictures uploaded to Image Studio', unit: 'pictures' },
   { id: 'masks', store: 'masks', label: 'Selection masks', purpose: 'Areas drawn to change part of a picture', unit: 'masks' },
   { id: 'references', store: 'references', label: 'Picture references', purpose: 'Links that let a thread use an earlier picture again', unit: 'references' },
   { id: 'icons', store: 'icons', label: 'Icon library', purpose: 'Icons drawn with gpt-image', unit: 'icons' },

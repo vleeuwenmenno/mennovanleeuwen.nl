@@ -2042,7 +2042,7 @@ threads with their attachments, generated images and memories. Over it, reading 
 working and a save is refused with a 413 that names the limit, so the account can free space first.
 Settings → Sync → **Storage** shows the signed-in account how much of its room is used, with a bar
 and, read only, what uses it: desktop and app settings, Agents conversations and the files kept in
-them, generated pictures, selection masks, picture references, the icon library, found pictures,
+them, generated pictures (with pictures uploaded to Image Studio), selection masks, picture references, the icon library, found pictures,
 memories, video projects, keyframes and videos, each with its size and how many. The figures are
 the quota's own, from one read of the database (`GET /api/account/storage`, the session's own
 account only, `private, no-store`; [`server/quota.ts`](server/quota.ts) `storageReport`): they add
