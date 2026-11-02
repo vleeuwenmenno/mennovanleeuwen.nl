@@ -193,12 +193,18 @@ public class CloudActivity extends AppCompatActivity {
      */
     private int authOp;
 
-    /** Session cookies are being put in: no other sign-in starts until that has settled. */
-    private boolean installing;
+    /**
+     * The sign-in whose session cookies are being put in (0: none). No other sign-in starts until
+     * that has settled, and only that sign-in can release it.
+     */
+    private int installingOp;
 
     private void startLogin(String provider) {
-        if (installing) return;
+        if (installingOp != 0) return;
         final int op = ++authOp;
+        // A new sign-in replaces any browser sign-in still waiting: its return no longer counts,
+        // also while this one is still asking the server what it supports.
+        CloudLogin.clear(this);
         final String server = origin;
         new Thread(() -> {
             CloudLogin.Info info = CloudLogin.support(server, provider);
@@ -393,6 +399,11 @@ public class CloudActivity extends AppCompatActivity {
         // The app redeems it itself (not the WebView), then puts the checked session cookies into
         // the WebView and loads the desktop.
         final String server = origin;
+        // Another sign-in is putting its cookies in right now: this return waits for nothing, it is dropped.
+        if (installingOp != 0) {
+            message(R.string.login_failed_title, getString(R.string.login_expired));
+            return;
+        }
         // The return is a sign-in of its own now: anything older no longer lands.
         final int op = ++authOp;
         final String verifier = pending.verifier;
@@ -401,8 +412,8 @@ public class CloudActivity extends AppCompatActivity {
         new Thread(() -> {
             java.util.List<String> cookies = CloudLogin.redeem(server, code, verifier, oldCookie);
             runOnUiThread(() -> {
-                // Nothing late lands: the desktop closed or moved to another server meanwhile.
-                if (isFinishing() || isDestroyed() || !server.equals(origin)) return;
+                // Nothing late lands: the desktop closed, moved to another server or started another sign-in meanwhile.
+                if (!current(op, server)) return;
                 if (cookies == null) {
                     progress.setVisibility(View.GONE);
                     message(R.string.login_failed_title, getString(R.string.login_error));
@@ -415,14 +426,17 @@ public class CloudActivity extends AppCompatActivity {
 
     /** Puts the cookies in one by one (each confirmed), then opens the signed-in desktop. */
     private void install(String server, java.util.List<String> cookies, int i, int op) {
-        installing = true;
+        if (i == 0) {
+            if (installingOp != 0 || !current(op, server)) return;
+            installingOp = op;
+        }
         if (!current(op, server)) {
             // Cancelled or replaced while the cookies went in: the ones already written go again.
-            undoInstall(server, cookies, i);
+            undoInstall(server, cookies, i, op);
             return;
         }
         if (i == cookies.size()) {
-            installing = false;
+            installingOp = 0;
             CookieManager.getInstance().flush();
             errorView.setVisibility(View.GONE);
             freshStart = true;
@@ -434,19 +448,19 @@ public class CloudActivity extends AppCompatActivity {
                 install(server, cookies, i + 1, op);
                 return;
             }
-            undoInstall(server, cookies, i);
+            undoInstall(server, cookies, i, op);
             if (current(op, server)) message(R.string.login_failed_title, getString(R.string.login_error));
         });
     }
 
     /** Expires the first `count` of these cookies (MvL OS's own names, Path=/), so a sign-in that didn't finish leaves no session behind. */
-    private void undoInstall(String server, java.util.List<String> cookies, int count) {
+    private void undoInstall(String server, java.util.List<String> cookies, int count, int op) {
         for (int k = 0; k < count && k < cookies.size(); k++) {
             String name = cookies.get(k).substring(0, cookies.get(k).indexOf('='));
             CookieManager.getInstance().setCookie(server, name + "=; Path=/; Max-Age=0; Secure");
         }
         CookieManager.getInstance().flush();
-        installing = false;
+        if (installingOp == op) installingOp = 0;
         progress.setVisibility(View.GONE);
     }
 
