@@ -1,5 +1,5 @@
 import { WidgetVisibility } from '../widgets/platform/visibility'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
 import { dropInTrash, trashOp } from '../data/fileDrop'
 import { openFromParams } from './openUrl'
@@ -46,7 +46,7 @@ import { setBackFallback, useBackLayer } from './backLayers'
 import { goToPage, homeUi, onPageRemoved, useHomeUi } from './homePager'
 import { MAX_PAGES, pageOfX } from './homePages'
 import { useDesktop } from './desktopStore'
-import { mobileWidgetPageCounts, screenWidgets } from './widgetPlaces'
+import { mobileWidgetPageCounts, mobileWidgetPlaces, screenWidgets, widgetPlaces } from './widgetPlaces'
 import { NoteStackSlot, Window } from './Window'
 import { SINGLE_INSTANCE, useWM, workspaceOf, WORKSPACES, type AppId, type Geometry, type WinState } from './wm'
 
@@ -776,15 +776,20 @@ export function Shell() {
   wmRef.current = wm
   // The home screens are fixed pages side by side (homePager.ts). Their number is what was made
   // (at least one) or as many as hold something; the widgets' share of "holds something" is here.
+  const mobileSet = useSyncExternalStore(mobileWidgetPlaces.subscribe, mobileWidgetPlaces.get)
+  const desktopSet = useSyncExternalStore(widgetPlaces.subscribe, widgetPlaces.get)
   const widgetPages = useMemo(() => {
     const counts: number[] = []
     if (mobile) {
-      for (const w of wm.windows) if (NOTE_APPS.has(w.app) && w.app !== 'widget' && wm.shown(w)) counts[pageOfX(w.x)] = (counts[pageOfX(w.x)] ?? 0) + 1
-      // Widgets by what is saved, so the same widget under two keys and kinds this build does not know still hold their page.
+      // What is shown (a widget pushed to a later page by a collision or a smaller screen holds that page too)...
+      for (const w of wm.windows) if (NOTE_APPS.has(w.app) && wm.shown(w)) counts[pageOfX(w.x)] = (counts[pageOfX(w.x)] ?? 0) + 1
+      // ...and what is saved, so the same widget under two keys and kinds this build does not know still hold their page.
       mobileWidgetPageCounts(screenWidgets(true), viewW(), viewH()).forEach((n, i) => (counts[i] = (counts[i] ?? 0) + n))
     }
     return Array.from(counts, (n) => n ?? 0)
-  }, [wm.windows, mobile])
+    // The saved sets change without any window changing (another tab, an unknown kind): they are dependencies too.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wm.windows, mobile, mobileSet, desktopSet])
   const pageCount = mobile ? Math.min(MAX_PAGES, Math.max(desk.mobilePages ?? 1, home.icons.length, widgetPages.length, 1)) : 1
   useEffect(() => { if (mobile) homeUi.set({ widgets: widgetPages, count: pageCount }) }, [mobile, widgetPages, pageCount])
   // A note brought to the front, or just added, turns to its page.

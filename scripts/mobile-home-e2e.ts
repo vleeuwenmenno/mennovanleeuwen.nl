@@ -270,6 +270,43 @@ try {
   const shifted = await r.eval<{ page: number; w: number; x: number }>(`(async () => { const p = Object.values((await import('/src/os/widgetPlaces.ts')).screenWidgets(true).places).find((q) => q.id === 'wide'); return { page: p.page, w: p.w, x: p.x } })()`)
   const allPages = await r.eval<number[]>(`(async () => Object.values((await import('/src/os/widgetPlaces.ts')).screenWidgets(true).places).map((q) => q.page))()`)
   check('removing an empty page on a narrow screen moves the widget down a page and keeps its saved width and place', shifted.page === 2 && shifted.w === 362 && shifted.x === 14 && allPages.length === 3 && allPages.every((n) => n === 2), { shifted, dots: await dots(r), ui: await r.eval(`(async () => JSON.stringify((await import('/src/os/homePager.ts')).homeUi.get()))()`) })
+  // Occupancy follows the saved sets even when no window changes, and what is shown on a page.
+  await r.eval(`(async () => {
+    const { widgetPlaces, mobileWidgetPlaces } = await import('/src/os/widgetPlaces.ts')
+    // The phone's own set, empty on purpose (a null one would merge back what was saved).
+    mobileWidgetPlaces.set(() => ({ places: {}, removed: 'wide wide~b ghost' }))
+    widgetPlaces.set(() => ({ places: {}, removed: 'wide wide~b ghost' }))
+    ;(await import('/src/os/desktopStore.ts')).updateDesktop((s) => ({ ...s, mobilePositions: {}, mobilePages: 3 }))
+  })()`)
+  await r.send('Page.navigate', { url: origin })
+  await r.waitFor(`!!document.querySelector('.home-pages')`, 90_000)
+  await sleep(900)
+  await click(r, '.home-edit')
+  await sleep(200)
+  await click(r, '.home-dot:nth-child(2)')
+  await sleep(700)
+  const removeDisabled = () => r.eval<boolean>(`[...document.querySelectorAll('.home-edit-bar button')].find((x) => x.textContent.trim() === 'Remove page').disabled`)
+  check('an empty page can be removed', (await removeDisabled()) === false)
+  await r.eval(`(async () => { const { mobileWidgetPlaces } = await import('/src/os/widgetPlaces.ts'); mobileWidgetPlaces.set((s) => ({ ...s, places: { ...s.places, late: { id: 'late', kind: 'kind-this-build-does-not-know', x: 14, y: 60, w: 300, h: 200, vw: 390, vh: 844, phone: true, homeGrid: true, page: 1, at: 300 } } })) })()`)
+  await sleep(700)
+  check('a widget of an unknown kind arriving on it (another tab) makes the page not empty, with no window changing', (await removeDisabled()) === true, { ui: await r.eval(`(async () => JSON.stringify((await import('/src/os/homePager.ts')).homeUi.get()) + JSON.stringify(Object.keys((await import('/src/os/widgetPlaces.ts')).screenWidgets(true).places)))()`) })
+  await r.eval(`(async () => {
+    const { widgetPlaces, mobileWidgetPlaces } = await import('/src/os/widgetPlaces.ts')
+    const put = (id, y) => ({ id, kind: 'status', x: 14, y, w: 300, h: 200, vw: 390, vh: 844, phone: true, homeGrid: true, page: 1, at: 400 })
+    mobileWidgetPlaces.set(() => ({ places: { a: put('a', 60), b: put('b', 120) }, removed: 'late ghost wide wide~b' }))
+  })()`)
+  await r.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 568, deviceScaleFactor: 2, mobile: true })
+  await r.send('Page.navigate', { url: origin })
+  await r.waitFor(`!!document.querySelector('.home-pages') && document.querySelectorAll('[data-app="widget"]').length === 2`, 90_000)
+  await sleep(900)
+  const widgetPageNow = await r.eval<number[]>(`[...document.querySelectorAll('[data-app="widget"]')].map((e) => Math.floor((parseFloat(e.style.getPropertyValue('--home-x')) + 1) / innerWidth)).sort()`)
+  await click(r, '.home-edit')
+  await sleep(200)
+  await click(r, `.home-dot:nth-child(${(widgetPageNow[widgetPageNow.length - 1] ?? 1) + 1})`)
+  await sleep(700)
+  check('a widget pushed to a later page by a small screen holds that page: it cannot be removed', widgetPageNow[widgetPageNow.length - 1] >= 2 && (await removeDisabled()) === true, widgetPageNow)
+  await r.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+  await sleep(700)
   // The first edit freezes old places by an order that does not depend on how the entries were added.
   const frozen = await r.eval<{ a: string; b: string }>(`(async () => {
     const { migrateMobileWidgets } = await import('/src/os/widgetPlaces.ts')
@@ -291,7 +328,11 @@ try {
     const ds = await import('/src/os/desktopStore.ts')
     ds.updateDesktop((s) => ({ ...s, trashed: ['games'], mobilePositions: { games: { col: 0, row: 1, page: 3 } }, mobilePages: 4 }))
     // The pages of this browser profile are shared: the widget an earlier check put on page 2 goes.
-    ;(await import('/src/os/widgetPlaces.ts')).widgetPlaces.set(() => ({ places: {}, removed: 'wide' }))
+    {
+      const m = await import('/src/os/widgetPlaces.ts')
+      m.widgetPlaces.set(() => ({ places: {}, removed: 'wide' }))
+      m.mobileWidgetPlaces.set(() => ({ places: {}, removed: 'a b late ghost wide wide~b' }))
+    }
     ;(await import('/src/os/startup.ts')).setStartupPrefs({ windows: 'empty' })
   })()`)
   await h.send('Page.navigate', { url: origin })

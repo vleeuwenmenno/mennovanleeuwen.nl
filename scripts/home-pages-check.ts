@@ -2,7 +2,7 @@
 // pnpm check:home-pages
 import assert from 'node:assert/strict'
 import { HOME_LEFT, HOME_TOP, ICON_H, ICON_W, overlaps } from '../src/os/homeLayout.ts'
-import { MAX_PAGES, PAGE_DOCK, PAGE_STRIDE, arrangePages, cellOnPreviousPage, savedIconPage, dropCell, drawX, fitOnPage, fitPhoneWidget, fromContentX, iconPages, joinX, legacyWidgetPage, localX, mobileWidgetRect, pageCols, pageOfX, pageRows, takenCells } from '../src/os/homePages.ts'
+import { pageHeight, MAX_PAGES, PAGE_DOCK, PAGE_STRIDE, arrangePages, cellOnPreviousPage, savedIconPage, dropCell, drawX, fitOnPage, fitPhoneWidget, fromContentX, iconPages, joinX, legacyWidgetPage, localX, mobileWidgetRect, pageCols, pageOfX, pageRows, takenCells } from '../src/os/homePages.ts'
 import { mobileWidgetEnvelope } from '../src/os/widgetLayout.ts'
 import { phoneOrder, type WidgetPlace, type WidgetSet } from '../src/widgets/platform/placementSet.ts'
 
@@ -76,7 +76,7 @@ assert.equal(legacyWidgetPage(HOME_TOP + 700, 260, savedH).page, 1)
 const straddle = legacyWidgetPage(HOME_TOP + 500, 260, savedH)
 assert.equal(straddle.page, 1, 'one that would cross the cut starts the next page')
 assert.equal(straddle.y, HOME_TOP)
-assert.deepEqual(legacyWidgetPage(HOME_TOP + 700, 260, savedH), legacyWidgetPage(HOME_TOP + 700, 260, savedH))
+assert.deepEqual(legacyWidgetPage(HOME_TOP + 700, 260, savedH), { page: 1, y: HOME_TOP + 700 - pageHeight(savedH) }, 'cut at the page height of the saved screen')
 // the address bar sliding away (the screen is a few px shorter) never moves an old place between pages: only its saved height counts
 for (const h of [560, 600, 640, 700, 800, 1000]) {
   const old = { x: 14, y: 40 + 3 * 320, w: 280, h: 260, vw: 390, vh: 800, phone: true }
