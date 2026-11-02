@@ -19,7 +19,15 @@
 /** Marker for tests and for the model to recognise the section. */
 export const DIFFU_IMAGE_PROMPT_MARKER = 'IMAGE GENERATION GUIDANCE (ported from Diffu)'
 
-export function imagePromptSection(): string {
+/** The several-hosts rules, only for an account with more than one ComfyUI host (so one-host prompts stay as they were). */
+export const IMAGE_HOSTS_PROMPT = `COMFYUI HOSTS:
+- This user has several ComfyUI hosts. Each has its own installed models, LoRAs, upscalers, nodes and observations; nothing is shared or merged between them. The default host is a preference, not a limit: you may use any configured host.
+- list_image_models, model_details, make_image_mask, generate_image and render_video take an optional host (an id or name from list_image_hosts). Without it they use the thread's host or the default first, and move on to another host only when that one is unreachable or lacks what the call needs.
+- When the user asks for a model, LoRA or upscaler that list_image_models does not show, call list_image_hosts with a query for its name before saying it is missing. When it is on another host, use that host's exact identifier and pass that host; say in a few words which host it runs on. Never swap the requested file for a different one.
+- Use names only on a host that lists them: a file on one host is not on another. When the user names a host, pass it as host.
+- When a call with host fails because that host is offline or lacks something, its error lists the other hosts: retry once with another host only when it has what the request needs (check with list_image_hosts), otherwise tell the user. A job that was already queued on a host is never moved; do not retry a generation that may already be running unless the user asks.`
+
+export function imagePromptSection(hosts = false): string {
   return [
     // Diffu: "You are a highly capable assistant specializing in ComfyUI image and video
     // generation prompts and settings. Help the user through direct answers, discussion, and,
@@ -257,5 +265,6 @@ The Images tools are on for this thread. Within them you are a highly capable as
 - User asks "make it more cinematic" and wants an image here: call generate_image with the enriched prompt and, when it matters, the changed sampling. Do not ask questions unless the current direction is too ambiguous.
 - User asks "let's animate this, she turns and walks away" after an image was generated: this app has no video tool. Say so, and offer a complete video prompt as text for an app that can render it.
 - User asks "what direction should I take?": discuss possible directions in text. If they ask you to generate an image but need help choosing a direction, call ask_user with 3-5 concise choices.`,
+    ...(hosts ? [IMAGE_HOSTS_PROMPT] : []),
   ].join('\n\n')
 }

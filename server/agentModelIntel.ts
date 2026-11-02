@@ -3,7 +3,7 @@ import type { User } from './auth.ts'
 import { database, privateDigest } from './db.ts'
 import { guardedFetch, readCapped } from './egress.ts'
 import { HttpError, json } from './http.ts'
-import { imageBackendScope, imageCatalog, imageSettings, PRESETS, type ImageSettings } from './agentImages.ts'
+import { hostLabel, imageBackendScope, imageCatalog, imageHostRoute, imageHosts, imageSettings, onImageHost, PRESETS, type ImageSettings } from './agentImages.ts'
 import { exampleConsensus, familyOf, isVpred, median, MODEL_FAMILIES, variantFor, type Consensus, type ExampleMeta, type FamilyId, type Recommended } from '../src/data/modelFamilies.ts'
 import { IMAGE_SAMPLERS, IMAGE_SCHEDULERS, imagePresetSpec, recommendedImageSampling, type ImagePreset } from '../src/data/imageModels.ts'
 
@@ -188,9 +188,9 @@ async function quickFacts(user: User, catalog: Catalog, s: ImageSettings, ms = 4
 }
 
 /** Base model and top tags per installed name, for list_image_models. From the cache, or a read bounded to 4 seconds. */
-export async function assetHints(user: User, catalog: Catalog, names: Iterable<string>) {
+export async function assetHints(user: User, catalog: Catalog, names: Iterable<string>, s: ImageSettings = imageSettings(user)) {
   const wanted = new Set(names)
-  const s = imageSettings(user), scope = civitaiScope(user.id, s.civitaiKey)
+  const scope = civitaiScope(user.id, s.civitaiKey)
   const { facts } = await quickFacts(user, catalog, s)
   const out: Record<string, { base_model: string; family: string | null; tags: string[] }> = {}
   for (const f of facts) if (wanted.has(f.name)) out[f.name] = { base_model: f.baseModel, family: familyOf(f.baseModel, { name: `${f.name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f, civitaiEvidence(s, scope, f)) }), tags: [...f.tags.filter((t) => !/^(base models?|checkpoint|lora)$/i.test(t))].slice(0, 5) }
@@ -508,17 +508,27 @@ const familyLabel = (f: FamilyId | null) => f ? MODEL_FAMILIES[f].label : null
 const sdxlLike = new Set<FamilyId>(['illustrious', 'noobai', 'noobai_vpred', 'pony', 'sdxl'])
 
 /** model_details: facts for one installed asset, or a search across them. Read-only. */
-export async function modelDetails(user: User, args: Record<string, unknown>, signal = AbortSignal.timeout(30_000), thread?: { model: string; preset: ImagePreset; width?: number; height?: number }) {
-  if (Object.keys(args).some((k) => !['name', 'kind', 'query'].includes(k))) throw new HttpError(400, 'Supply name (an installed identifier), or kind and query to search')
+export async function modelDetails(user: User, args: Record<string, unknown>, signal = AbortSignal.timeout(30_000), thread?: { model: string; preset: ImagePreset; width?: number; height?: number }, prefer?: string) {
+  if (Object.keys(args).some((k) => !['name', 'kind', 'query', 'host'].includes(k))) throw new HttpError(400, 'Supply name (an installed identifier), or kind and query to search, and optionally host')
   if (args.kind !== undefined && !KINDS.includes(args.kind as AssetKind)) throw new HttpError(400, 'kind is checkpoint, lora or embedding')
   for (const k of ['name', 'query'] as const) if (args[k] !== undefined && (typeof args[k] !== 'string' || !args[k] || (args[k] as string).length > (k === 'name' ? 2048 : 200) || /[\x00-\x1f]/.test(args[k] as string))) throw new HttpError(400, `Invalid ${k}`)
   if (args.name === undefined && args.query === undefined) throw new HttpError(400, 'Supply name, or kind and query')
-  const s = imageSettings(user), scope = civitaiScope(user.id, s.civitaiKey)
-  const catalog = await imageCatalog(user, signal, s)
-  const embeddings = !args.kind || args.kind === 'embedding' ? await installedEmbeddings(user, s, signal) : []
+  const kinds = args.kind ? [args.kind as AssetKind] : KINDS
+  // The host: the named one, or (default first) the first that answers and, for a name, has it
+  // installed. Facts and recommendations then come from that host alone; catalogs never mix.
+  const route = imageHostRoute(user, args.host, prefer)
+  const elsewhere = route.hosts.length > 1 && !route.explicit
+  const { value: { catalog, embeddings }, host: s } = await onImageHost(user, route, signal, async (on, attempt) => {
+    const catalog = await imageCatalog(user, attempt, on)
+    const embeddings = !args.kind || args.kind === 'embedding' ? await installedEmbeddings(user, on, attempt) : []
+    const lists: Record<Category, readonly string[]> = { checkpoints: catalog.checkpoints, diffusionModels: catalog.diffusionModels, loras: catalog.loras, embeddings }
+    if (args.name !== undefined && !kinds.some((kind) => categoriesOf(kind).some((c) => lists[c].includes(args.name as string)))) throw new HttpError(elsewhere ? 409 : 404, 'That name is not installed on this backend; use an exact identifier from list_image_models or search with kind and query')
+    return { catalog, embeddings }
+  })
+  const scope = civitaiScope(user.id, s.civitaiKey)
+  const multi = imageHosts(user).length > 1
   const { available, facts } = await installedFacts(user, catalog, s, embeddings)
   const installed: Record<Category, readonly string[]> = { checkpoints: catalog.checkpoints, diffusionModels: catalog.diffusionModels, loras: catalog.loras, embeddings }
-  const kinds = args.kind ? [args.kind as AssetKind] : KINDS
   if (args.name === undefined) {
     const q = String(args.query).toLowerCase().split(/\s+/).filter(Boolean)
     const rows: { name: string; kind: AssetKind; base_model: string; family: string | null; tags: string[] }[] = []
@@ -529,7 +539,7 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
       rows.push({ name, kind, base_model: f?.baseModel ?? '', family: f ? familyLabel(familyOf(f.baseModel, { name: `${name} ${f.versionName}`, tags: [...f.tags, ...f.autoTags], vpred: assetIsVpred(f, civitaiEvidence(s, scope, f)) })) : null, tags: (f?.tags ?? []).filter((t) => !/^(base models?|checkpoint)$/i.test(t)).slice(0, 6) })
       if (rows.length >= 10) break
     }
-    return { query: args.query, matches: rows, lora_manager: available, note: rows.length ? 'Call model_details with an exact name for its recommended settings.' : 'Nothing installed matches; try a base model (Illustrious, Pony, SDXL) or a style tag.' }
+    return { query: args.query, ...(multi ? { host: hostLabel(s) } : {}), matches: rows, lora_manager: available, note: `${rows.length ? 'Call model_details with an exact name for its recommended settings.' : 'Nothing installed matches; try a base model (Illustrious, Pony, SDXL) or a style tag.'}${multi ? ` This searched ComfyUI host “${s.hostName}” only; list_image_hosts with query searches every host, and host picks another.` : ''}` }
   }
   const name = args.name as string
   const hits = kinds.flatMap((kind) => categoriesOf(kind).filter((c) => installed[c].includes(name)).map((category) => ({ kind, category })))
@@ -550,7 +560,7 @@ export async function modelDetails(user: User, args: Record<string, unknown>, si
   if (civitai.note) notes.push(civitai.note)
   const lm = manager ? { title: manager.title, base_model: manager.baseModel, tags: manager.tags, auto_tags: manager.autoTags, trained_words: manager.trainedWords, usage_tips: manager.usageTips, notes: manager.notes, sub_type: manager.subType } : null
   const civ = c ? { url: c.url, model: c.modelName, version: c.versionName, base_model: c.baseModel, trained_words: c.trainedWords, description: c.description, model_description: c.modelDescription, examples: c.examples, example_settings: c.consensus } : null
-  const out: Record<string, unknown> = { name, kind, family: family ? { id: family, label: MODEL_FAMILIES[family].label, supported: MODEL_FAMILIES[family].supported } : null, lora_manager: lm, civitai: civ }
+  const out: Record<string, unknown> = { name, kind, ...(multi ? { host: hostLabel(s) } : {}), family: family ? { id: family, label: MODEL_FAMILIES[family].label, supported: MODEL_FAMILIES[family].supported } : null, lora_manager: lm, civitai: civ }
   if (kind === 'checkpoint') {
     const recommended = recommend(category, family, c?.consensus ?? null, { samplers: catalog.samplers, schedulers: catalog.schedulers }, vpred)
     const sources: Record<string, string> = { sampling: recommended.source }
@@ -610,7 +620,7 @@ export async function modelNeedsVpred(user: User, s: ImageSettings, catalog: Cat
 export async function handleModelIntelApi(req: IncomingMessage, res: ServerResponse, url: URL, user: User): Promise<boolean> {
   if (req.method !== 'GET' || url.pathname !== '/api/agents/images/model-details') return false
   const args: Record<string, unknown> = {}
-  for (const k of ['name', 'kind', 'query'] as const) { const v = url.searchParams.get(k); if (v !== null) args[k] = v }
+  for (const k of ['name', 'kind', 'query', 'host'] as const) { const v = url.searchParams.get(k); if (v !== null) args[k] = v }
   // The Image Studio says which preset it runs, so a raw/turbo file gets that variant's recipe.
   const preset = url.searchParams.get('preset') as ImagePreset | null
   const thread = preset && (PRESETS as readonly string[]).includes(preset) && typeof args.name === 'string' ? { model: args.name, preset } : undefined

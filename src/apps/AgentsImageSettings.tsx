@@ -1,17 +1,31 @@
 import { useEffect, useId, useState, type FormEvent } from 'react'
-import { getImageCatalog, getImageSettings, resetImageSettings, saveImageApproval, saveImageIntelSettings, saveImageObservationApproval, saveImageLearningPreference, saveImageSettings, type ImageCatalog, type ImageSettings } from '../data/agentImages'
+import { getImageCatalog, getImageHostStatus, getImageSettings, IMAGE_HOSTS_MAX, resetImageSettings, saveImageApproval, saveImageIntelSettings, saveImageObservationApproval, saveImageLearningPreference, saveImageSettings, type ImageCatalog, type ImageHostStatus, type ImageSettings } from '../data/agentImages'
 import { SecretInput } from '../os/SecretInput'
 import { ImageModelFields } from './AgentsModelBrowser'
 import { ImageProfileManager } from './AgentsImageProfiles'
 import { ObservationsDialog } from './AgentsObservations'
 import { useWM } from '../os/wm'
 
+/** One host in the form: `id` once saved; `token` is a new token to save (empty keeps the saved one). */
+type HostRow = { key: string; id?: string; name: string; url: string; token: string; savedToken: boolean; clearToken: boolean }
+const rowsOf = (s: ImageSettings): HostRow[] => (s.hosts ?? []).map((h) => ({ key: h.id, id: h.id, name: h.name, url: h.url, token: '', savedToken: h.token, clearToken: false }))
+let added = 0
+const statusLine = (status: ImageHostStatus | undefined, row: HostRow) => {
+  if (!row.id) return { text: 'Not saved yet', bad: false }
+  if (!status) return { text: '', bad: false }
+  if (!status.reachable) return { text: status.error ?? 'Did not answer', bad: true }
+  const c = status.counts ?? {}
+  return { text: `Connected · ${c.checkpoints ?? 0} checkpoints · ${c.diffusionModels ?? 0} diffusion models · ${c.loras ?? 0} LoRAs`, bad: false }
+}
+
 export function AgentsImageSettings() {
   const wm = useWM()
   const observationApprovalHint = useId()
+  const hostGroup = useId()
   const [settings, setSettings] = useState<ImageSettings | null>(null)
-  const [token, setToken] = useState('')
-  const [clearToken, setClearToken] = useState(false)
+  const [hosts, setHosts] = useState<HostRow[]>([])
+  const [defaultKey, setDefaultKey] = useState('')
+  const [statuses, setStatuses] = useState<ImageHostStatus[]>([])
   const [civitaiKey, setCivitaiKey] = useState('')
   const civitaiHint = useId(), qualityHint = useId()
   const [catalog, setCatalog] = useState<ImageCatalog | null>(null)
@@ -27,7 +41,31 @@ export function AgentsImageSettings() {
     setDiscovering(true); setCatalogError('')
     try { setCatalog(await getImageCatalog()) } catch (e) { setCatalogError((e as Error).message) } finally { setDiscovering(false) }
   }
-  useEffect(() => { getImageSettings().then((s) => { setSettings(s); if (s.url) void discover() }, (e: Error) => setError(e.message)) }, [])
+  // Each host is checked on its own, so one offline host shows its error while the others answer.
+  const check = () => void getImageHostStatus().then((r) => setStatuses(r.hosts), () => setStatuses([]))
+  // No host yet: one empty row, so the first connection is a URL away as before.
+  const load = (s: ImageSettings) => {
+    setSettings(s)
+    const rows = rowsOf(s)
+    if (!rows.length) rows.push({ key: `new-${++added}`, name: 'ComfyUI', url: '', token: '', savedToken: false, clearToken: false })
+    setHosts(rows); setDefaultKey(s.defaultHost || rows[0].key)
+  }
+  useEffect(() => { getImageSettings().then((s) => { load(s); if (s.url) { void discover(); check() } }, (e: Error) => setError(e.message)) }, [])
+  const setHost = (key: string, patch: Partial<HostRow>) => { setHosts((list) => list.map((h) => (h.key === key ? { ...h, ...patch } : h))); if ('url' in patch) setCatalog(null) }
+  const addHost = () => {
+    const key = `new-${++added}`
+    const names = new Set(hosts.map((h) => h.name.trim().toLowerCase()))
+    let n = hosts.length + 1
+    while (names.has((n === 1 ? 'ComfyUI' : `ComfyUI ${n}`).toLowerCase())) n++
+    setHosts([...hosts, { key, name: n === 1 ? 'ComfyUI' : `ComfyUI ${n}`, url: '', token: '', savedToken: false, clearToken: false }])
+    if (!hosts.length) setDefaultKey(key)
+  }
+  // Removing the default makes the first remaining host the default (the server does the same).
+  const removeHost = (key: string) => {
+    const rest = hosts.filter((h) => h.key !== key)
+    setHosts(rest)
+    if (defaultKey === key) setDefaultKey(rest[0]?.key ?? '')
+  }
   const run = async (action: () => Promise<void>) => {
     setBusy(true); setError(''); setNotice('')
     try { await action() } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
@@ -35,22 +73,44 @@ export function AgentsImageSettings() {
   const save = (e: FormEvent) => {
     e.preventDefault()
     if (settings) void run(async () => {
-      setSettings(await saveImageSettings({ ...settings, token, clearToken }))
-      setToken(''); setClearToken(false); setNotice('Saved')
-      await discover()
+      const saved = await saveImageSettings({
+        hosts: hosts.map((h) => ({ ...(h.id ? { id: h.id } : {}), name: h.name.trim(), url: h.url.trim(), ...(h.token.trim() ? { token: h.token.trim() } : {}), ...(h.clearToken ? { clearToken: true } : {}), ...(h.key === defaultKey ? { default: true } : {}) })),
+        preset: settings.preset, model: settings.model, clip: settings.clip, vae: settings.vae,
+      })
+      load(saved); setNotice('Saved')
+      if (saved.url) { check(); await discover() } else { setCatalog(null); setStatuses([]) }
     })
   }
   return <>
     {!settings && !error && <p className="muted">Loading…</p>}
     {settings && <form className="set-form ws-form image-settings-form" onSubmit={save}>
       <section className="set-section image-group" aria-labelledby="image-connection">
-        <h4 className="set-subhead" id="image-connection">ComfyUI connection</h4>
-        <label><span>ComfyUI URL</span><input value={settings.url} onChange={(e) => { setSettings({ ...settings, url: e.target.value }); setCatalog(null) }} placeholder="https://comfy.example.com" spellCheck={false} autoComplete="off" disabled={busy} /></label>
-        <label><span>Bearer token</span><SecretInput value={token} onChange={(e) => setToken(e.target.value)} placeholder={settings.token ? 'Saved; leave empty to keep' : 'Optional'} disabled={busy} /></label>
-        {settings.token && <label className="image-check"><span>Remove saved token</span><input type="checkbox" checked={clearToken} onChange={(e) => setClearToken(e.target.checked)} disabled={busy} /></label>}
+        <h4 className="set-subhead" id="image-connection">ComfyUI hosts</h4>
+        <p className="muted set-help">One or more ComfyUI servers. The default is tried first; agents may still pick another host, and use one when the default is offline or lacks the model asked for. Each host keeps its own models, LoRAs and observations.</p>
+        {!hosts.length && <p className="muted">No ComfyUI host yet.</p>}
+        <ul className="image-hosts">
+          {hosts.map((h, i) => {
+            const status = statusLine(statuses.find((x) => x.id === h.id), h)
+            return <li key={h.key} className="image-host">
+              <fieldset className="image-host-fields" disabled={busy}>
+                <legend className="image-host-legend">{h.name.trim() || `Host ${i + 1}`}</legend>
+                <div className="image-host-head">
+                  <label className="image-host-default"><input type="radio" name={hostGroup} checked={defaultKey === h.key} onChange={() => setDefaultKey(h.key)} />Default</label>
+                  <span className={`image-host-status copyable ${status.bad ? 't-red' : 'muted'}`} role={status.bad ? 'alert' : undefined}>{status.text}</span>
+                  <button type="button" className="btn btn-small" onClick={() => removeHost(h.key)}>Remove</button>
+                </div>
+                <label><span>Name</span><input value={h.name} onChange={(e) => setHost(h.key, { name: e.target.value })} maxLength={60} placeholder="Desktop GPU" autoComplete="off" /></label>
+                <label><span>ComfyUI URL</span><input value={h.url} onChange={(e) => setHost(h.key, { url: e.target.value })} placeholder="https://comfy.example.com" spellCheck={false} autoComplete="off" inputMode="url" /></label>
+                <label><span>Bearer token</span><SecretInput value={h.token} onChange={(e) => setHost(h.key, { token: e.target.value })} placeholder={h.savedToken ? 'Saved; leave empty to keep' : 'Optional'} /></label>
+                {h.savedToken && <label className="image-check"><span>Remove saved token</span><input type="checkbox" checked={h.clearToken} onChange={(e) => setHost(h.key, { clearToken: e.target.checked })} /></label>}
+              </fieldset>
+            </li>
+          })}
+        </ul>
+        <div className="set-actions"><button type="button" className="btn btn-small" disabled={busy || hosts.length >= IMAGE_HOSTS_MAX} onClick={addHost}>Add host</button>{hosts.length >= IMAGE_HOSTS_MAX && <span className="muted image-notice">At most {IMAGE_HOSTS_MAX} hosts</span>}</div>
         <div className="set-actions">
-          <button className="btn btn-small btn-primary" disabled={busy || !settings.url}>{busy ? 'Working…' : 'Save & discover models'}</button>
-          <button type="button" className="btn btn-small" disabled={busy} onClick={() => void run(async () => { setSettings(await resetImageSettings()); setToken(''); setClearToken(false); setCatalog(null); setNotice('Disconnected') })}>Disconnect</button>
+          <button className="btn btn-small btn-primary" disabled={busy || (!hosts.length && !settings.url) || hosts.some((h) => !h.name.trim() || !h.url.trim())}>{busy ? 'Working…' : 'Save & discover models'}</button>
+          <button type="button" className="btn btn-small" disabled={busy || !settings.url} onClick={() => void run(async () => { load(await resetImageSettings()); setCatalog(null); setStatuses([]); setNotice('Disconnected') })}>Disconnect all</button>
           {notice && <span className="muted image-notice" role="status">{notice}</span>}
         </div>
         {settings.url && <p className="muted image-studio-link">Generate by hand, without an agent: <button type="button" className="btn btn-small" onClick={() => wm.open('imagestudio', { t: String(Date.now()) })}>Open Image Studio</button></p>}
@@ -58,6 +118,7 @@ export function AgentsImageSettings() {
       </section>
       <section className="set-section image-group" aria-labelledby="image-defaults">
         <h4 className="set-subhead" id="image-defaults">Defaults</h4>
+        {(settings.hosts?.length ?? 0) > 1 && <p className="muted set-help">The model lists below come from the default host{settings.hosts.find((h) => h.default) ? ` (${settings.hosts.find((h) => h.default)!.name})` : ''}. A default model that another host lacks makes a job go to a host that has it.</p>}
         <ul className="set-list">
           <li className="set-row">
             <span className="set-row-text">
@@ -90,7 +151,7 @@ export function AgentsImageSettings() {
         </ul>
         <ImageModelFields value={settings} catalog={catalog} onChange={(patch) => setSettings({ ...settings, ...patch })} disabled={busy} loading={discovering} error={catalogError} onRefresh={() => void discover()} />
         {catalogError && <p className="t-red copyable" role="alert">{catalogError}</p>}
-        <div className="set-actions"><button className="btn btn-small btn-primary" disabled={busy || !settings.url}>{busy ? 'Saving…' : 'Save defaults'}</button></div>
+        <div className="set-actions"><button className="btn btn-small btn-primary" disabled={busy || !settings.url || hosts.some((h) => !h.name.trim() || !h.url.trim())}>{busy ? 'Saving…' : 'Save defaults'}</button></div>
       </section>
       <section className="set-section image-group" aria-labelledby="image-intel">
         <h4 className="set-subhead" id="image-intel">Model details and quality</h4>
