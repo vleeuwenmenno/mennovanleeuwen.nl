@@ -773,7 +773,7 @@ export async function handleVideoApi(req: IncomingMessage, res: ServerResponse, 
   const source = /^\/api\/video\/sources\/([0-9a-f-]{36})$/.exec(path)?.[1]
   if (source && read) {
     const row = ownSource(user, source)
-    res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': row.mime, 'Content-Length': row.body.length, 'Cache-Control': 'private, max-age=86400' }).end(method === 'HEAD' ? undefined : row.body)
+    res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': row.mime, 'Content-Length': row.body.length, 'Cache-Control': 'private, no-store' }).end(method === 'HEAD' ? undefined : row.body)
     return true
   }
   if (path === '/api/video/pictures' && read) return json(res, 200, threadPictures(user, url.searchParams)), true

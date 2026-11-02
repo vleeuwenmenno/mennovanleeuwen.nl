@@ -110,6 +110,7 @@ import {
   type Permission,
   type Skill,
   type Workdir,
+  previewUrl,
 } from '../data/agents'
 import { callLine, duration, percent, summarize, summaryLines, threadSummary, type ThreadStats } from '../data/agentStats'
 import { diffLines } from '../terminal/agents/diff'
@@ -2915,7 +2916,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
         <ul className="agt-hits agt-found">
           {found.map((f) => (
             <li key={f.reference}>
-              <img src={`/api/agents/images/${f.reference!.slice(6)}`} alt={f.title ?? ''} width={48} height={48} loading="lazy" draggable={false} />
+              <img src={previewUrl(`/api/agents/images/${f.reference!.slice(6)}`)} alt={f.title ?? ''} width={48} height={48} loading="lazy" draggable={false} />
               {f.page && /^https?:\/\//i.test(f.page) ? (
                 <a href={f.page} target="_blank" rel="noopener noreferrer">
                   {f.title || f.site || f.page}

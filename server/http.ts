@@ -101,8 +101,9 @@ export function setCookie(req: IncomingMessage, name: string, value: string, opt
   return `${name}=${encodeURIComponent(value)}; Path=${opts.path ?? '/'}; Max-Age=${opts.maxAge}${opts.readable ? '' : '; HttpOnly'}; SameSite=Lax${secure}`
 }
 
-/** Bump to purge every browser's HTTP cache once more on its next load. */
-export const CACHE_PURGE_EPOCH = '1'
+/** Bump to purge every browser's HTTP cache once more on its next load. 2: Video Studio keyframes
+ * (/api/video/sources/…) were sent with a day's max-age; they are no-store now. */
+export const CACHE_PURGE_EPOCH = '2'
 export const CACHE_PURGE_COOKIE = 'mvlos_cache_purge'
 
 /**

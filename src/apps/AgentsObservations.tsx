@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { deleteMemory } from '../data/agents'
+import { deleteMemory, previewUrl } from '../data/agents'
 import { getImageObservations } from '../data/agentImages'
 import { matchesObservation, modelKey, NO_FILTER, OBSERVATION_SOURCES, presetTitle, fileTitle, settingsLine, sourceLabel, type Observation, type ObservationFilter, type ObservationProfile, type ObservationsView } from '../data/imageObservations'
 import { ask } from '../os/Dialogs'
@@ -44,7 +44,7 @@ function ObservationThumb({ o }: { o: Observation }) {
   const picture: Picture = { name: o.task || 'Generated image', src: imageUrl(o.imageId), size: 0, source: 'Generated with ComfyUI', preview: true }
   return <>
     <button ref={anchor} type="button" className="agt-thumb agt-obs-thumb" onClick={() => setOpen(true)} aria-label={`View the picture for ${picture.name}`}>
-      <img src={picture.src} alt="" loading="lazy" draggable={false} onError={() => setBroken(true)} />
+      <img src={previewUrl(picture.src)} alt="" loading="lazy" draggable={false} onError={() => setBroken(true)} />
     </button>
     {open && <Lightbox pictures={[picture]} start={0} anchor={anchor.current} onClose={() => setOpen(false)} />}
   </>

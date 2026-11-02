@@ -16,6 +16,7 @@ import { database, decrypt, encrypt, privateDigest } from './db.ts'
 import { guardedFetch, readCapped } from './egress.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { checkRoom } from './quota.ts'
+import { servePreview, type PreviewSource } from './imagePreview.ts'
 
 // Small, server-owned ComfyUI graphs, following Diffu's checkpoint / diffusion loader approach.
 // No arbitrary graphs, remote URLs, or backend credentials are accepted from a model tool call.
@@ -841,6 +842,27 @@ async function sendModelPreview(user: User, id: string, res: ServerResponse) {
   res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': actual, 'Content-Length': bytes.length, 'Cache-Control': 'private, no-store' }).end(bytes)
 }
 
+/** A generated image of the user's as a preview source: only its stored size is read until a job is admitted. */
+function generatedPreviewSource(user: User, id: string): PreviewSource {
+  const db = database()
+  const meta = db.prepare('SELECT length(i.body) AS size FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(id, user.id) as { size: number } | undefined
+  if (!meta) throw new HttpError(404, 'No such image')
+  const own = () => db.prepare('SELECT i.body, i.name FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(id, user.id) as { body: Uint8Array; name: string } | undefined
+  return {
+    key: `img:${id}:${meta.size}`,
+    bytes: meta.size,
+    // Generated images are stored as PNG (their endpoint says so); the worker checks the signature itself.
+    png: true,
+    exists: () => !!db.prepare('SELECT 1 FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ? AND length(i.body) = ?').get(id, user.id, meta.size),
+    load: () => { const row = own(); return row ? Buffer.from(row.body.buffer, row.body.byteOffset, row.body.length) : null },
+    original: () => {
+      const row = own()
+      if (!row) throw new HttpError(404, 'No such image')
+      return { type: 'image/png', body: Buffer.from(row.body.buffer, row.body.byteOffset, row.body.length), headers: { 'Content-Disposition': `inline; filename="${row.name}"` } }
+    },
+  }
+}
+
 export async function handleImageApi(req: IncomingMessage, res: ServerResponse, url: URL, method: string, user: User): Promise<boolean> {
   if (url.pathname === '/api/agents/images/loras' && method === 'GET') {
     const catalog = await imageCatalog(user)
@@ -878,10 +900,23 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
     return json(res, 200, { settings: row.metadata ? JSON.parse(row.metadata) : null }), true
   }
   const image = /^\/api\/agents\/images\/([0-9a-f-]{36})$/.exec(url.pathname)
-  if (image && (method === 'GET' || method === 'HEAD')) {
+  if (image && method === 'GET') {
     const row = database().prepare('SELECT i.body, i.name FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(image[1], user.id) as { body: Uint8Array; name: string } | undefined
     if (!row) throw new HttpError(404, 'No such image')
-    res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': 'image/png', 'Content-Length': row.body.length, 'Content-Disposition': `inline; filename="${row.name}"`, 'Cache-Control': 'private, no-store' }).end(method === 'HEAD' ? undefined : row.body)
+    res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': 'image/png', 'Content-Length': row.body.length, 'Content-Disposition': `inline; filename="${row.name}"`, 'Cache-Control': 'private, no-store' }).end(row.body)
+    return true
+  }
+  // HEAD: the same headers from the stored length, without reading the picture.
+  if (image && method === 'HEAD') {
+    const row = database().prepare('SELECT length(i.body) AS size, i.name FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(image[1], user.id) as { size: number; name: string } | undefined
+    if (!row) throw new HttpError(404, 'No such image')
+    res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': 'image/png', 'Content-Length': row.size, 'Content-Disposition': `inline; filename="${row.name}"`, 'Cache-Control': 'private, no-store' }).end()
+    return true
+  }
+  // A small preview for thumbnails and inline display (server/imagePreview.ts); the original above is unchanged.
+  const small = /^\/api\/agents\/images\/([0-9a-f-]{36})\/preview\/(\d{1,4})$/.exec(url.pathname)
+  if (small && (method === 'GET' || method === 'HEAD')) {
+    await servePreview(res, user, method === 'HEAD', generatedPreviewSource(user, small[1]), Number(small[2]))
     return true
   }
   return false

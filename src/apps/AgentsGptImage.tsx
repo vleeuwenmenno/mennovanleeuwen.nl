@@ -64,6 +64,16 @@ export function GptImageDrawing({ threadId, callId, width, height, drawing, info
   )
 }
 
+/** The picture's pixels as the call's result recorded them, when it did. */
+function sizeOf(content: string): { width?: number; height?: number } {
+  try {
+    const v = JSON.parse(content) as { image?: { width?: unknown; height?: unknown } }
+    return typeof v.image?.width === 'number' && typeof v.image.height === 'number' ? { width: v.image.width, height: v.image.height } : {}
+  } catch {
+    return {}
+  }
+}
+
 export function GptImageResult({ threadId, result, onEdit }: { threadId: string | null; result: AgentMessage; /** Edit: what should change, then the agent draws it again from this picture */ onEdit?: (name: string, ref: string) => void }) {
   const icon = iconOf(result.content)
   if (icon)
@@ -78,15 +88,16 @@ export function GptImageResult({ threadId, result, onEdit }: { threadId: string 
     )
   if (!threadId || !result.attachments?.length) return null
   const toPicture = sentPicture(threadId, result)
+  const size = sizeOf(result.content)
   const pictures = result.attachments.flatMap((f, i) => {
     const p = toPicture(f, i)
     // Pictures from before ids existed are still found by where they are kept.
-    return p ? [{ picture: p, name: f.name, ref: f.ref ?? `attachment:${result.id}:${i}` }] : []
+    return p ? [{ picture: { ...p, ...size }, name: f.name, ref: f.ref ?? `attachment:${result.id}:${i}` }] : []
   })
   const edit = (i: number) => (onEdit && pictures[i] ? [{ label: 'Edit…', onSelect: () => onEdit(pictures[i].name, pictures[i].ref) }] : [])
   return (
     <div className="agt-gpt-picture">
-      <Thumbnails pictures={pictures.map((p) => p.picture)} actions={edit} />
+      <Thumbnails wide pictures={pictures.map((p) => p.picture)} actions={edit} />
       {onEdit && pictures.length > 0 && (
         <button type="button" className="btn btn-small agt-gpt-edit" onClick={() => onEdit(pictures[0].name, pictures[0].ref)} title="Say what should change; the agent draws it again from this picture">
           Edit…

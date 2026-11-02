@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { previewUrl } from '../../data/agents'
 import { getStudioImages, type StudioImage } from '../../data/agentImages'
 import { readBytes } from '../../data/fileOps'
 import { BADGE_NOTE, laneBadge, type Keyframe } from '../../data/videoPlan'
@@ -172,7 +173,7 @@ function MadePictures({ onPick }: { onPick: (url: string, name: string) => void 
         {shown.map((i) => (
           <li key={i.id}>
             <button type="button" className="vs-thumb" onClick={() => onPick(i.url, i.name)} title={`${i.name} · ${i.width} × ${i.height}`} aria-label={`Use ${i.name}`}>
-              <img src={i.url} alt="" loading="lazy" draggable={false} />
+              <img src={previewUrl(i.url)} alt="" loading="lazy" draggable={false} />
             </button>
           </li>
         ))}
@@ -183,7 +184,7 @@ function MadePictures({ onPick }: { onPick: (url: string, name: string) => void 
         {(sent ?? []).map((p) => (
           <li key={p.id}>
             <button type="button" className="vs-thumb" onClick={() => onPick(p.url, p.name)} title={p.name} aria-label={`Use ${p.name}`}>
-              <img src={p.url} alt="" loading="lazy" draggable={false} />
+              <img src={previewUrl(p.url)} alt="" loading="lazy" draggable={false} />
             </button>
           </li>
         ))}
