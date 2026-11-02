@@ -4072,22 +4072,28 @@ cross-device display, phone layout and delayed sticky contents in muted Chromium
 accounts and data; it starts and stops its own server.
 A big screen puts a widget where it was put, moved along when its own screen is another size (a
 widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
-added on a phone gets the usual spot for a new widget there. Phones and big screens share the
-set; a phone only changes a widget's place in its column.
+added on a phone gets the usual spot for a new widget there. Phones initially inherit the existing widgets. Their first addition, removal, minimization or
+reorder saves an independent mobile set (`widgets:placed:mobile`); desktop selection and positions
+stay intact. An intentionally empty mobile set stays empty. Both sets follow the account and
+merge entries independently. Until that first edit, desktop changes still appear on mobile.
 
-Settings → Appearance → **Keep widgets from overlapping** is on by default, per browser. It
-nudges desktop widgets and notes into nearby available space when a smaller viewport or larger
-UI scale crowds them together. The display layout accounts for measured content sizes, tape and
-resting note slants. It never saves these automatic offsets: returning to a larger screen restores
-its layout, and other devices keep their canonical placements. Dragging or resizing saves only
-the widget you changed, not its nudged neighbours. This browser remembers which item was moved
-last, separately for each account, so the same item keeps priority after a reload. That priority
-never syncs, and a removed widget's priority does not transfer to a new placement. If browser
-storage is blocked, priority lasts for the current page only. Phones keep their existing column layout.
-Placement is deterministic and bounded; if no space fits, an item keeps its fitted position and
-can still overlap. Turn the option off to keep intentional overlaps.
-`pnpm check:ui-scale` checks scale geometry, overlay bounds, sidebar dragging, high-scale
-placement persistence, and local collision handling without sync writes in muted Chromium.
+Settings → Appearance → **Keep widgets from overlapping** is on by default, per browser.
+Widgets reserve their measured content, tape and slanted corners on a shared 20 px desktop
+lattice. They reflow when the screen shrinks; when they cannot fit, the desktop scrolls vertically
+instead of piling them on top of one another. Icons use 100 × 120 px cells on the same lattice,
+avoid visible widgets, and also overflow downwards. Names show up to three lines within each
+cell; the full name remains in the tooltip and accessible name. Shift+Arrow moves a selected icon.
+Turning avoidance off preserves manual widget overlaps; icons still avoid their rectangles.
+Automatic fitting never overwrites synced preferred widget positions. The last manually moved
+widget retains local priority, separately for each account, including after reload.
+
+Mobile home has **Widgets** and **Icons** views, with labelled page controls above the dock.
+Swipe left on empty home space or a widget grip for Icons, right for Widgets; vertical movement
+still scrolls. Drag icons to move them (dropping on another swaps cells); taps open them.
+Mobile icon positions save separately in the account's desktop state and initially inherit
+existing positions. Widget grips retain hold-to-reorder and their Move up/down/top menu controls.
+`pnpm check:desktop-layout` covers crowded placement, resize overflow, mobile selection isolation,
+reload persistence, icon dragging and home navigation in muted Chromium.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
 layout by an earlier release move into the set when that layout is loaded or arrives from the

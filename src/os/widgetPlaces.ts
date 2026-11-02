@@ -4,9 +4,8 @@ import { viewH, viewW } from './uiScale'
 // Which widgets are on the desktop and where (src/widgets). Kept apart from the window layout
 // (wm.tsx) so they follow the account as a set merged entry by entry, like notes: two devices
 // adding widgets at the same time both keep theirs, and one device moving a widget doesn't put
-// back the windows another device closed. Phones and bigger screens share the one set; a phone
-// keeps the place a widget was put on a big screen, and only changes its place in the phone's
-// column of notes (`stack`).
+// back the windows another device closed. Phones inherit this set until their first edit, then
+// use their own synced set. Desktop geometry and selection are never changed by mobile edits.
 //
 // Each time a widget goes on the desktop it is a new entry, under a key of its own: the widget's
 // id the first time, a variant of it if that widget (a sticky's note) is put back after being
@@ -74,7 +73,7 @@ export function normalizeSet(v: unknown): WidgetSet {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return EMPTY
   const o = v as { places?: unknown; removed?: unknown }
   const first = !('places' in o)
-  const entries = Object.entries((first ? o : o.places) as Record<string, Partial<WidgetPlace> & { removed?: unknown }>)
+  const entries = Object.entries((first ? o : o.places ?? {}) as Record<string, Partial<WidgetPlace> & { removed?: unknown }>)
   const removed = new Set(!first && typeof o.removed === 'string' && o.removed ? o.removed.split(' ') : [])
   const places: Record<string, WidgetPlace> = {}
   for (const [key, raw] of entries) {
@@ -216,4 +215,19 @@ export function layoutGate(neverSynced: boolean) {
       first = false
     },
   })
+}
+
+/** Null means inherit the legacy shared setup until the first explicit mobile edit. An empty
+ * set is intentional (all mobile widgets removed), and must never fall back to the desktop. */
+export const mobileWidgetPlaces = synced<WidgetSet | null>('widgets:placed:mobile', null, {
+  normalize: (v) => v == null ? null : normalizeSet(v),
+  merge: (a, b) => a === null ? b : b === null ? a : mergeSets(a, b),
+  mergeTabs: true,
+})
+export const widgetsForScreen = (desktop: WidgetSet, mobile: WidgetSet | null, phone: boolean): WidgetSet =>
+  phone ? mobile ?? desktop : desktop
+export const screenWidgets = (phone: boolean): WidgetSet => widgetsForScreen(widgetPlaces.get(), mobileWidgetPlaces.get(), phone)
+export function changeScreenWidgets(phone: boolean, fn: (set: WidgetSet) => WidgetSet) {
+  if (phone) mobileWidgetPlaces.set((current) => fn(current ?? widgetPlaces.get()))
+  else widgetPlaces.set(fn)
 }

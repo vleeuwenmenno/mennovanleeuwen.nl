@@ -1,0 +1,24 @@
+/* Desktop placement uses a shared lattice and scrolls only when content cannot fit. */
+:root .desk-scroll { overflow: hidden auto; overscroll-behavior: contain; }
+:root .desk-icon { width: 96px; height: 112px; box-sizing: border-box; }
+:root .desk-label {
+  width: 100%; max-width: 88px; max-height: 47px; box-sizing: border-box;
+  overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+}
+.desk-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.home-pages {
+  position: fixed; z-index: 100; bottom: calc(100px + var(--sab, 0px)); left: 50%;
+  transform: translateX(-50%); display: flex; gap: 6px; padding: 4px;
+  background: var(--bg); border: 1px solid var(--inactive-border);
+}
+.home-pages button { min-height: 36px; padding: 4px 12px; color: var(--fg); background: var(--bg); border: 1px solid transparent; }
+.home-pages button[aria-current] { border-color: var(--accent); color: var(--accent); }
+.desk-scroll.is-covered .home-pages { display: none; }
+@media (max-width: 719px) {
+  :root .desk.is-home-icons .desk-icon { display: flex; }
+  .desk.is-home-icons { touch-action: pan-y; }
+  :root .desk.is-home-icons .desk-icon { touch-action: none; }
+  .desk-scroll:not(.is-notes-hidden) > .desk { pointer-events: none; }
+  .desk-scroll .windows { padding-bottom: calc(160px + var(--sab)); }
+  .desk-scroll:has(.window:not(.chrome-note):not(.is-min):not(.is-away)) .home-pages { display: none; }
+}

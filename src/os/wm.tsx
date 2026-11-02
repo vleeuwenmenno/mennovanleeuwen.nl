@@ -6,7 +6,7 @@ import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
-import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
+import { changeScreenWidgets, mobileWidgetPlaces, screenWidgets, changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
 import { opensMaximized } from './windowPrefs'
@@ -482,6 +482,7 @@ export function stackOrder(windows: WinState[]): number[] {
 /** How tall each note is drawn (pid → px): a long note runs on below its box (Window.tsx measures it). */
 const drawnWidths = new Map<number, number>()
 const drawnHeights = new Map<number, number>()
+export const drawnWidth = (pid: number) => drawnWidths.get(pid)
 export const drawnHeight = (pid: number) => drawnHeights.get(pid)
 export function setDrawnSize(pid: number, size: { w: number; h: number } | null) {
   if (size === null) { drawnWidths.delete(pid); drawnHeights.delete(pid) }
@@ -705,7 +706,7 @@ export function WindowManagerProvider({
     // Widgets are there whatever the desktop starts with: they are part of it, not windows.
     const start = startupPrefs().windows
     const saved = usable(layoutStore().get())
-    const withWidgets = (s: State) => showWidgets(s, shownWidgets(widgetPlaces.get(), s.phone))
+    const withWidgets = (s: State) => showWidgets(s, shownWidgets(screenWidgets(s.phone), s.phone))
     if (start === 'empty') return withWidgets(fresh([]))
     // One workspace per tab: a reload starts on the workspace it had (it is about to get it back).
     const perTab = start === 'last' && tabWorkspacePrefs.get().perTab && tabWorkspacesSupported && !isPhone()
@@ -796,7 +797,7 @@ export function WindowManagerProvider({
   const applied = useRef(new Map<string, WidgetShown>())
   const showSet = useCallback(
     (all: WidgetSet) => {
-      const list = shownWidgets(all, stateRef.current.phone)
+      const list = shownWidgets(stateRef.current.phone ? screenWidgets(true) : all, stateRef.current.phone)
       for (const p of list) applied.current.set(p.id, p)
       dispatch({ type: 'widgets', list })
     },
@@ -856,7 +857,11 @@ export function WindowManagerProvider({
   // updates from another tab count too, even when no remote value callback runs.
   useEffect(() => layoutStore().onSynced(() => gate.current!.consume()), [])
 
-  useEffect(() => widgetPlaces.onRemote(showSet), [showSet])
+  useEffect(() => {
+    const desktop = widgetPlaces.onRemote(showSet)
+    const mobile = mobileWidgetPlaces.onRemote(() => { if (stateRef.current.phone) showSet(screenWidgets(true)) })
+    return () => { desktop(); mobile() }
+  }, [showSet])
   useEffect(() => onImport(() => showSet(widgetPlaces.get())), [showSet])
   // The phone's column and a big screen's places differ: turning the screen into the other kind
   // shows the set again for it.
@@ -867,13 +872,20 @@ export function WindowManagerProvider({
     showSet(widgetPlaces.get())
   }, [state.phone, showSet])
   const lastWidgets = useRef<Map<string, WinState> | null>(null)
+  const lastWidgetScreen = useRef(state.phone)
   useLayoutEffect(() => {
     const now = new Map<string, WinState>()
     for (const w of state.windows) if (w.app === 'widget' && w.props.id && w.props.kind && !now.has(w.props.id)) now.set(w.props.id, w)
     const before = lastWidgets.current
     lastWidgets.current = now
+    // A viewport switch projects a different set; it is never a user deletion/addition.
+    if (lastWidgetScreen.current !== state.phone) {
+      lastWidgetScreen.current = state.phone
+      lastWidgets.current = null
+      return
+    }
     if (!before) return
-    const all = widgetPlaces.get()
+    const all = screenWidgets(state.phone)
     const vw = viewW()
     const vh = viewH()
     const put: Record<string, WidgetPlace> = {}
@@ -888,7 +900,7 @@ export function WindowManagerProvider({
       const rec = entry?.place
       const round = { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw, vh, phone: state.phone }
       if (rec && state.phone) {
-        // A phone only says where in its column; the place on a big screen stays.
+        // Mobile geometry stays stable while its independent column order changes.
         if (rec.stack === w.stack && !!rec.minimized === w.minimized) continue
         put[entry.key] = { ...rec, stack: w.stack, minimized: w.minimized || undefined, at: nextAt(rec) }
       } else put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round, stack: w.stack, minimized: w.minimized || undefined, at: nextAt(rec) }
@@ -899,7 +911,7 @@ export function WindowManagerProvider({
       applied.current.delete(id)
       for (const e of entriesOf(all, id)) remove.push(e.key)
     }
-    if (Object.keys(put).length || remove.length) widgetPlaces.set((cur) => changeSet(cur, put, remove))
+    if (Object.keys(put).length || remove.length) changeScreenWidgets(state.phone, (cur) => changeSet(cur, put, remove))
   }, [state.windows, state.phone])
 
   // A CV app opened away from /cv opens right here, on every page from then on (WinState.anywhere).

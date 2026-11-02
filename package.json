@@ -113,6 +113,7 @@
     "check:session-streams": "node scripts/session-streams-check.ts",
     "check:widgets-sync": "node scripts/widgets-sync-check.ts",
     "check:dock-drag": "node scripts/dock-drag-e2e.ts",
+    "check:desktop-layout": "node scripts/desktop-layout-check.ts",
     "check:ui-scale": "node scripts/ui-scale-e2e.ts",
     "check:topbar-touch": "node scripts/topbar-touch-e2e.ts",
     "check:widget-stacking": "node scripts/widget-stacking-e2e.ts",

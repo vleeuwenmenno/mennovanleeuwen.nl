@@ -672,4 +672,21 @@ const live = (set: WidgetSet) => Object.keys(set.places).sort().join()
 
 // Accounts (whose state a tab holds, switching account in another tab): scripts/sync-accounts-check.ts.
 
+// Mobile selection has its own tombstones and merges without changing desktop membership.
+{
+  const desktop: import('../src/os/widgetPlaces.ts').WidgetSet = { places: {
+    one: { id: 'one', kind: 'status', x: 100, y: 100, w: 240, h: 200, vw: 1400, vh: 900, at: 1 },
+    two: { id: 'two', kind: 'status', x: 400, y: 100, w: 240, h: 200, vw: 1400, vh: 900, at: 1 },
+  }, removed: '' }
+  const before = JSON.stringify(desktop)
+  const mobile = wp.changeSet(wp.widgetsForScreen(desktop, null, true), {}, ['one'])
+  check('mobile: legacy set inherited without mutation', wp.widgetsForScreen(desktop, null, true) === desktop)
+  check('mobile: removing an inherited widget preserves desktop', JSON.stringify(desktop) === before && !!desktop.places.one && !mobile.places.one)
+  check('mobile: intentional empty set never falls back to desktop', wp.liveWidgets(wp.widgetsForScreen(desktop, { places: {}, removed: '' }, true)).length === 0)
+  const remote = wp.changeSet(mobile, { two: { ...mobile.places.two, stack: 0, at: 2 } })
+  check('mobile: mobile reorder and removal survive merging in either order',
+    JSON.stringify(wp.mergeSets(mobile, remote)) === JSON.stringify(wp.mergeSets(remote, mobile)) && !wp.mergeSets(mobile, remote).places.one && wp.mergeSets(mobile, remote).places.two.stack === 0)
+  check('mobile: switching back selects untouched desktop', wp.widgetsForScreen(desktop, mobile, false) === desktop)
+}
+
 finish()
