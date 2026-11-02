@@ -15,6 +15,12 @@ import type { PreviewJob, PreviewResult } from './imagePreviewWorker.ts'
 // can't shrink right now (queue full, too slow, too big), gets the original instead: once, from
 // the same request, so there is never a retry loop.
 
+/** A limit the checks may lower (scripts/agents-image-previews.ts), never raise past its default. */
+function tuned(name: string, fallback: number) {
+  const v = Number(process.env[name])
+  return Number.isInteger(v) && v > 0 && v < fallback ? v : fallback
+}
+
 /** Longest side of a preview, in pixels: thumbnails ask for 384, inline pictures for 768. */
 export const PREVIEW_SIZES: ReadonlySet<number> = new Set([384, 768])
 /** Largest original sent to the worker (its stored bytes). */
@@ -26,9 +32,9 @@ const MAX_OUTPUT = 2 * 1024 * 1024
 /** Jobs waiting or running; more than this and the request gets the original at once. */
 const MAX_JOBS = 12
 /** From admission to an answer; a running job past it is stopped with its worker. */
-const DEADLINE_MS = 15_000
+const DEADLINE_MS = tuned('IMAGE_PREVIEW_DEADLINE_MS', 15_000)
 /** All settled previews together, and how long one is kept after it is made. */
-const CACHE_BYTES = 48 * 1024 * 1024
+const CACHE_BYTES = tuned('IMAGE_PREVIEW_CACHE_BYTES', 48 * 1024 * 1024)
 const CACHE_MS = 10 * 60_000
 /** A worker with nothing to do for this long exits. */
 const IDLE_MS = 30_000
@@ -168,11 +174,13 @@ export async function servePreview(res: ServerResponse, user: User, head: boolea
     if (!source.exists()) { drop(key); throw new HttpError(404, 'No such image') }
     check()
     remember(key, { ...hit })
-    return send(res, head, 'image/png', hit.png, String(size))
+    return send(res, head, 'image/png', hit.png, String(size), { 'X-Preview-Cache': 'hit' })
   }
   // A HEAD learns the type without anything being decoded.
   if (head) return source.png && source.bytes <= MAX_INPUT ? send(res, true, 'image/png', null, String(size)) : fallback()
-  // Admitted before the body is loaded: not a PNG, too big, or no room in the queue.
+  // Admitted before the picture's data is decoded or loaded into a Buffer: not a PNG, too big, or
+  // no room in the queue. (For a message picture, finding its type and length already had SQLite
+  // parse the message's stored attachment JSON, in native code; nothing of it is returned here.)
   if (!source.png || source.bytes > MAX_INPUT || queue.length + (running ? 1 : 0) >= MAX_JOBS) return fallback()
   const bytes = source.load()
   if (!bytes) throw new HttpError(404, 'No such image')
@@ -183,5 +191,5 @@ export async function servePreview(res: ServerResponse, user: User, head: boolea
   if (!result?.ok) return fallback()
   const png = Buffer.from(result.png)
   remember(key, { userId: user.id, png, at: Date.now() })
-  send(res, false, 'image/png', png, String(size))
+  send(res, false, 'image/png', png, String(size), { 'X-Preview-Cache': 'miss' })
 }

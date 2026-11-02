@@ -4213,19 +4213,24 @@ Files and picture sources still use the original address, byte for byte. A previ
 demand in one worker thread ([`server/imagePreviewWorker.ts`](server/imagePreviewWorker.ts)) from
 the PNG alone: no database, session or network there. Its limits: originals up to 32 MB and
 4096 × 4096 pixels by their header (checked before anything is inflated, and the inflate capped
-to what the header needs), 12 jobs waiting or running (checked before the picture is read), 15 s
+to what the header needs), 12 jobs waiting or running (checked before the picture's data is
+loaded or decoded; for a message picture SQLite has still parsed the stored attachment JSON, in
+native code, to find its type and length, also on a cache hit), 15 s
 from admission (a running job past it is stopped with its worker), previews up to 2 MB. What the
 worker won't shrink faithfully (not a PNG, 16-bit or below 8-bit samples, interlaced, animated,
-turned by EXIF, malformed, too big, already small, or no smaller), or can't right now (queue full,
+turned by EXIF, a grey picture with an ICC profile, a bad chunk CRC, an unknown critical chunk,
+chunks out of order, malformed, too big, already small, or no smaller), or can't right now (queue full,
 too slow), gets the exact original from the same request, once, so nothing retries in a loop; a
 JPEG or WebP picture with a message always does. Previews are kept only in the server's memory,
 per account, for 10 minutes and 48 MB in all; nothing derived is written to disk. Before a cached
 one is sent and after a job finishes, the session and the picture are checked again, so a deleted
 picture, a signed-out session or another account gets a 404 or 401, never a preview. Signing out
 cancels that session's waiting and running jobs. Responses are `private, no-store` like the
-originals, with `X-Preview: <size>` or `original`. A generated image's `HEAD` reads only its stored
+originals, with `X-Preview: <size>` or `original` (and `X-Preview-Cache: hit` or `miss` on a
+preview). A generated image's `HEAD` reads only its stored
 length. gpt-image's rough previews while it draws stay as they were. `pnpm
-check:agents-image-previews` covers it.
+check:agents-image-previews` covers it; it lowers the deadline and the cache size with
+`IMAGE_PREVIEW_DEADLINE_MS` and `IMAGE_PREVIEW_CACHE_BYTES`, which can only lower them.
 
 **Shared links** ([`server/shares.ts`](server/shares.ts), [`src/apps/AgentsShare.tsx`](src/apps/AgentsShare.tsx)):
 *Share thread…* (the thread's ⋯ menu, its right-click menu in the sidebar or the conversation) and

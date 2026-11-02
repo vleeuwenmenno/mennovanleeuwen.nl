@@ -6,7 +6,8 @@ import { crc32, deflateSync, inflateSync } from 'node:zlib'
 // size is checked against the header before anything is inflated, and the inflate itself is
 // capped to what that header needs. A picture it cannot shrink faithfully (16-bit or below
 // 8-bit samples, interlaced, animated, rotated by EXIF, odd chunks) is declined, so the caller
-// serves the original instead.
+// serves the original instead. So is one that is damaged: a bad CRC, a critical chunk it doesn't
+// know, or chunks out of PNG's order.
 
 export type PreviewJob = { id: number; bytes: ArrayBuffer; size: number; maxPixels: number; maxOutput: number }
 export type PreviewResult = { id: number; ok: true; png: ArrayBuffer; width: number; height: number } | { id: number; ok: false; reason: string }
@@ -50,23 +51,44 @@ export function previewPng(bytes: Buffer, size: number, maxPixels: number, maxOu
   let at = 8, width = 0, height = 0, depth = 0, color = 0, interlace = 0, ended = false
   let palette: Buffer | null = null, trns: Buffer | null = null
   const idat: Buffer[] = [], colour: Buffer[] = []
+  const seen = new Set<string>()
+  let last = ''
   while (at + 12 <= bytes.length) {
     const length = bytes.readUInt32BE(at), type = bytes.toString('latin1', at + 4, at + 8)
     if (length > bytes.length - at - 12) throw new Decline('truncated')
+    if (!/^[A-Za-z]{4}$/.test(type)) throw new Decline('malformed')
+    // Every chunk's CRC (type and data), so a damaged file is not shrunk into something plausible.
+    if ((crc32(bytes.subarray(at + 4, at + 8 + length)) >>> 0) !== bytes.readUInt32BE(at + 8 + length)) throw new Decline('crc')
     const body = bytes.subarray(at + 8, at + 8 + length)
     if ((at === 8) !== (type === 'IHDR')) throw new Decline('header')
+    // The order PNG requires: one PLTE, colour chunks before it, PLTE and tRNS before the image
+    // data, the image data in one run of IDATs.
+    const afterData = seen.has('IDAT')
+    if (afterData && type === 'IDAT' && last !== 'IDAT') throw new Decline('malformed')
+    if (afterData && ['PLTE', 'tRNS', ...COLOUR].includes(type)) throw new Decline('malformed')
+    if (seen.has('PLTE') && COLOUR.has(type)) throw new Decline('malformed')
+    if (type !== 'IDAT' && seen.has(type) && ['IHDR', 'PLTE', 'tRNS', ...COLOUR].includes(type)) throw new Decline('malformed')
+    seen.add(type); last = type
     if (type === 'IHDR') {
       if (length !== 13) throw new Decline('header')
       width = body.readUInt32BE(0); height = body.readUInt32BE(4); depth = body[8]; color = body[9]; interlace = body[12]
       if (!width || !height || width > 16384 || height > 16384 || width * height > maxPixels) throw new Decline('too many pixels')
       if (depth !== 8 || interlace !== 0 || ![0, 2, 3, 4, 6].includes(color) || body[10] !== 0 || body[11] !== 0) throw new Decline('format')
-    } else if (type === 'PLTE') palette = body
+    } else if (type === 'PLTE') { if (color === 0 || color === 4) throw new Decline('malformed'); palette = body }
     else if (type === 'tRNS') trns = body
     else if (type === 'IDAT') idat.push(body)
     else if (type === 'acTL') throw new Decline('animated')
     else if (type === 'eXIf') { if (orientation(body) !== 1) throw new Decline('orientation') }
-    else if (COLOUR.has(type)) { if (type === 'iCCP' && length > MAX_ICC) throw new Decline('profile'); colour.push(bytes.subarray(at, at + 12 + length)) }
+    else if (COLOUR.has(type)) {
+      if (type === 'iCCP' && length > MAX_ICC) throw new Decline('profile')
+      // The preview is RGB(A): a grey picture's ICC profile describes grey, so it can't travel with
+      // it. Rather than convert colours, such a picture keeps its original.
+      if (type === 'iCCP' && (color === 0 || color === 4)) throw new Decline('grey profile')
+      colour.push(bytes.subarray(at, at + 12 + length))
+    }
     else if (type === 'IEND') { ended = true; break }
+    // Any other critical chunk (upper-case first letter) is one this reader doesn't know.
+    else if (type.charCodeAt(0) < 97) throw new Decline('unknown critical chunk')
     at += 12 + length
   }
   if (!ended || !idat.length) throw new Decline('truncated')

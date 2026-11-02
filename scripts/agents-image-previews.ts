@@ -6,6 +6,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { crc32, deflateSync } from 'node:zlib'
 import { Server } from './empires-harness.ts'
 import { decodePng } from '../server/pngResize.ts'
+import { previewPng } from '../server/imagePreviewWorker.ts'
 
 const server = new Server({ GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', NOTIFY_WATCH: 'off' })
 process.env.DATA_DIR = server.data
@@ -47,6 +48,33 @@ const exif = (orientation: number) => {
   b.write('MM', 0, 'latin1'); b.writeUInt16BE(42, 2); b.writeUInt32BE(8, 4); b.writeUInt16BE(1, 8)
   b.writeUInt16BE(0x0112, 10); b.writeUInt16BE(3, 12); b.writeUInt32BE(1, 14); b.writeUInt16BE(orientation, 18)
   return chunk('eXIf', b)
+}
+/** A small but valid ICC v2 display profile for 'GRAY' (white point, grey curve) or 'RGB ' (plus colorants and curves). */
+function icc(space: 'GRAY' | 'RGB ') {
+  const xyz = (x: number, y: number, z: number) => { const b = Buffer.alloc(20); b.write('XYZ ', 0, 'latin1'); [x, y, z].forEach((v, i) => b.writeInt32BE(Math.round(v * 65536), 8 + i * 4)); return b }
+  const curv = Buffer.alloc(16); curv.write('curv', 0, 'latin1'); curv.writeUInt32BE(1, 8); curv.writeUInt16BE(0x0233, 12) // gamma 2.2
+  const tags: [string, Buffer][] = space === 'GRAY'
+    ? [['wtpt', xyz(0.9642, 1, 0.8249)], ['kTRC', curv]]
+    : [['wtpt', xyz(0.9642, 1, 0.8249)], ['rXYZ', xyz(0.4361, 0.2225, 0.0139)], ['gXYZ', xyz(0.3851, 0.7169, 0.0971)], ['bXYZ', xyz(0.1431, 0.0606, 0.7141)], ['rTRC', curv], ['gTRC', curv], ['bTRC', curv]]
+  const table = Buffer.alloc(4 + tags.length * 12); table.writeUInt32BE(tags.length, 0)
+  let offset = 128 + table.length
+  const bodies: Buffer[] = []
+  tags.forEach(([sig, body], i) => { table.write(sig, 4 + i * 12, 'latin1'); table.writeUInt32BE(offset, 8 + i * 12); table.writeUInt32BE(body.length, 12 + i * 12); bodies.push(body); offset += body.length })
+  const head = Buffer.alloc(128)
+  head.writeUInt32BE(offset, 0); head.writeUInt32BE(0x02100000, 8); head.write('mntr', 12, 'latin1'); head.write(space, 16, 'latin1'); head.write('XYZ ', 20, 'latin1'); head.write('acsp', 36, 'latin1')
+  ;[0.9642, 1, 0.8249].forEach((v, i) => head.writeInt32BE(Math.round(v * 65536), 68 + i * 4))
+  return Buffer.concat([head, table, ...bodies])
+}
+const iccp = (profile: Buffer) => chunk('iCCP', Buffer.concat([Buffer.from('bench profile\0\0', 'latin1'), deflateSync(profile)]))
+/** The PNG with one byte of chunk `type`'s CRC flipped. */
+function badCrc(bytes: Buffer, type: string) {
+  const out = Buffer.from(bytes)
+  for (let at = 8; at + 12 <= out.length;) {
+    const length = out.readUInt32BE(at)
+    if (out.toString('latin1', at + 4, at + 8) === type) { out[at + 8 + length + 3] ^= 0xff; return out }
+    at += 12 + length
+  }
+  throw new Error(`no ${type}`)
 }
 const noise = (seed: number) => { let s = seed; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32) }
 
@@ -120,7 +148,10 @@ try {
   assert.ok(sp.includes(Buffer.from('sRGB')) && sp.includes(Buffer.from('gAMA')), 'colour-space chunks are kept')
   const text = png(800, 800, { extra: [chunk('tEXt', Buffer.from('prompt\0a private prompt'))] })
   assert.ok(!(await get(`/api/agents/images/${image(mine, text)}/preview/384`)).body.includes(Buffer.from('private prompt')), 'text metadata is not copied')
-  pass('alpha, grey and RGB tRNS keys, palettes, colour chunks; text chunks dropped')
+  const rgbProfile = iccp(icc('RGB '))
+  const withProfile = await get(`/api/agents/images/${image(mine, png(800, 800, { extra: [rgbProfile] }))}/preview/384`)
+  assert.equal(withProfile.mark, '384'); assert.ok(withProfile.body.includes(rgbProfile), 'an RGB picture keeps its ICC profile, byte for byte')
+  pass('alpha, grey and RGB tRNS keys, palettes, colour chunks and RGB ICC profiles kept; text chunks dropped')
 
   // 2. What it can't shrink faithfully gets the original, once (no redirect, no retry).
   const odd: [string, Buffer][] = [
@@ -132,6 +163,12 @@ try {
     ['header claims 20000² pixels', png(64, 64, { claim: [20000, 20000] })],
     ['header claims 6000×4000 (over the pixel cap)', png(64, 64, { claim: [6000, 4000] })],
     ['already small', png(300, 200)],
+    ['damaged IHDR CRC', badCrc(png(800, 600), 'IHDR')],
+    ['damaged IDAT CRC', badCrc(png(800, 600), 'IDAT')],
+    ['an unknown critical chunk', png(800, 600, { extra: [chunk('BLOB', Buffer.from('?'))] })],
+    ['PLTE in a grey picture', png(800, 600, { color: 0, extra: [chunk('PLTE', Buffer.from([1, 2, 3]))] })],
+    ['grey with a GRAY ICC profile', png(800, 600, { color: 0, extra: [iccp(icc('GRAY'))] })],
+    ['grey + alpha with a GRAY ICC profile', png(800, 600, { color: 4, extra: [iccp(icc('GRAY'))] })],
     ['not a PNG', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), randomBytes(5000)])],
   ]
   for (const [name, bytes] of odd) {
@@ -140,6 +177,10 @@ try {
     assert.equal(p.status, 200, name); assert.equal(p.mark, 'original', name); assert.equal(hash(p.body), hash(bytes), `${name}: the original bytes`)
     assert.equal(p.cache, 'private, no-store')
   }
+  // Each is declined for its own reason, not by accident (the worker's function, in this process).
+  const reasons: Record<string, string> = { 'damaged IHDR CRC': 'crc', 'damaged IDAT CRC': 'crc', 'an unknown critical chunk': 'unknown critical chunk', 'PLTE in a grey picture': 'malformed', 'grey with a GRAY ICC profile': 'grey profile', 'grey + alpha with a GRAY ICC profile': 'grey profile', 'EXIF-rotated': 'orientation', 'animated': 'animated' }
+  for (const [name, bytes] of odd) if (reasons[name]) assert.throws(() => previewPng(bytes, 384, 4096 * 4096, 2 << 20), (e: Error) => e.message === reasons[name], name)
+  assert.ok(previewPng(png(800, 600, { color: 0 }), 384, 4096 * 4096, 2 << 20).png.length > 0, 'the same grey picture without a profile is shrunk')
   assert.equal((await get(`/api/agents/images/${wideId}/preview/500`)).status, 404, 'only the two sizes')
   pass(`falls back to the exact original once: ${odd.map(([n]) => n).join(', ')}`)
 
@@ -182,7 +223,25 @@ try {
   assert.equal((await get(`${at(0)}/preview/768`)).status, 404, 'deleted message: not from the cache')
   pass('message pictures: PNG previews, JPEG and others fall back to the exact original, owner only')
 
-  // 5. Signing out cancels the session's queued and running jobs; someone else's is not held up.
+  // 5. A full queue: the requests past it get the original at once (no waiting, no error).
+  const many = Array.from({ length: 24 }, (_, i) => image(mine, png(1600, 1600, { pixel: (x, y) => [(x * (i + 1)) % 256, y % 256, i * 9] })))
+  const flood = await Promise.all(many.map((id) => get(`/api/agents/images/${id}/preview/384`)))
+  const turned = flood.filter((f) => f.mark === 'original'), made = flood.filter((f) => f.mark === '384')
+  assert.ok(flood.every((f) => f.status === 200), 'every request is answered')
+  assert.ok(turned.length > 0 && made.length >= 12, `past 12 jobs the rest get the original (${made.length} previews, ${turned.length} originals)`)
+  pass(`a full queue answers with the original at once: ${made.length} previews, ${turned.length} originals for 24 at the same moment`)
+
+  // 6. Deleted while it is being decoded: 404, and nothing is cached for it.
+  const slow = image(mine, png(3000, 3000, { pixel: (x, y) => [x % 256, (x + y) % 256, y % 256] }))
+  const deleting = get(`/api/agents/images/${slow}/preview/384`)
+  await new Promise((r) => setTimeout(r, 60))
+  db.prepare('DELETE FROM agent_images WHERE id = ?').run(slow)
+  const gone = await deleting
+  assert.equal(gone.status, 404, 'deleted during its decode')
+  assert.equal((await get(`/api/agents/images/${slow}/preview/384`)).status, 404)
+  pass(`deleted during decoding: 404 after the job (${gone.ms.toFixed(0)} ms), not cached`)
+
+  // 7. Signing out cancels the session's queued and running jobs; someone else's is not held up.
   const big = Array.from({ length: 10 }, (_, i) => image(mine, png(2600, 2600, { pixel: (x, y) => [(x + i) % 256, y % 256, (x ^ y) % 256] })))
   const solo = await get(`/api/agents/images/${big[0]}/preview/384`, sessions[2])
   assert.equal(solo.mark, '384')
@@ -199,6 +258,27 @@ try {
   assert.ok(ended.every((e) => e.status !== 200 || e.mark === null), `no signed-out job answered with a preview: ${ended.map((e) => e.status)}`)
   assert.ok(waited < each * 4, `the other account waited ${waited.toFixed(0)} ms, not the ~${(each * 9).toFixed(0)} ms of the cancelled queue`)
   pass(`sign-out cancels queued and running decodes (one decode ${each.toFixed(0)} ms; next account waited ${waited.toFixed(0)} ms)`)
+
+  // 8. Past its deadline a job is stopped with its worker and the original is sent; the worker
+  // comes back for the next job. (The server restarts with lower limits; sessions stay in its database.)
+  const restart = async (env: Record<string, string>) => { await server.stop(); (server as unknown as { env: Record<string, string> }).env = { GITHUB_CLIENT_ID: 'x', GITHUB_CLIENT_SECRET: 'x', NOTIFY_WATCH: 'off', ...env }; await server.start() }
+  await restart({ IMAGE_PREVIEW_DEADLINE_MS: '30' })
+  const late = image(mine, png(3000, 3000, { pixel: (x, y) => [y % 256, x % 256, 50] }))
+  const overdue = await get(`/api/agents/images/${late}/preview/384`)
+  assert.equal(overdue.mark, 'original', 'past the deadline: the original'); assert.ok(overdue.body.length > 1_000_000)
+  const tiny = await get(`/api/agents/images/${image(mine, png(400, 400))}/preview/384`)
+  assert.equal(tiny.status, 200, 'the next job is answered after the worker was stopped')
+  pass(`deadline: a 3000² decode past 30 ms gets the original (${overdue.ms.toFixed(0)} ms) and the worker is replaced`)
+
+  // 9. The cache holds what fits and drops the least recently used.
+  const sample = png(800, 800, { pixel: (x, y) => [x % 256, y % 256, 77] })
+  await restart({})
+  const one = (await get(`/api/agents/images/${image(mine, sample)}/preview/384`)).body.length
+  await restart({ IMAGE_PREVIEW_CACHE_BYTES: String(Math.floor(one * 1.5)) })
+  const [a, bId] = [image(mine, sample), image(mine, sample)]
+  const cacheOf = async (id: string) => (await fetch(`${server.origin}/api/agents/images/${id}/preview/384`, { headers: { Cookie: `mvlos_sid=${sessions[0]}` } })).headers.get('x-preview-cache')
+  assert.deepEqual([await cacheOf(a), await cacheOf(a), await cacheOf(bId), await cacheOf(bId), await cacheOf(a)], ['miss', 'hit', 'miss', 'hit', 'miss'], 'room for one preview: the older one is dropped')
+  pass(`cache bytes bounded: with room for one ${one}-byte preview, the second evicts the first`)
 
   console.log(`\n${results.length} groups passed`)
 } finally {

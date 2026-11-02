@@ -4415,9 +4415,10 @@ export function messagePicture(user: User, id: string, messageId: string, index:
 }
 
 /**
- * The same picture as a preview source (server/imagePreview.ts). Only its type and length are read
- * (by SQLite, from the one attachment) until a job is admitted, and then only its own data; the
- * original response is messagePicture's, byte for byte.
+ * The same picture as a preview source (server/imagePreview.ts). Until a job is admitted only its
+ * type and length come back from SQLite (which still parses the message's whole attachment JSON
+ * to find them, cache hits included); then only its own data. The original response is
+ * messagePicture's, byte for byte.
  */
 export function messagePictureSource(user: User, id: string, messageId: string, index: string): PreviewSource {
   const row = ownThread(user, id, true)
