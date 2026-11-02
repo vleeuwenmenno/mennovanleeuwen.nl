@@ -248,7 +248,8 @@ export function Desktop() {
     : iconLayout(visible.map((i) => i.id), storedPositions, viewW(), viewH(), obstacles),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [visible.map((i) => i.id).join(), storedPositions, viewport, obstacleKey, pageObstacleKey, mobile])
-  const savePositions = (next: Record<string, IconPos>) => updateDesktop((s) => ({ ...s, [mobile ? 'mobilePositions' : 'positions']: next }))
+  // A phone edit changes the icons in sight; the ones out of sight (trashed, hidden) keep their cells.
+  const savePositions = (next: Record<string, IconPos>) => updateDesktop((s) => ({ ...s, ...(mobile ? { mobilePositions: { ...(s.mobilePositions ?? s.positions), ...next } } : { positions: next }) }))
   const extent = mobile ? undefined : Math.max(viewH(), ...Object.values(positions).map((p) => TOP + (p.row + 1) * CELL_H + DOCK_SPACE), ...obstacles.map((r) => r.y + r.h + DOCK_SPACE))
 
   // How many icons each page holds, for the page dots (which pages can be taken away).

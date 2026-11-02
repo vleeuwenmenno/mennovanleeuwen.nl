@@ -240,6 +240,27 @@ try {
   await sleep(900)
   const widerAfter = await geometry()
   check('first load on a narrow phone shows it narrower, and a wider screen brings the saved width back', narrowFirst.w <= 320 - 28 + 1.5 && Math.abs(widerAfter.w - 362) < 1.5 && (await savedSet()) === set0, { narrowFirst, widerAfter })
+  // Taking an empty page away while the screen is narrow moves the page only: the saved width stays.
+  await r.eval(`(async () => {
+    const { widgetPlaces } = await import('/src/os/widgetPlaces.ts')
+    widgetPlaces.set(() => ({ places: { wide: { id: 'wide', kind: 'status', x: 14, y: 60, w: 362, h: 200, vw: 390, vh: 844, phone: true, homeGrid: true, page: 3, at: 80 } }, removed: '' }))
+    ;(await import('/src/os/desktopStore.ts')).updateDesktop((s) => ({ ...s, mobilePositions: {}, mobilePages: 4 }))
+  })()`)
+  await r.send('Page.navigate', { url: origin })
+  await r.waitFor(`!!document.querySelector('[data-app="widget"]') && !!document.querySelector('.home-pages')`, 90_000)
+  await sleep(900)
+  await r.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 568, deviceScaleFactor: 2, mobile: true })
+  await sleep(900)
+  await click(r, '.home-edit')
+  await sleep(200)
+  await click(r, '.home-dot:nth-child(2)')
+  await sleep(700)
+  await buttonByText(r, '.home-edit-bar', 'Remove page')
+  await sleep(900)
+  await r.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+  await sleep(900)
+  const shifted = await r.eval<{ page: number; w: number; x: number }>(`(async () => { const p = Object.values((await import('/src/os/widgetPlaces.ts')).screenWidgets(true).places).find((q) => q.id === 'wide'); return { page: p.page, w: p.w, x: p.x } })()`)
+  check('removing an empty page on a narrow screen moves the widget down a page and keeps its saved width and place', shifted.page === 2 && shifted.w === 362 && shifted.x === 14, { shifted, dots: await dots(r), ui: await r.eval(`(async () => JSON.stringify((await import('/src/os/homePager.ts')).homeUi.get()))()`) })
   // The first edit freezes old places by an order that does not depend on how the entries were added.
   const frozen = await r.eval<{ a: string; b: string }>(`(async () => {
     const { migrateMobileWidgets } = await import('/src/os/widgetPlaces.ts')
@@ -267,6 +288,20 @@ try {
   await h.send('Page.navigate', { url: origin })
   await h.waitFor(`!!document.querySelector('.home-pages')`, 90_000)
   await sleep(900)
+  // Moving a visible icon by its menu must not forget the trashed one's cell.
+  await h.eval(`(async () => { (await import('/src/data/launchers.ts')).addLauncher({ label: 'Probe', url: 'https://example.org' }) })()`)
+  await sleep(300)
+  await h.send('Page.navigate', { url: origin })
+  await h.waitFor(`!!document.querySelector('.desk-icon[aria-label="Probe"]')`, 90_000)
+  await sleep(700)
+  await h.eval(`document.querySelector('.desk-icon[aria-label="Probe"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 60, clientY: 200 }))`)
+  await sleep(200)
+  await h.eval(`[...document.querySelectorAll('.ctx-menu button')].find((b) => b.textContent.includes('Move to page')).click()`)
+  await sleep(200)
+  await h.eval(`[...document.querySelectorAll('.ctx-menu button')].find((b) => b.textContent.trim() === 'Page 3').click()`)
+  await sleep(900)
+  const afterMove = (await desk(h))?.mobilePositions
+  check('moving an icon by its menu keeps the trashed icon\'s saved cell', afterMove?.games?.page === 3 && afterMove?.['launcher:' + 'x'] === undefined && Object.values<any>(afterMove).some((c) => c.page === 2), afterMove)
   await click(h, '.home-edit')
   await sleep(200)
   await click(h, '.home-dot:nth-child(2)')
@@ -281,6 +316,7 @@ try {
   await sleep(700)
   const afterRemoval = (await desk(h))?.mobilePositions?.games
   check('removing an empty page before it moves the trashed icon down with the pages', afterRemoval?.page === 2 && (await dots(h)).count === 3, { afterRemoval, dots: await dots(h) })
+  check('... and the visible icon with them', Object.entries<any>((await desk(h))?.mobilePositions ?? {}).some(([id, c]) => id !== 'games' && c.page === 1), (await desk(h))?.mobilePositions)
   check('no script errors with hidden icons', h.errors.length === 0, h.errors)
   await h.close()
 

@@ -77,8 +77,11 @@ const straddle = legacyWidgetPage(HOME_TOP + 500, 260, savedH)
 assert.equal(straddle.page, 1, 'one that would cross the cut starts the next page')
 assert.equal(straddle.y, HOME_TOP)
 assert.deepEqual(legacyWidgetPage(HOME_TOP + 700, 260, savedH), legacyWidgetPage(HOME_TOP + 700, 260, savedH))
-// the address bar sliding away (a few px of height) never moves a widget between pages
-assert.equal(legacyWidgetPage(HOME_TOP + 700, 260, savedH).page, legacyWidgetPage(HOME_TOP + 700, 260, savedH).page)
+// the address bar sliding away (the screen is a few px shorter) never moves an old place between pages: only its saved height counts
+for (const h of [560, 600, 640, 700, 800, 1000]) {
+  const old = { x: 14, y: 40 + 3 * 320, w: 280, h: 260, vw: 390, vh: 800, phone: true }
+  assert.equal(pageOfX(mobileWidgetRect(old, 3, 390, h).x), pageOfX(mobileWidgetRect(old, 3, 390, 800).x), `old place at current height ${h}`)
+}
 const geom = mobileWidgetRect({ x: 1200, y: 800, w: 280, h: 260 }, 3, W, H)
 assert.equal(pageOfX(geom.x), 1, 'a column-order widget past the first screen lands on page 1')
 const explicit = mobileWidgetRect({ x: 54, y: 60, w: 280, h: 260, homeGrid: true, page: 2 }, 0, W, H)

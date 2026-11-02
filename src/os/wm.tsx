@@ -1,5 +1,5 @@
 import { HOME_LEFT, HOME_TOP, HOME_GRID } from './homeLayout'
-import { PAGE_DOCK, arrangePages, fitPhoneWidget, joinX, localX, mobileWidgetRect, pageOfX } from './homePages'
+import { PAGE_DOCK, PAGE_STRIDE, arrangePages, fitPhoneWidget, joinX, localX, mobileWidgetRect, pageOfX } from './homePages'
 import { arrangeDesktop, mobileWidgetEnvelope } from './widgetLayout'
 import { avoidWidgetOverlap, desktopLayoutPriority, mobileLayoutPriority } from './widgetLayoutPrefs'
 import { closeGuards } from './closeGuards'
@@ -147,6 +147,8 @@ type Action =
   /** The widgets on the desktop, from the synced set (src/os/widgetPlaces.ts): widget windows not
    * in it close, the ones missing open, the others move to where it says. */
   | { type: 'widgets'; list: WidgetShown[] }
+  /** An empty phone page was taken away: notes and widgets on later pages move down one, nothing else about them changes. */
+  | { type: 'shiftPage'; removed: number }
 
 /** A widget as the synced set puts it on this screen (see widgetsShown). */
 type WidgetShown = { id: string; kind: string; g: Geometry; /** The screen `g` was put on, when known */ screen?: Screen | null; minimized: boolean; stack?: number }
@@ -180,7 +182,7 @@ type State = {
 }
 
 /** Actions that are the visitor's own doing (as opposed to a viewport change or a restore). */
-const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps', 'restack', 'moveTo'])
+const USER_ACTIONS = new Set<Action['type']>(['open', 'close', 'focus', 'minimize', 'toggleMax', 'setGeometry', 'setProps', 'restack', 'moveTo', 'shiftPage'])
 
 const isPhone = () => window.innerWidth < 720
 
@@ -341,6 +343,11 @@ function apply(state: State, action: Action): State {
     }
     case 'widgets':
       return showWidgets(state, action.list)
+    case 'shiftPage': {
+      // Only the page moves: the saved width, height and place on the page stay as they are.
+      const down = (x: number) => (pageOfX(x) > action.removed ? x - PAGE_STRIDE : x)
+      return { ...state, touched: true, windows: state.windows.map((w) => (NOTE_APPS.has(w.app) ? { ...w, x: down(w.x), ...(w.want ? { want: { ...w.want, x: down(w.want.x) } } : {}) } : w)) }
+    }
     case 'restore':
       return { ...restored(action.windows, state.windows, state.ws), away: state.away, unplaced: state.unplaced }
     case 'workspace': {
@@ -660,6 +667,8 @@ type WM = {
   toggleMax: (pid: number) => void
   /** Automatic sizing does not claim local overlap priority. */
   setGeometry: (pid: number, geometry: GeometryPatch, opts?: { automatic?: boolean }) => void
+  /** A phone page was removed: notes and widgets on later pages move down one page. */
+  shiftPagesAfter: (removed: number) => void
   /** A window changing what it shows itself (Preview going to the next picture): its title and saved layout follow. */
   setProps: (pid: number, props: WinState['props']) => void
   /** Puts the notes in this order in the phone layout's column (pids, top to bottom). */
@@ -1058,6 +1067,7 @@ export function WindowManagerProvider({
       },
       minimize: (pid) => dispatch({ type: 'minimize', pid }),
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
+      shiftPagesAfter: (removed) => dispatch({ type: 'shiftPage', removed }),
       setGeometry: (pid, geometry, { automatic = false } = {}) => {
         const shown = displayWindows.find((w) => w.pid === pid)
         if (shown && NOTE_APPS.has(shown.app)) {
@@ -1125,6 +1135,7 @@ export function SoloWindowProvider({ win, children }: { win: WinState; children:
       minimize: none,
       toggleMax: none,
       setGeometry: none,
+      shiftPagesAfter: none,
       setProps: none,
       restack: none,
       reset: none,

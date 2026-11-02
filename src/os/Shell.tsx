@@ -44,7 +44,7 @@ import { toUi, uiScale, viewH, viewW } from './uiScale'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
 import { setBackFallback, useBackLayer } from './backLayers'
 import { goToPage, homeUi, onPageRemoved, useHomeUi } from './homePager'
-import { MAX_PAGES, PAGE_STRIDE, pageOfX } from './homePages'
+import { MAX_PAGES, pageOfX } from './homePages'
 import { useDesktop } from './desktopStore'
 import { NoteStackSlot, Window } from './Window'
 import { SINGLE_INSTANCE, useWM, workspaceOf, WORKSPACES, type AppId, type Geometry, type WinState } from './wm'
@@ -789,9 +789,7 @@ export function Shell() {
     if (w && NOTE_APPS.has(w.app) && pageOfX(w.x) !== homeUi.get().page) goToPage(pageOfX(w.x))
   }, [mobile, wm.focusedPid])
   // Taking an empty page away moves the widgets on later pages down one.
-  useEffect(() => mobile ? onPageRemoved((removed) => {
-    for (const w of wmRef.current.windows) if (NOTE_APPS.has(w.app) && pageOfX(w.x) > removed) wmRef.current.setGeometry(w.pid, { x: w.x - PAGE_STRIDE }, { automatic: true })
-  }) : undefined, [mobile])
+  useEffect(() => mobile ? onPageRemoved((removed) => wmRef.current.shiftPagesAfter(removed)) : undefined, [mobile])
   // Back with nothing on top of the page: an app window leaves to the home screen (it stays
   // running, in the dock), and a later home screen goes back to the first.
   useEffect(() => {
