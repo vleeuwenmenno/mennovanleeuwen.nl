@@ -38,6 +38,8 @@ const MAX_REGS = 10
 const MAX_PENDING_PER_REG = 30
 const MAX_PENDING_TOTAL = 5000
 const MAX_PREPARED = 5
+/** Notifications one account may send to its phones per minute (a test counts too, with its own smaller limit). */
+const SEND_PER_MINUTE = 60
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex')
 const rand = (bytes: number) => randomBytes(bytes).toString('base64url')
@@ -218,9 +220,10 @@ function authenticate(req: IncomingMessage, uses: Use[]): Reg & { used: Use } {
 }
 
 /** PUT /api/push/native/token: this device's FCM token (also on rotation). Cannot create a registration. */
-export async function setToken(req: IncomingMessage, body: Promise<{ token?: unknown }> = readJson(req, 8 * 1024)) {
+export async function setToken(req: IncomingMessage, readBody: () => Promise<{ token?: unknown }> = () => readJson(req, 8 * 1024)) {
+  // Authenticated BEFORE the body is read: a body that fails to parse is then awaited, not left rejecting.
   authenticate(req, ['cap'])
-  const data = await body
+  const data = await readBody()
   // The registration may have ended while the body was on its way.
   const reg = authenticate(req, ['cap'])
   const token = typeof data.token === 'string' ? data.token : ''
@@ -264,6 +267,8 @@ export type NativeNotice = { source: string; title: string; body?: string; actio
 /** Sends a notification to the account's live registrations. Returns how many messages went. */
 export async function pushNative(user: Pick<User, 'id'>, n: NativeNotice): Promise<{ sent: number; failed: number }> {
   if (fcmProject() === null) return { sent: 0, failed: 0 }
+  // One account cannot flood the sender (and with it Google's shared throttle): a budget per account.
+  if (!allow(`np-send:${user.id}`, SEND_PER_MINUTE, 60_000)) return { sent: 0, failed: 0 }
   pruneContent()
   const db = database()
   const regs = db.prepare("SELECT r.id, r.rid, r.token_enc, r.token_digest FROM native_push_regs r JOIN sessions s ON s.id = r.session_id WHERE r.user_id = ? AND r.state = 'active' AND r.token_digest IS NOT NULL AND s.expires_at > ? LIMIT ?").all(user.id, Date.now(), MAX_REGS) as { id: number; rid: string; token_enc: string; token_digest: string }[]
@@ -290,6 +295,11 @@ export async function pushNative(user: Pick<User, 'id'>, n: NativeNotice): Promi
     }),
   )
   return { sent, failed }
+}
+
+/** The Settings test: at most a few a minute per account. */
+export function allowTest(userId: number) {
+  if (!allow(`np-test:${userId}`, 5, 60_000)) throw new HttpError(429, 'Too many tests: wait a minute')
 }
 
 /** How many devices of the account the app registered (for the Settings test). */

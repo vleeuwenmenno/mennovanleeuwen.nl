@@ -25,6 +25,8 @@ public class PushOptInActivity extends AppCompatActivity {
     private String cookie;
     private String uid;
     private String prep;
+    /** The push generation the opt-in started under: enrolling is refused if anything revoked or enrolled since. */
+    private long generation;
     private ActivityResultLauncher<String> permission;
 
     @Override
@@ -58,6 +60,7 @@ public class PushOptInActivity extends AppCompatActivity {
                     runOnUiThread(() -> end(r.status == 503 ? R.string.push_server_off : R.string.push_failed));
                     return;
                 }
+                generation = st.getLong("gen", -1);
                 prep = r.body.getString("prep");
                 final String login = r.body.getString("login");
                 runOnUiThread(() -> confirm(login));
@@ -102,7 +105,15 @@ public class PushOptInActivity extends AppCompatActivity {
                 String rid = r.body.getString("rid");
                 String cap = r.body.getString("cap");
                 String rev = r.body.getString("rev");
+                // The activation may have been slow: the same session and account, or the registration is dropped again.
+                String after = CookieManager.getInstance().getCookie(origin + "/");
+                if (!uid.equals(PushController.cookieValue(after, "mvlos_uid")) || !PushController.cookieValue(cookie, "mvlos_sid").equals(PushController.cookieValue(after, "mvlos_sid"))) {
+                    PushApi.bearer("DELETE", origin, "/api/push/native", rev, null);
+                    runOnUiThread(() -> end(R.string.push_failed));
+                    return;
+                }
                 Bundle b = new Bundle();
+                b.putLong("gen", generation);
                 b.putString("origin", origin);
                 b.putString("uid", uid);
                 b.putString("rid", rid);

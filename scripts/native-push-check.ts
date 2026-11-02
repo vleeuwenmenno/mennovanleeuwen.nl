@@ -97,25 +97,25 @@ check('a new preparation names the registration it would replace', pOld.replaces
 const a2 = np.activate(req(), alice, 's-alice-1', { prep: pNew.prep })
 check('activating replaces the old registration (and only it)', np.nativeConfig(alice).devices.map((d) => d.rid).join() === pNew.prep)
 await throwsStatus('the stalled older preparation no longer wins', 409, () => np.activate(req(), alice, 's-alice-1', { prep: pOld.prep }))
-await throwsStatus('the replaced capability is dead', 401, () => np.setToken(bearer(a1.cap), Promise.resolve({ token: TOKEN(1) })))
+await throwsStatus('the replaced capability is dead', 401, () => np.setToken(bearer(a1.cap), () => Promise.resolve({ token: TOKEN(1) })))
 const expired = np.prepare(req(), alice, 's-alice-1', { installId: install(9) })
 db.prepare('UPDATE native_push_regs SET expires_at = ? WHERE rid = ?').run(Date.now() - 1, expired.prep)
 await throwsStatus('an expired preparation is refused', 410, () => np.activate(req(), alice, 's-alice-1', { prep: expired.prep }))
 
 // 3. The capability: token only; the revocation key can do nothing else.
-await throwsStatus('a missing bearer is refused', 401, () => np.setToken(req(), Promise.resolve({ token: TOKEN(1) })))
-await throwsStatus('a wrong secret is refused', 401, () => np.setToken(bearer(`${pNew.prep}.${'A'.repeat(43)}`), Promise.resolve({ token: TOKEN(1) })))
-await throwsStatus('the revocation key cannot set a token', 401, () => np.setToken(bearer(a2.rev), Promise.resolve({ token: TOKEN(1) })))
-await throwsStatus('a bad token is refused', 400, () => np.setToken(bearer(a2.cap), Promise.resolve({ token: 'no spaces allowed here!!' })))
-await np.setToken(bearer(a2.cap), Promise.resolve({ token: TOKEN(1) }))
+await throwsStatus('a missing bearer is refused', 401, () => np.setToken(req(), () => Promise.resolve({ token: TOKEN(1) })))
+await throwsStatus('a wrong secret is refused', 401, () => np.setToken(bearer(`${pNew.prep}.${'A'.repeat(43)}`), () => Promise.resolve({ token: TOKEN(1) })))
+await throwsStatus('the revocation key cannot set a token', 401, () => np.setToken(bearer(a2.rev), () => Promise.resolve({ token: TOKEN(1) })))
+await throwsStatus('a bad token is refused', 400, () => np.setToken(bearer(a2.cap), () => Promise.resolve({ token: 'no spaces allowed here!!' })))
+await np.setToken(bearer(a2.cap), () => Promise.resolve({ token: TOKEN(1) }))
 check('the token is stored sealed, with a digest', (db.prepare('SELECT token_enc, token_digest FROM native_push_regs WHERE rid = ?').get(pNew.prep) as { token_enc: string; token_digest: string }).token_enc !== TOKEN(1))
 // A token belongs to one registration.
 const bp = np.prepare(req(), bob, 's-bob-1', { installId: install(2) })
 const b1 = np.activate(req(), bob, 's-bob-1', { prep: bp.prep })
-await throwsStatus('another registration cannot take the same token', 409, () => np.setToken(bearer(b1.cap), Promise.resolve({ token: TOKEN(1) })))
-await np.setToken(bearer(b1.cap), Promise.resolve({ token: TOKEN(2) }))
+await throwsStatus('another registration cannot take the same token', 409, () => np.setToken(bearer(b1.cap), () => Promise.resolve({ token: TOKEN(1) })))
+await np.setToken(bearer(b1.cap), () => Promise.resolve({ token: TOKEN(2) }))
 // A registration that ends while the body is on its way cannot set a token.
-await throwsStatus('ended while the body arrived: refused', 401, () => np.setToken(bearer(a2.cap), (async () => { db.prepare('UPDATE native_push_regs SET state = ? WHERE rid = ?').run('revoked', pNew.prep); return { token: TOKEN(3) } })()))
+await throwsStatus('ended while the body arrived: refused', 401, () => np.setToken(bearer(a2.cap), async () => { db.prepare('UPDATE native_push_regs SET state = ? WHERE rid = ?').run('revoked', pNew.prep); return { token: TOKEN(3) } }))
 db.prepare('UPDATE native_push_regs SET state = ? WHERE rid = ?').run('active', pNew.prep)
 
 // 4. Sending: only ids go to Google.
@@ -164,7 +164,7 @@ await np.pushNative(alice, notice)
 check('UNREGISTERED clears the token but keeps the registration', (db.prepare('SELECT token_digest, state FROM native_push_regs WHERE rid = ?').get(pNew.prep) as { token_digest: string | null; state: string }).token_digest === null && np.nativeConfig(alice).devices.length === 1)
 check('failed sends leave no content behind', (db.prepare('SELECT COUNT(*) AS n FROM native_push_content').get() as { n: number }).n === 0)
 reply = () => ({ status: 200, body: {} })
-await np.setToken(bearer(a2.cap), Promise.resolve({ token: TOKEN(4) }))
+await np.setToken(bearer(a2.cap), () => Promise.resolve({ token: TOKEN(4) }))
 // A token rotated while a send was in flight is not removed by the stale UNREGISTERED.
 reply = () => {
   db.prepare('UPDATE native_push_regs SET token_digest = ? WHERE rid = ?').run('rotated', pNew.prep)
@@ -173,7 +173,7 @@ reply = () => {
 await np.pushNative(alice, notice)
 check('a stale UNREGISTERED does not remove a token that rotated meanwhile', (db.prepare('SELECT token_digest FROM native_push_regs WHERE rid = ?').get(pNew.prep) as { token_digest: string | null }).token_digest === 'rotated')
 reply = () => ({ status: 200, body: {} })
-await np.setToken(bearer(a2.cap), Promise.resolve({ token: TOKEN(5) }))
+await np.setToken(bearer(a2.cap), () => Promise.resolve({ token: TOKEN(5) }))
 reply = () => ({ status: 429, body: {}, retryAfter: 60 })
 const before = sent.length
 await np.pushNative(alice, notice)
@@ -184,7 +184,7 @@ setFcmTransport({ token: async () => ({ status: 200, body: { access_token: 'fake
 // 8. Revocation: the revocation key, the session cascade, a ban.
 const p3 = np.prepare(req(), alice, 's-alice-2', { installId: install(3) })
 const a3 = np.activate(req(), alice, 's-alice-2', { prep: p3.prep })
-await np.setToken(bearer(a3.cap), Promise.resolve({ token: TOKEN(6) }))
+await np.setToken(bearer(a3.cap), () => Promise.resolve({ token: TOKEN(6) }))
 np.revoke(bearer(a3.rev))
 check('the revocation key ends its registration (and only that)', np.nativeConfig(alice).devices.length === 1)
 await throwsStatus('the capability of a revoked registration is dead', 401, () => np.takeContent(bearer(a3.cap), 'A'.repeat(22)))
@@ -192,11 +192,11 @@ np.revoke(bearer(a3.rev))
 check('revoking again is quiet', true)
 const p4 = np.prepare(req(), alice, 's-alice-2', { installId: install(4) })
 const a4 = np.activate(req(), alice, 's-alice-2', { prep: p4.prep })
-await np.setToken(bearer(a4.cap), Promise.resolve({ token: TOKEN(7) }))
+await np.setToken(bearer(a4.cap), () => Promise.resolve({ token: TOKEN(7) }))
 await np.pushNative(alice, notice)
 db.prepare('DELETE FROM sessions WHERE id = ?').run('s-alice-2')
 check('ending a session removes its registration and its waiting content', (db.prepare('SELECT COUNT(*) AS n FROM native_push_regs WHERE rid = ?').get(p4.prep) as { n: number }).n === 0 && (db.prepare('SELECT COUNT(*) AS n FROM native_push_content c LEFT JOIN native_push_regs r ON r.id = c.reg_id WHERE r.id IS NULL').get() as { n: number }).n === 0)
-await throwsStatus('the capability of a session that ended is dead', 401, () => np.setToken(bearer(a4.cap), Promise.resolve({ token: TOKEN(8) })))
+await throwsStatus('the capability of a session that ended is dead', 401, () => np.setToken(bearer(a4.cap), () => Promise.resolve({ token: TOKEN(8) })))
 np.revoke(bearer(a4.rev))
 check('revoking after the session ended is quiet', true)
 // A session that ran out is not live even if its row is still there.
@@ -206,7 +206,7 @@ check('an expired session is not counted as a device', np.nativeConfig(alice).de
 db.prepare('UPDATE sessions SET expires_at = ? WHERE id = ?').run(Date.now() + 86_400_000, 's-alice-1')
 // Ban: the registration cannot be used.
 db.prepare('UPDATE users SET banned_at = ? WHERE id = 2').run(Date.now())
-await throwsStatus('a banned account cannot use its capability', 401, () => np.setToken(bearer(b1.cap), Promise.resolve({ token: TOKEN(9) })))
+await throwsStatus('a banned account cannot use its capability', 401, () => np.setToken(bearer(b1.cap), () => Promise.resolve({ token: TOKEN(9) })))
 // Deleting the account removes everything.
 db.prepare('DELETE FROM users WHERE id = 2').run()
 check('deleting the account removes its registrations', (db.prepare('SELECT COUNT(*) AS n FROM native_push_regs WHERE user_id = 2').get() as { n: number }).n === 0)
@@ -215,7 +215,7 @@ check('deleting the account removes its registrations', (db.prepare('SELECT COUN
 const p5 = np.prepare(req(), alice, 's-alice-1', { installId: install(5) })
 const a5 = np.activate(req(), alice, 's-alice-1', { prep: p5.prep })
 check('the owner sees it and can remove it', np.nativeConfig(alice).devices.some((d) => d.rid === p5.prep) && !np.removeOwned(alice, p5.prep).devices.some((d) => d.rid === p5.prep))
-await throwsStatus('a removed registration is dead', 401, () => np.setToken(bearer(a5.cap), Promise.resolve({ token: TOKEN(10) })))
+await throwsStatus('a removed registration is dead', 401, () => np.setToken(bearer(a5.cap), () => Promise.resolve({ token: TOKEN(10) })))
 check('another account cannot remove it', (() => { const p = np.prepare(req(), alice, 's-alice-1', { installId: install(6) }); np.activate(req(), alice, 's-alice-1', { prep: p.prep }); const before = np.nativeConfig(alice).devices.length; np.removeOwned(bob, p.prep); return np.nativeConfig(alice).devices.length === before })())
 const regsNow = np.nativeConfig(alice).devices.length
 for (let i = 20; i < 40; i++) {
@@ -237,6 +237,18 @@ for (let i = 0; i < 40; i++) {
   }
 }
 check('many bad credentials from one address are rate limited', limited)
+// Sending is budgeted per account, the test per minute, and a body that cannot be parsed is awaited after authentication.
+let budgetHit = false
+for (let i = 0; i < 70; i++) if ((await np.pushNative(alice, notice)).sent + (await np.pushNative(alice, notice)).failed === 0) budgetHit = true
+check('one account cannot send without limit', budgetHit)
+let testLimited = false
+for (let i = 0; i < 8; i++) { try { np.allowTest(1) } catch (e) { if ((e as { status?: number }).status === 429) testLimited = true } }
+check('the Settings test is limited per minute', testLimited)
+let unhandled = false
+process.once('unhandledRejection', () => (unhandled = true))
+await throwsStatus('an unauthenticated token request fails before its body is read', 401, () => np.setToken(req(), () => Promise.reject(new Error('body failed'))))
+await new Promise((r) => setTimeout(r, 50))
+check('... and leaves no unhandled rejection', !unhandled)
 check('no secret, token or content appears in the sealed rows', !JSON.stringify(db.prepare('SELECT token_enc FROM native_push_regs').all()).includes('APA91b'))
 
 rmSync(dir, { recursive: true, force: true })

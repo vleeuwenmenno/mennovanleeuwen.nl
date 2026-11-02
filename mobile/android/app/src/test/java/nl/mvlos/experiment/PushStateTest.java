@@ -157,4 +157,27 @@ public class PushStateTest {
         store.data.put("rid", "OTHER");
         assertNull(state.capability(s.generation, "OTHER"));
     }
+
+    @Test
+    public void originRegistrationAndCapabilityComeTogetherOrNotAtAll() {
+        PushState.Snapshot s = state.enroll(O, "7", "RID", "RID.capsecret", "RID.revsecret");
+        PushState.Credential c = state.credential(s.generation, "RID");
+        assertEquals(O, c.origin);
+        assertEquals("RID", c.rid);
+        assertEquals("RID.capsecret", c.capability);
+        // A newer enrollment (another origin) between two reads can never mix them: a stale generation gets nothing.
+        PushState.Snapshot s2 = state.enroll("https://other.example", "9", "RID2", "RID2.cap2", "RID2.rev2");
+        assertNull(state.credential(s.generation, "RID"));
+        assertEquals("https://other.example", state.credential(s2.generation, "RID2").origin);
+    }
+
+    @Test
+    public void theRevocationCredentialIsKeptAsTheServerGaveIt() {
+        PushState.Snapshot s = state.enroll(O, "7", "RID", "RID.capsecret", "RID.revsecret");
+        state.revoke();
+        // The retry sends exactly this string as the bearer, not "rid." + it.
+        assertEquals("RID.revsecret", state.pending().get(0).revocationKey);
+        assertEquals("RID", state.pending().get(0).rid);
+        assertNotEquals(s.generation, state.generation());
+    }
 }

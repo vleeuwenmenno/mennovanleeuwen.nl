@@ -58,7 +58,20 @@ public final class PushState {
         }
     }
 
-    /** A registration to delete on the server when the network allows: the revocation key only. */
+    /** The capability with the origin and registration it belongs to, read in ONE step under one generation: never mixed from two reads. */
+    public static final class Credential {
+        public final String origin;
+        public final String rid;
+        public final String capability;
+
+        Credential(String origin, String rid, String capability) {
+            this.origin = origin;
+            this.rid = rid;
+            this.capability = capability;
+        }
+    }
+
+    /** A registration to delete on the server when the network allows: its revocation credential (`rid.secret`, as the server gave it) only. */
     public static final class Pending {
         public final String origin;
         public final String rid;
@@ -167,6 +180,14 @@ public final class PushState {
         // A secret that cannot be opened (the key is gone) ends the registration instead of weakening it.
         if (opened == null) revoke();
         return opened;
+    }
+
+    /** Origin, registration and capability together, only while `generation` is still current; else null (and a secret that cannot be opened ends the registration). */
+    public synchronized Credential credential(long generation, String rid) {
+        Snapshot s = snapshot();
+        if (!s.enabled || s.generation != generation || !s.rid.equals(rid)) return null;
+        String cap = capability(generation, rid);
+        return cap == null ? null : new Credential(s.origin, s.rid, cap);
     }
 
     public synchronized boolean isCurrent(long generation, String rid) {

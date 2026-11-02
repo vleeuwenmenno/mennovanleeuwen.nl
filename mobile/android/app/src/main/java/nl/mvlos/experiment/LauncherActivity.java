@@ -204,11 +204,18 @@ public class LauncherActivity extends AppCompatActivity {
 
     /** Signs the app out of `origin` and deletes the cloud WebView's data, then does `action`. */
     private void resetCloud(String origin, String action, String next) {
-        // Push stops first, here in the process that owns it: nothing arrives or shows after Disconnect begins.
-        PushController.revokeLocal(this);
         pendingAction = action;
         pendingServer = next;
-        reset.launch(new Intent(this, CloudResetActivity.class).putExtra(CloudResetActivity.EXTRA_ORIGIN, origin));
+        // Push stops first, here in the process that owns it (off the UI thread: storage and the
+        // Keystore are involved): nothing arrives or shows after Disconnect begins.
+        new Thread(() -> {
+            try {
+                PushController.revokeLocal(this);
+            } catch (RuntimeException ignored) {
+                // The reset still revokes through the owner and waits for its acknowledgement.
+            }
+            runOnUiThread(() -> reset.launch(new Intent(this, CloudResetActivity.class).putExtra(CloudResetActivity.EXTRA_ORIGIN, origin)));
+        }).start();
     }
 
     private void openCloud() {

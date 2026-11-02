@@ -43,7 +43,7 @@ import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } 
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { cachePurge, HttpError, json, mergeHeaders, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
 import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
-import { activate as activateNative, nativeConfig, nativeDevices, prepare as prepareNative, pushNative, removeOwned as removeNative, revoke as revokeNative, setToken as setNativeToken, takeContent as takeNativeContent } from './nativepush.ts'
+import { allowTest as allowNativeTest, activate as activateNative, nativeConfig, nativeDevices, prepare as prepareNative, pushNative, removeOwned as removeNative, revoke as revokeNative, setToken as setNativeToken, takeContent as takeNativeContent } from './nativepush.ts'
 import { changeEntries, listEntries, noticeFromPage, openStream, presence } from './notifier.ts'
 import { minecraftAdmin, minecraftOverview, minecraftStatus, rconConfigured } from './minecraft.ts'
 import { search, clearSearchCache, orgAccess } from './search.ts'
@@ -569,6 +569,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/push/native' && method === 'DELETE') return json(res, 200, removeNative(requireUser(req), (await readJson<{ rid?: unknown }>(req, 2 * 1024)).rid)), true
     if (path === '/api/push/test' && method === 'POST') {
       const user = requireUser(req)
+      allowNativeTest(user.id)
       const test = { title: 'MvL OS', body: 'Push notifications work on this device.' }
       const web = await pushToUser(user, { ...test, tag: 'push-test', url: '/' })
       const app = nativeDevices(user.id) ? await pushNative(user, { source: 'test', ...test }) : { sent: 0, failed: 0 }

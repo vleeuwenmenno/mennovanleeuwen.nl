@@ -29,19 +29,18 @@ public final class PushTokenWorker extends Worker {
         if (rid == null || !state.isCurrent(gen, rid)) return Result.success();
         try {
             String token = Tasks.await(FirebaseMessaging.getInstance().getToken(), 30, TimeUnit.SECONDS);
-            String cap = state.capability(gen, rid);
-            if (cap == null || token == null) return Result.success();
-            String origin = state.snapshot().origin;
-            if (origin == null) return Result.success();
-            PushApi.Result r = PushApi.bearer("PUT", origin, "/api/push/native/token", cap, new JSONObject().put("token", token));
+            // Origin, registration and capability in one read under this generation, or nothing.
+            PushState.Credential cred = state.credential(gen, rid);
+            if (cred == null || token == null) return Result.success();
+            PushApi.Result r = PushApi.bearer("PUT", cred.origin, "/api/push/native/token", cred.capability, new JSONObject().put("token", token));
             if (r.status == 204 || r.status == 200) return Result.success();
             if (r.status == 401) {
-                if (state.isCurrent(gen, rid)) PushOwner.revoke(c);
+                PushOwner.revokeIfCurrent(c, gen, rid);
                 return Result.success();
             }
             if (r.status == 409) {
-                // The token is another registration's (a restored copy): make a new one.
-                Tasks.await(FirebaseMessaging.getInstance().deleteToken(), 30, TimeUnit.SECONDS);
+                // The token is another registration's (a restored copy): make a new one, only if this is still the current registration.
+                PushOwner.deleteTokenIfCurrent(c, gen, rid);
                 return getRunAttemptCount() < 3 ? Result.retry() : Result.failure();
             }
             return r.status == 0 || r.status >= 500 ? (getRunAttemptCount() < 6 ? Result.retry() : Result.failure()) : Result.failure();

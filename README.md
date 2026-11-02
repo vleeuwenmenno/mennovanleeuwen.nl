@@ -4343,7 +4343,13 @@ second model family; the invariants below are what must not be weakened):
   new sign-in revoke on the phone first and wait for the owner's acknowledgement
   (`PushController.revokeBlocking`, before cookies are replaced or deleted): state cleared,
   auto-init off, token deleted, notifications cancelled, work cancelled. Only the **revocation key**
-  is kept (at most 30 days, sealed) so a server row can still be deleted after an offline Disconnect.
+  is kept (at most 30 days, sealed) so a server row can still be deleted after an offline Disconnect
+  (a network-constrained retry job, with the credential exactly as the server gave it). An opt-in
+  enrolls only if the generation it started under is still current (a Disconnect, revoke or other
+  enrollment in between refuses it and the registration is deleted again); origin, registration and
+  capability are read together under one generation and credentials are only ever sent to an
+  allow-listed origin; a stale worker can never revoke a newer registration (`revokeIfCurrent`).
+  A Disconnect whose revoke is not acknowledged deletes nothing and reports the reset as not done.
   Settings lists the account's phones and removes one (the app notices on the next call, a 401, and
   turns itself off).
 - **Safe deep links.** The server builds the address from a short list (`/`, or `/?open=` agents

@@ -43,7 +43,7 @@ public class PushOwnerService extends Service {
                             out.putBoolean("ok", true);
                             break;
                         case OP_ENROLL:
-                            boolean ok = in != null && PushOwner.enroll(getApplicationContext(), in.getString("origin"), in.getString("uid"), in.getString("rid"), in.getString("cap"), in.getString("rev"));
+                            boolean ok = in != null && PushOwner.enroll(getApplicationContext(), in.getLong("gen", -1), in.getString("origin"), in.getString("uid"), in.getString("rid"), in.getString("cap"), in.getString("rev"));
                             out.putBoolean("ok", ok);
                             break;
                         case OP_REFRESH:

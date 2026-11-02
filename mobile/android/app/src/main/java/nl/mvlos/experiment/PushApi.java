@@ -47,7 +47,8 @@ final class PushApi {
         HttpURLConnection c = null;
         try {
             ServerUrl.Result checked = ServerUrl.normalize(origin);
-            if (!checked.ok() || !checked.origin.equals(origin) || !path.startsWith("/api/push/native")) return new Result(0, null);
+            // Credentials only ever go to an origin this build allows, whoever asks.
+            if (!checked.ok() || !checked.origin.equals(origin) || !PushOrigins.allowed(BuildConfig.PUSH_ORIGINS, origin) || !path.startsWith("/api/push/native")) return new Result(0, null);
             c = (HttpURLConnection) new URL(origin + path).openConnection();
             c.setRequestMethod(method);
             c.setInstanceFollowRedirects(false);

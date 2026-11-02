@@ -30,6 +30,9 @@ const TTL_SECONDS = 900
 const PROJECT = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/
 /** A message may hold at most this many bytes of data: it carries ids only. */
 const MAX_DATA_BYTES = 1024
+/** Sends to Google that may be under way at once, for the whole server. */
+const MAX_IN_FLIGHT = 16
+let inFlight = 0
 
 const realTransport: FcmTransport = {
   async token(assertion) {
@@ -60,6 +63,7 @@ export function setFcmTransport(t: FcmTransport | null) {
   cached = null
   inflight = null
   pausedUntil = 0
+  inFlight = 0
 }
 
 type Account = { project: string; email: string; key: string }
@@ -134,6 +138,17 @@ export async function sendData(token: string, data: Record<string, string>): Pro
   const a = loadAccount()
   if (!a || Date.now() < pausedUntil) return 'failed'
   if (dataSize(data) > MAX_DATA_BYTES) return 'failed'
+  // Bounded work: past this many sends in flight, more are shed (reported as failed), never queued without end.
+  if (inFlight >= MAX_IN_FLIGHT) return 'failed'
+  inFlight++
+  try {
+    return await send(a, token, data)
+  } finally {
+    inFlight--
+  }
+}
+
+async function send(a: Account, token: string, data: Record<string, string>): Promise<FcmResult> {
   const message = { token, data, android: { priority: 'HIGH', ttl: `${TTL_SECONDS}s` } }
   for (let attempt = 0; attempt < 2; attempt++) {
     const at = await accessToken(a)

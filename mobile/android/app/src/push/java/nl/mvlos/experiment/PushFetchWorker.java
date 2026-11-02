@@ -30,12 +30,12 @@ public final class PushFetchWorker extends Worker {
         String nid = getInputData().getString("nid");
         long arrived = getInputData().getLong("at", 0);
         if (rid == null || nid == null || !state.isCurrent(gen, rid)) return Result.success();
-        String cap = state.capability(gen, rid);
-        String origin = state.snapshot().origin;
-        if (cap == null || origin == null) return Result.success();
-        PushApi.Result r = PushApi.bearer("GET", origin, "/api/push/native/notification/" + nid, cap, null);
+        // Origin, registration and capability in one read under this generation, or nothing.
+        PushState.Credential cred = state.credential(gen, rid);
+        if (cred == null) return Result.success();
+        PushApi.Result r = PushApi.bearer("GET", cred.origin, "/api/push/native/notification/" + nid, cred.capability, null);
         if (r.status == 401) {
-            if (state.isCurrent(gen, rid)) PushOwner.revoke(c);
+            PushOwner.revokeIfCurrent(c, gen, rid);
             return Result.success();
         }
         if (r.status == 0 || r.status >= 500) {

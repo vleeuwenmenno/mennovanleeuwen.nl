@@ -39,9 +39,12 @@ final class PushOwner {
     }
 
     /** The user confirmed, the server activated: this registration is the current one now. */
-    static boolean enroll(Context c, String origin, String uid, String rid, String capability, String revocationKey) {
+    static boolean enroll(Context c, long expectedGeneration, String origin, String uid, String rid, String capability, String revocationKey) {
         if (!PushOrigins.allowed(BuildConfig.PUSH_ORIGINS, origin)) return false;
         synchronized (LOCK) {
+            // The generation the opt-in started under must still be current: a revoke, a Disconnect or
+            // another enrollment since then makes this one stale, and it is refused.
+            if (PushStore.get(c).generation() != expectedGeneration) return false;
             try {
                 PushStore.get(c).enroll(origin, uid, rid, capability, revocationKey);
             } catch (RuntimeException e) {
@@ -56,6 +59,25 @@ final class PushOwner {
         }
         uploadToken(c);
         return true;
+    }
+
+    /** Revokes only if `rid` is still the current registration of `generation`, as one step (a stale worker must not end a newer one). */
+    static void revokeIfCurrent(Context c, long generation, String rid) {
+        synchronized (LOCK) {
+            if (PushStore.get(c).isCurrent(generation, rid)) revoke(c);
+        }
+    }
+
+    /** Deletes the device token only while `rid` is still current: the token is shared by all registrations. */
+    static void deleteTokenIfCurrent(Context c, long generation, String rid) {
+        synchronized (LOCK) {
+            if (!PushStore.get(c).isCurrent(generation, rid)) return;
+            try {
+                FirebaseMessaging.getInstance().deleteToken();
+            } catch (RuntimeException ignored) {
+                // Not configured.
+            }
+        }
     }
 
     /** Stops everything now (state first, then the rest), then tries the server for the delete-only records. */
@@ -91,17 +113,15 @@ final class PushOwner {
             .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build());
     }
 
-    /** Deletes registrations that were revoked locally, with the delete-only key, in the background. */
+    /** Deletes registrations that were revoked locally, with their revocation credential, as durable network-constrained work. */
     static void retryPending(Context c) {
-        final Context app = c.getApplicationContext();
-        new Thread(() -> {
-            PushState state = PushStore.get(app);
-            for (PushState.Pending p : state.pending()) {
-                PushApi.Result r = PushApi.bearer("DELETE", p.origin, "/api/push/native", p.rid + "." + p.revocationKey, null);
-                // 204: done. 401/404: the server does not know it (the session ended): done too.
-                if (r.status == 204 || r.status == 200 || r.status == 401 || r.status == 404) state.dropPending(p.rid);
-            }
-        }).start();
+        try {
+            WorkManager.getInstance(c).enqueueUniqueWork("push-pending", androidx.work.ExistingWorkPolicy.KEEP, new OneTimeWorkRequest.Builder(PushRetryWorker.class)
+                .setConstraints(new Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES).build());
+        } catch (RuntimeException ignored) {
+            // Work manager not ready: the next start tries again.
+        }
     }
 
     static void channel(Context c) {
