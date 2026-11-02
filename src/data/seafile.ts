@@ -313,6 +313,13 @@ export function cachedDir(path: string): { listing: Listing | null; status: numb
   return hit && !hit.loading ? { listing: hit.listing, status: hit.status } : null
 }
 
+/** The last listing kept for a folder, also while it is being fetched again; undefined when nothing is
+ * cached (never listed, or dropped by refreshDirs after a change made here). */
+export function cachedListing(path: string): Listing | null | undefined {
+  const hit = dirCache.get(path)
+  return hit ? hit.listing : undefined
+}
+
 /** The status a Seafile call failed with (423: locked), if it kept one. */
 export const errorStatus = (e: unknown): number | null => (e instanceof ApiError ? e.status : null)
 

@@ -72,10 +72,23 @@ export const revocationsOf = (trust: TrustState, instance: string) => Object.val
 /** Whether a grant has observed every current revocation of its instance. */
 export const grantLive = (trust: TrustState, grant: TrustGrant) => revocationsOf(trust, grant.instance).every(id => grant.after.includes(id))
 
-/** Grants defeated by a revocation stay defeated forever (revocations are never removed), so dropping them changes nothing but size. */
+/** The installation generation a grant was made for (the first element of the installation identity). */
+export function grantGeneration(g: TrustGrant): number {
+  try { const v = JSON.parse(g.installation) as unknown; return Array.isArray(v) && Number.isSafeInteger(v[0]) && Number(v[0]) > 0 ? Number(v[0]) : 0 } catch { return 0 }
+}
+/**
+ * Drops grants that can never count again, which changes nothing but size:
+ * - a grant defeated by a revocation stays defeated forever (revocations are never removed);
+ * - a grant for an older installation generation of its instance than another grant of that instance
+ *   can never match again: installation generations only grow (a newer activation, recovery or
+ *   removal always has a higher one), and a grant matches one exact installation identity.
+ * Both rules depend only on the merged data, so every device prunes the same way.
+ */
 function prune(trust: TrustState): TrustState {
+  const newest = new Map<string, number>()
+  for (const g of Object.values(trust.grants)) if (grantLive(trust, g)) newest.set(g.instance, Math.max(newest.get(g.instance) ?? 0, grantGeneration(g)))
   const grants: Record<string, TrustGrant> = {}
-  for (const [id, g] of Object.entries(trust.grants)) if (grantLive(trust, g)) put(grants, id, g)
+  for (const [id, g] of Object.entries(trust.grants)) if (grantLive(trust, g) && grantGeneration(g) === newest.get(g.instance)) put(grants, id, g)
   return { grants, revoked: trust.revoked }
 }
 
@@ -110,7 +123,8 @@ export function effectiveGrant(trust: TrustState, subject: TrustSubject): TrustG
 export function newGrant(trust: TrustState, subject: Omit<TrustSubject, 'kind' | 'account'>, id: string, at: number): TrustGrant {
   const after = revocationsOf(trust, subject.instance)
   if (after.length > TRUST_LIMITS.after) throw new Error('This widget was revoked too many times to trust it again; remove it and make a new one')
-  if (Object.keys(trust.grants).length >= TRUST_LIMITS.grants) throw new Error('Too many trusted widgets; revoke one first')
+  // This instance's own earlier grants are for older installations and are dropped when this one merges.
+  if (Object.values(trust.grants).filter(g => g.instance !== subject.instance).length >= TRUST_LIMITS.grants) throw new Error('Too many trusted widgets; revoke one first')
   const grant = grantOf(id, { id, instance: subject.instance, package: subject.package, source: subject.source, digest: subject.digest, installation: subject.installation, at, after })
   if (!grant) throw new Error('Invalid trust record')
   return grant

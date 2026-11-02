@@ -7,7 +7,7 @@ import { accountGuard } from '../../os/accountSpace'
 import { isMobile, useIsMobile } from '../../os/useIsMobile'
 import { useWM, type WinState } from '../../os/wm'
 import { defaultBuild } from './defaults'
-import { hasAccess, useRevisionGrant, useTrusted, allowRevision, revokeRevision, revokeTrust, trustEligibility, trustInstallation, installations, installationVersion, useInstallationPresence, useInstallationRemoved, type Revision } from './installations'
+import { hasAccess, useRevisionGrant, useTrustStatus, useRetainsTrust, allowRevision, revokeRevision, revokeTrust, trustEligibility, trustInstallation, installations, installationVersion, useInstallationPresence, useInstallationRemoved, type Revision } from './installations'
 import { CUSTOM_KIND, customState, isInstanceKind, supportsCapabilities, descriptor, verifySnapshot, sourceIdentityOf, type Capability, type Descriptor, type Snapshot, type WidgetInput } from './package'
 import { customInput, customRevision } from './records'
 import { getWidgetConfig, setWidgetConfig, useWidgetConfig } from '../config'
@@ -89,12 +89,16 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const visible = shellVisible && phoneAllowed(mobile, revision) && !win.minimized
   // Allowed once in this session, or trusted always (a valid persistent grant for exactly this installation).
   const session = useRevisionGrant(id, revision)
-  const trusted = useTrusted(id, revision)
+  // Trusted only with live evidence from this device's own storage (see useTrustStatus): while it is
+  // being checked nothing runs, and a missing or mismatching source falls back to asking.
+  const trust = useTrustStatus(id, revision)
+  const trusted = trust.state === 'trusted'
+  const retained = useRetainsTrust(id)
   const permitted = session || trusted
   const [trustOffer, setTrustOffer] = useState<{ key: string; ok: boolean; reason: string } | null>(null)
   const holdsState = !!revision?.snapshot.manifest.capabilities.includes('custom.state')
   const stateProblem = custom && holdsState ? (() => { try { customState(stored); return '' } catch { return 'Stored widget state is invalid or too large. Reset it from Source.' } })() : ''
-  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent, permitted, trusted])
+  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent, permitted, trust.state])
   const latest = useRef({ identity, visible })
   latest.current = { identity, visible }
   const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && phoneAllowed(isMobile(), revision) && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id
@@ -119,7 +123,7 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
     return () => { live = false }
   }, [current, kind, retry])
   // Whether the consent banner may also offer "Trust always": the same canonical gate the click runs again.
-  const offerKey = custom && !permitted && revision ? JSON.stringify([id, account.user?.id, revision.source, revision.snapshot.digest, version.identity]) : ''
+  const offerKey = custom && !permitted && trust.state !== 'checking' && revision ? JSON.stringify([id, account.user?.id, revision.source, revision.snapshot.digest, version.identity]) : ''
   useEffect(() => {
     if (!offerKey || !revision) return
     let live = true
@@ -224,11 +228,12 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       {kind === 'weather' && <WeatherControls id={id} refresh={() => setTick(n => n + 1)} eligible={eligible} onOpen={setPlaceOpen} slot={placeSlot} />}
       <ToolButton icon="code" label="Source" title="Edit widget source" aria="Edit widget source" onClick={() => wm.open('widgetworkshop', { id, kind })} />
       {session && revision?.source.kind !== 'system' && <ToolButton icon="pause" label="Pause access" onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }} />}
-      {trusted && <ToolButton icon="shield" label="Revoke trust" title="Stop trusting this widget on every device; it asks again before it runs" onClick={() => { setView(null); setConsent(n => n + 1); revokeTrust(id).catch(error => setError({ code: 'grant', message: error instanceof Error ? error.message : 'Trust was not revoked' })) }} />}
+      {retained && <ToolButton icon="shield" label="Revoke trust" title={trusted ? 'Stop trusting this widget on every device; it asks again before it runs' : 'End every earlier Trust always decision for this widget, on every device'} onClick={() => { setView(null); setConsent(n => n + 1); revokeTrust(id).catch(error => setError({ code: 'grant', message: error instanceof Error ? error.message : 'Trust was not revoked' })) }} />}
       {kind === 'sticky' && <ToolButton icon="book" label="Notebook & links" onClick={() => wm.open('notebook', { id })} />}
     </Toolbar>
     <div ref={setPlaceSlot} />
-    {!permitted && revision ? <div className="wp-consent">
+    {!permitted && revision && trust.state === 'checking' ? <p className="wp-loading" role="status" data-trust-checking>Checking this trusted widget's folder…</p> : !permitted && revision ? <div className="wp-consent">
+      {trust.state === 'refused' && <small className="wp-trust-reason" data-trust-refused>Trusted, but not on this device now: {trust.reason}</small>}
       <button className="wp-allow" title="Allow once: until you pause it, reload or sign out" onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button>
       {custom && offer?.ok && <button className="wp-trust" title="Runs without asking on every device you sign in to, for these exact bytes only. Any edit asks again. Revoke it from the widget's toolbar." onClick={event => { const gesture = event.nativeEvent; trustInstallation(id, revision, gesture).then(() => setConsent(n => n + 1), error => setError({ code: 'grant', message: error instanceof Error ? error.message : 'Could not trust this widget' })) }}>Trust always</button>}
       {custom && offer && !offer.ok && <small className="wp-trust-reason">Allow once only: {offer.reason}</small>}

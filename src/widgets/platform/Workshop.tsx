@@ -7,7 +7,7 @@ import { useWM, type WinState } from '../../os/wm'
 import { useAccount } from '../../os/account'
 import { ask } from '../../os/Dialogs'
 import { defaultBuild } from './defaults'
-import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, trustBuildEligibility, trustInstallation, useInstallationPresence, useTrusted, type Revision, type TrustEligibility } from './installations'
+import { activate, allowRevision, installation, installationIdentity, installationVersion, installations, InstallFailure, recover, removeInstallation, trustBuildEligibility, trustInstallation, useInstallationPresence, useTrustStatus, type Revision, type TrustEligibility } from './installations'
 import { CUSTOM_KIND, isInstanceKind, buildPackage, descriptor, supportsCapabilities, type Descriptor } from './package'
 import { cloneDefault, cloneTemplate, readSource, sourceIdentity, sourcePath, WIDGET_HOME } from './sources'
 import { execute } from './runtime'
@@ -45,7 +45,7 @@ export function Workshop({ win }: { win: WinState }) {
   // "Trust always", offered for a successful build that passes the canonical gate; checked by the person only.
   const [trustChoice, setTrustChoice] = useState(false)
   const [trustCheck, setTrustCheck] = useState<{ digest: string; result: TrustEligibility } | null>(null)
-  const trustedNow = useTrusted(instance ?? '', current ? current.active : null)
+  const trustedNow = useTrustStatus(instance ?? '', current ? current.active : null).state === 'trusted'
   const [busy, setBusy] = useState(false)
   const generation = useRef(instance ? installationVersion(instance).generation : 0)
   const expectedIdentity = useRef(instance ? installationVersion(instance).identity : '')

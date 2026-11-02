@@ -7,13 +7,18 @@
 //   - Revoke trust is immediate and survives a reload; Trust always from the banner works after observing it;
 //   - one source byte edit is a new digest with no authority; a folder outside the canonical path, `..` paths and an
 //     agent's activation (browserHost, activate --new path) never trust;
-//   - removal revokes, and a stale copy of the old envelope cannot bring the trust back.
+//   - removal revokes, and a stale copy of the old envelope cannot bring the trust back;
+//   - live source: a bind mount over the folder, an in-place edit and a deleted folder each stop the widget at once
+//     with no access; the first two run again once undone, a deletion revokes for good (same bytes back, reload);
+//     a second browser of the same account (no source there) never runs it.
 // Seafile home (mock Seafile behind the real server, user 2, two browsers = two devices):
 //   - trusted on device A, it runs on device B without asking;
 //   - entries Seafile reports as anything but a plain file or folder (inside the folder or on an ancestor) and a
 //     bind mount on the canonical path are refused;
 //   - A trusts, B revokes, a stale A syncs: no resurrection; A re-trusts while B (stale) revokes concurrently:
-//     blocked; after observing both revocations A trusts again and both devices run it.
+//     blocked; after observing both revocations A trusts again and both devices run it;
+//   - a read-only home mount and a link entry appearing stop it (no revocation); the folder deleted in Seafile: B loading
+//     then never runs and revokes, A stops, and putting the folder back plus a stale account copy does not restore it.
 // Synthetic data, muted Chromium, scratch DATA_DIR. Exits 1 on any failure.
 import { randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -124,7 +129,13 @@ async function realClick(p: Page, sel: string, text?: string) {
   await p.clickText(sel, text)
 }
 const instanceOf = (p: Page) => run<string>(p, `return Object.values(i.installations.get()).find(x=>x.kind==='custom')?.instance ?? ''`)
-const trusted = (p: Page, id: string) => run<boolean>(p, `return !!i.persistentTrust(${JSON.stringify(id)}, i.installation(${JSON.stringify(id)})?.active ?? null)`)
+/** Trusted with live evidence on this device (a recorded grant alone does not count). */
+const trusted = (p: Page, id: string) => run<boolean>(p, `return i.trustStatus(${JSON.stringify(id)}, i.installation(${JSON.stringify(id)})?.active ?? null).state==='trusted'`)
+const recorded = (p: Page, id: string) => run<boolean>(p, `return !!i.persistentTrust(${JSON.stringify(id)}, i.installation(${JSON.stringify(id)})?.active ?? null)`)
+const retains = (p: Page, id: string) => run<boolean>(p, `return i.retainsTrust(${JSON.stringify(id)})`)
+const revocations = (p: Page, id: string) => run<number>(p, `return Object.values(c.canonicalTrust.get().revoked).filter(r=>r.instance===${JSON.stringify(id)}).length`)
+/** Asks, with nothing running and no Allow once behind it. */
+const noAccess = async (p: Page, id: string) => !(await trusted(p, id)) && !(await sessionGrant(p, id)) && !(await run<boolean>(p, `const r=i.installation(${JSON.stringify(id)})?.active;return !!r&&i.hasAccess(${JSON.stringify(id)},r)`))
 const sessionGrant = (p: Page, id: string) => run<boolean>(p, `const r=i.installation(${JSON.stringify(id)})?.active;return !!r&&i.hasGrant(${JSON.stringify(id)},r)`)
 const toolClick = (p: Page, label: string) => p.eval(`(()=>{const b=[...document.querySelectorAll('${pkg} .wp-tool')].find(b=>b.textContent.trim()===${JSON.stringify(label)});if(!b)throw Error('no tool '+${JSON.stringify(label)});b.click()})()`)
 const serverTrust = async (sid: string) => {
@@ -183,6 +194,48 @@ try {
   await runs(p)
   check('... and it survives a reload', await trusted(p, id))
 
+  // Live source on this device: a recorded grant runs the widget only while its folder is there, unchanged.
+  const base = '/.local/share/mvlos/widgets/daily-tally'
+  const HOME1 = await p.eval<string>(`import('/src/terminal/vfs.ts').then(m=>m.HOME)`)
+  const revokedBefore = await revocations(p, id)
+  await run(p, `const m=await import('/src/data/mounts.ts');const e=m.mountEntry({source:'/tmp',target:${JSON.stringify(HOME1 + base)},type:'none',options:['bind'],dump:'0',pass:'0'});if(e)throw Error(e)`)
+  await asks(p)
+  check('remounted: a bind mount over the trusted folder stops it at once, with no access at all', await noAccess(p, id) && await recorded(p, id) && await p.eval(`(document.querySelector('${pkg} [data-trust-refused]')?.textContent??'').includes('bind mount')`))
+  await run(p, `const m=await import('/src/data/mounts.ts');const e=m.unmount(${JSON.stringify(HOME1 + base)});if(e)throw Error(e)`)
+  await runs(p)
+  check('unmounted: the same trusted bytes run again without a gesture (a mount is not a revocation)', await trusted(p, id) && await revocations(p, id) === revokedBefore)
+  const files = await run<Record<string, string>>(p, `const b=await import('/src/data/browserfs.ts');const out={};const walk=async d=>{for(const e of b.listBrowser(d)){if(e.dir)await walk(e.path);else out[e.path]=await b.readBrowserText(e.path)}};await walk(${JSON.stringify(base)});return out`)
+  const mainFile = `${base}/src/main.js`
+  await run(p, `const b=await import('/src/data/browserfs.ts');await b.writeBrowserFile(${JSON.stringify(mainFile)},${JSON.stringify(files[mainFile] + '// edited')})`)
+  await asks(p)
+  check('edited in place: the trusted widget stops at once (the folder no longer matches), no access', await noAccess(p, id))
+  await run(p, `const b=await import('/src/data/browserfs.ts');await b.writeBrowserFile(${JSON.stringify(mainFile)},${JSON.stringify(files[mainFile])})`)
+  await runs(p)
+  check('the exact trusted bytes back: it runs again', await trusted(p, id))
+  await run(p, `const b=await import('/src/data/browserfs.ts');await b.removeBrowser(${JSON.stringify(base)})`)
+  await asks(p)
+  await p.waitFor(`(async()=>{const i=${M.inst};return !i.retainsTrust(${JSON.stringify(id)})})()`, 20_000)
+  check('source deleted: no access, and the trust is revoked for good (a revocation, not just a refusal)', await noAccess(p, id) && await revocations(p, id) === revokedBefore + 1)
+  await run(p, `const b=await import('/src/data/browserfs.ts');const files=${JSON.stringify(files)};for(const [f,t] of Object.entries(files)){await b.mkdirBrowser(f.slice(0,f.lastIndexOf('/')),true);await b.writeBrowserFile(f,t)}`)
+  await sleep(800)
+  check('the same bytes put back do not bring trust back', await noAccess(p, id) && !(await retains(p, id)))
+  await sleep(1200)
+  await boot(p)
+  await asks(p)
+  check('... not after a reload either', await noAccess(p, id))
+  await p.waitFor(`!!document.querySelector('${pkg} .wp-trust')`, 20_000)
+  await realClick(p, `${pkg} .wp-trust`)
+  await runs(p)
+  check('trusting again needs a new click, and works once every revocation was seen', await trusted(p, id))
+
+  // A second device of the same account: the browser-files source is not there, so it never runs without asking.
+  const p2 = await device(session(1), 'trust-files', 1)
+  await boot(p2)
+  await p2.waitFor(`!!document.querySelector('${pkg}')`, 30_000)
+  await asks(p2)
+  await sleep(1500)
+  check('second device without the source: the synced grant gives no access there', await noAccess(p2, id) && !(await p2.eval(`!!document.querySelector('${pkg} .wp-trust')`)))
+
   // One source byte edit: a new digest with no authority.
   await run(p, `const b=await import('/src/data/browserfs.ts');const f='/.local/share/mvlos/widgets/daily-tally/src/main.js';await b.writeBrowserFile(f,(await b.readBrowserText(f))+' ')`)
   await workshop(p, { id, t: String(Date.now()) })
@@ -192,9 +245,9 @@ try {
   const edited = await run<string>(p, `return document.querySelector('.wp-workshop').textContent.match(/Built ([0-9a-f]{64})/)[1]`)
   check('one source byte edit builds a new digest', edited !== active.digest)
   await activateFromWorkshop(p, 'Activate built revision', false)
-  check('the edited revision has no persistent authority (it runs only on this session\'s Allow)', !(await trusted(p, id)) && await sessionGrant(p, id))
+  check('the edited revision has no persistent authority (it runs only on this session\'s Allow)', !(await trusted(p, id)) && !(await recorded(p, id)) && await sessionGrant(p, id))
   t = await tools(p)
-  check('toolbar after the edit: Pause access, no Revoke trust', t.includes('Pause access') && !t.includes('Revoke trust'), t)
+  check('toolbar after the edit: Pause access, and Revoke trust for the earlier revision\'s decision', t.includes('Pause access') && t.includes('Revoke trust'), t)
   await closeAll(p, 'widgetworkshop')
   await sleep(1200)
   await boot(p)
@@ -325,7 +378,44 @@ try {
   await realClick(A, `${pkg} .wp-trust`); await runs(A); await flush(A)
   await pull(B); await runs(B)
   check('after observing every revocation, A trusts again and both devices run it', await trusted(A, sid) && await trusted(B, sid))
-  const errors = [...p.errors, ...A.errors, ...B.errors].filter((e) => !/ResizeObserver|Failed to fetch|NetworkError|net::ERR/.test(e))
+
+  // Live source on Seafile: read-only, an unknown entry type, then deletion (seen by a device at load).
+  const homeLine = /^(UUID=\S+\s+\S+\s+seafile\s+)defaults/m
+  await run(A, `const m=await import('/src/data/mounts.ts');m.setFstab(m.getFstab().replace(${homeLine.toString()},'$1ro'))`)
+  await asks(A)
+  check('read-only home mount: the trusted widget stops at once, no access, no revocation', await noAccess(A, sid) && await retains(A, sid) && await A.eval(`(document.querySelector('${pkg} [data-trust-refused]')?.textContent??'').includes('read-only')`))
+  await run(A, `const m=await import('/src/data/mounts.ts');m.setFstab(m.getFstab().replace(/^(UUID=\\S+\\s+\\S+\\s+seafile\\s+)ro/m,'$1defaults'))`)
+  await runs(A)
+  check('writable again: it runs again', await trusted(A, sid))
+  lib.files.set(`${folder}/assets/note.txt`, { dir: false, data: Buffer.from('x'), mtime: Math.floor(Date.now() / 1000), type: 'symlink' })
+  await run(A, `const sf=await import('/src/data/seafile.ts');sf.refreshDirs(sf.sfPath(${JSON.stringify(MY_LIBRARY)},${JSON.stringify(folder)}))`)
+  await asks(A)
+  check('an entry Seafile reports as a link appears: no access until it is gone, no revocation', await noAccess(A, sid) && await retains(A, sid))
+  lib.files.delete(`${folder}/assets/note.txt`)
+  await run(A, `const sf=await import('/src/data/seafile.ts');sf.refreshDirs(sf.sfPath(${JSON.stringify(MY_LIBRARY)},${JSON.stringify(folder)}))`)
+  await runs(A)
+  check('the link gone: it runs again', await trusted(A, sid))
+  const staleTrust = await run<unknown>(A, `return c.canonicalTrust.get()`)
+  const saved = [...lib.files].filter(([k]) => k === folder || k.startsWith(`${folder}/`))
+  for (const [k] of saved) lib.files.delete(k)
+  await sleep(1200)
+  await boot(B)
+  await B.waitFor(`!!document.querySelector('${pkg}')`, 30_000)
+  await asks(B)
+  await B.waitFor(`(async()=>{const i=${M.inst};return !i.retainsTrust(${JSON.stringify(sid)})})()`, 30_000)
+  check('second device loads with the source deleted: never runs, and revokes the trust for good', await noAccess(B, sid))
+  await flush(B)
+  await A.waitFor(`(async()=>{const i=${M.inst};return i.trustStatus(${JSON.stringify(sid)},i.installation(${JSON.stringify(sid)}).active).state!=='trusted'})()`, 30_000)
+  await asks(A)
+  check('device A stops once its own check (at most 20 s) or the synced revocation reaches it', await noAccess(A, sid))
+  for (const [k, v] of saved) lib.files.set(k, v)
+  await pull(A); await pull(B)
+  await run(A, `const sf=await import('/src/data/seafile.ts');sf.refreshDirs(sf.sfPath(${JSON.stringify(MY_LIBRARY)},'/'))`)
+  await sleep(1500)
+  const undo = await run<{ live: boolean; retained: boolean }>(A, `const tm=await import('/src/widgets/platform/trust.ts');const merged=tm.mergeTrust(c.canonicalTrust.get(),tm.normalizeTrust(${JSON.stringify(staleTrust)}));return {live:Object.values(merged.grants).some(g=>g.instance===${JSON.stringify(sid)}),retained:i.retainsTrust(${JSON.stringify(sid)})}`)
+  check('the folder put back, and a stale copy of the account state merged in: trust stays revoked', !undo.live && !undo.retained && await noAccess(A, sid) && await noAccess(B, sid), undo)
+
+  const errors = [...p.errors, ...p2.errors, ...A.errors, ...B.errors].filter((e) => !/ResizeObserver|Failed to fetch|NetworkError|net::ERR/.test(e))
   check('no page errors', errors.length === 0, errors)
 } catch (error) {
   failed++

@@ -91,6 +91,25 @@ test('trusting again after observing every revocation works; a concurrent unseen
   const seen = mergeTrust(again, concurrent)
   assert.equal(live(add(seen, grantNow(seen))), true, 'after observing both revocations, trusting again works')
 })
+test('70 edit/activate/trust cycles of one widget: older generations retire, the newest stays trusted', () => {
+  let t = emptyTrust()
+  for (let gen = 1; gen <= 70; gen++) {
+    const installation = JSON.stringify([gen, DIGEST])
+    t = add(t, grantNow(t, gen, { installation }))
+    assert.equal(Object.keys(t.grants).length, 1, `generation ${gen}: one retained grant`)
+    assert.equal(live(t, { installation }), true, `generation ${gen}: trusted`)
+    assert.equal(live(t, { installation: JSON.stringify([gen - 1, DIGEST]) }), false)
+  }
+  // A stale device's grant for an older generation cannot come back either.
+  const old = { ...Object.values(t.grants)[0], id: uuid(), installation: JSON.stringify([3, DIGEST]) }
+  assert.equal(Object.values(mergeTrust(t, normalizeTrust({ grants: { [old.id]: old }, revoked: {} })).grants).some(g => g.id === old.id), false)
+})
+test('the grant quota counts other widgets only; a revoked widget can still be revoked again and re-trusted', () => {
+  let t = emptyTrust()
+  for (let k = 0; k < trustModel.TRUST_LIMITS.grants; k++) t = add(t, grantNow(t, 1, { instance: `custom-${String(k).padStart(8, '0')}` }))
+  assert.throws(() => grantNow(t, 1), /Too many trusted widgets/)
+  assert.doesNotThrow(() => grantNow(t, 1, { instance: 'custom-00000001', installation: '[9,"x"]' }), 'a widget that already has a grant can be trusted again for a new revision')
+})
 test('revocation and grants on other instances do not interfere', () => {
   const t = add(emptyTrust(), grantNow(emptyTrust()))
   assert.equal(live(revoke(t, 2000, 'custom-ffff0000').trust), true)

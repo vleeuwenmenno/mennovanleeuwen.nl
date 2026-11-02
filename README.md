@@ -4956,6 +4956,21 @@ only. Eligible means all of this, checked again on the click:
 Trust is pinned to those exact bytes: it records the instance, package id, source identity, digest,
 installation identity and the time. Any edit is a new digest and asks again, so does recovering
 another revision or a different installation. A grant that does not match is ignored, never repaired.
+
+A recorded grant alone never runs a widget. Each device checks with its own storage that the folder
+is still exactly there (the same gate as above, rebuilt to the pinned digest) and keeps what it saw
+as evidence. The evidence counts only while the device sees the same thing: the mounts, the folder
+and every entry in it are compared on every render and before every run and button action, and a
+Seafile check also expires after 20 seconds and is repeated. While a check runs the widget shows
+*Checking this trusted widget's folder…* and nothing runs. A device where the source is missing or
+different (another browser for a browser-files widget, a deleted or edited folder, a bind or
+read-only mount, an unknown entry type) falls back to asking, with the reason under *Allow this
+revision…*; putting the exact bytes back, or undoing the mount, runs it again. A folder deleted from
+its own storage revokes the trust for good (on every device, and the same bytes put back or a stale
+copy of the account state do not restore it). Seafile changes made elsewhere are noticed within the
+20 seconds. Trusting a newer revision of a widget retires the grants for its older installations
+(their installation generation can never come back), so a widget can be edited and trusted any
+number of times; **Revoke trust** stays available while any earlier decision is left.
 Only your own click (a browser-trusted event) creates trust: activation, builds, recovery, sync and the
 agents' `widget` command cannot (their activation is always `trust: false`). **Revoke trust** in the
 widget's toolbar (next to *Pause access*) ends trust and every Allow once grant for that widget at once,
