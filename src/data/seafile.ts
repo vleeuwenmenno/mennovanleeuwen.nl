@@ -28,7 +28,8 @@ export type IoGuard = {
 export const SF = 'seafile://'
 
 export type Library = { id: string; name: string; type: 'mine' | 'shared' | 'group' | 'public'; owner: string | null; encrypted: boolean; permission: 'r' | 'rw'; size: number; mtime: number }
-export type Entry = { name: string; dir: boolean; size: number; mtime: number; id: string; locked?: boolean }
+/** `type`: Seafile's dirent type as the server reports it ('other' for anything but a plain file or folder; absent from older servers). */
+export type Entry = { name: string; dir: boolean; size: number; mtime: number; id: string; locked?: boolean; type?: 'file' | 'dir' | 'other' }
 export type Listing = { perm: 'r' | 'rw'; entries: Entry[] }
 
 /** seafile://<repo>/a/b → { repo, p: '/a/b' }; null for any other path. */

@@ -241,6 +241,9 @@ export const subscribeBrowserFiles = (l: () => void) => {
 /** Re-renders whenever anything in the store changes. */
 export const useBrowserFiles = () => useSyncExternalStore(subscribeBrowserFiles, () => version)
 
+/** A stored entry only: never a launcher file projected from the synced launcher list. The store has
+ * no links or aliases; every stored path is a plain file or folder written through this module. */
+export const realBrowserEntry = (path: string): BrowserEntry | null => (state === 'ready' ? nodes.get(path) ?? null : null)
 export const statBrowser = (path: string): BrowserEntry | null => nodes.get(path) ?? (state === 'ready' ? (virtual?.stat(path) ?? null) : null)
 export function listBrowser(dir: string): BrowserEntry[] {
   const real = [...(children.get(dir) ?? [])].map((p) => nodes.get(p)!).filter(Boolean)

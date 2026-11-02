@@ -4930,10 +4930,46 @@ at most 4 KiB, read as `input.custom.state` and replaced only by a button event 
 large). Every package also sees the clock (`input.custom.now`, `input.custom.today`). There is no
 network, notes, other widget data or DOM. As for any fork, a revision never runs until you grant that
 exact revision for that instance in this session; after a reload the widget asks again
-(*Allow this revision…*) and **Pause access** withdraws it. **Reset saved state** in the Workshop
-clears the state. `pnpm check:widget-custom` covers manifest rules, the starter in the VM, the state
-limit and record merge/limits; `pnpm check:widget-custom-ui` runs the whole create, reload, use and remove
-flow in muted Chromium with scratch data.
+(*Allow this revision…*, which allows it once) and **Pause access** withdraws that session grant.
+**Reset saved state** in the Workshop clears the state. `pnpm check:widget-custom` covers manifest rules,
+the starter in the VM, the state limit and record merge/limits; `pnpm check:widget-custom-ui` runs the
+whole create, reload, use and remove flow in muted Chromium with scratch data.
+
+**Trust always.** A custom widget you made yourself can be trusted so it runs without asking, per
+account, on every device you sign in to. The Workshop offers *Trust this widget, so it runs without
+asking* next to the opt-in after a successful build (it applies when you activate), and the widget's
+own banner offers **Trust always** next to *Allow this revision…*. Both appear only when the build is
+eligible; otherwise the Workshop shows the box disabled with the reason and the banner offers Allow once
+only. Eligible means all of this, checked again on the click:
+
+- The folder is exactly `~/.local/share/mvlos/widgets/<manifest id>` (no `.`/`..`, nothing a path
+  resolver would rewrite) in home's own storage: the signed-in browser store on home, or a writable
+  Seafile library mounted on home. Not a bind mount, a read-only mount, another mount inside the
+  folder, `/mnt/browser`, a projected launcher entry, or a Seafile entry reported as anything other
+  than a plain file or folder (on the way to the folder or inside it). The browser store has no links
+  and Seafile libraries hold only files and folders, so an unknown entry type is refused rather than
+  resolved. A widget built anywhere else (`~/dev/…`, a folder an agent works in) always asks.
+- The build succeeds, the stored snapshot verifies, and its capabilities fit a custom widget.
+- It is the active revision of that installed custom widget, and rebuilding the folder now gives
+  the same digest.
+
+Trust is pinned to those exact bytes: it records the instance, package id, source identity, digest,
+installation identity and the time. Any edit is a new digest and asks again, so does recovering
+another revision or a different installation. A grant that does not match is ignored, never repaired.
+Only your own click (a browser-trusted event) creates trust: activation, builds, recovery, sync and the
+agents' `widget` command cannot (their activation is always `trust: false`). **Revoke trust** in the
+widget's toolbar (next to *Pause access*) ends trust and every Allow once grant for that widget at once,
+here and on other devices as soon as they sync. Removing the widget revokes too. Revocation is causal,
+not timed: every revocation has its own id, a grant lists the revocations its device had seen, and it
+counts only while it has seen all of them. A grant made on a device that had not seen a revocation
+(offline, a stale tab, a skewed clock) stays revoked, and a stale copy can never bring one back.
+Trusting again works after the device has seen every current revocation. Trust lives in the account's
+widget state (`widgets:state:v2`, schema 3; schema 2 data migrates with every config, placement and
+installation kept, and no trust). The server refuses a widget state written by an older version, so an
+old tab cannot drop revocations. `pnpm check:widget-trust` covers the grant predicate, causal merges,
+clock skew, the migration and the server refusal; `pnpm check:widget-trust-ui` runs the Workshop and
+banner flows, reloads, edits, refused folders and links, agent activation and two Seafile devices
+(including a stale and a concurrent revocation) in muted Chromium against a mock Seafile.
 
 **Sticky parity.** A Sticky shows the calendar events its note is linked to as the same chips the
 Notebook shows, under the package's own output: click one to open the event in Calendar, × to
@@ -4982,7 +5018,8 @@ their usual hash and read-before-edit rules:
   access being granted; Allow or Deny). Deny, Escape, a closed thread or no desktop to ask on: exit 1
   `activation requires approval` and nothing is written. On Allow the folder and the installation are checked
   again (changed source or a changed installation is refused as a conflict), then the same
-  `activate` + grant as the Workshop run. `--generation` makes a stale `widget list` a conflict. `--new` takes
+  `activate` + grant as the Workshop run, always with `trust: false`: there is no trust subcommand or
+  option, and an agent can never make a widget *Trust always* (only the user's own click can). `--generation` makes a stale `widget list` a conflict. `--new` takes
   its instance id from the folder and the digest, so retrying a call whose answer got lost says
   `already active` and changes nothing (no second widget, no second generation bump, no second dialog);
   edited source is a new digest, so update an installed widget with `--instance <id>`. Activation needs a
@@ -5020,7 +5057,8 @@ would otherwise straddle a byte boundary. All items remain reachable; the editor
 window, full source text and revision. Legacy `note.replace` is accepted only for a complete
 small projection. Native notes support 256 KiB UTF-8; existing larger notes remain readable and
 editable without truncation (up to 32 KiB growth per edit). Fork data grants bind account, backing identity, instance and source digest. They are local
-to the live session, never imported from build files or synced approval flags. **Pause access**
+to the live session, never imported from build files or synced approval flags (the one exception is a
+custom widget's explicit *Trust always*, see Custom widgets above). **Pause access**
 revokes the revision; logout cancels workers and denies stale writes. A reloaded fork needs a fresh local grant. A browser-backed fork arriving on a different browser
 is unavailable until cloned and rebuilt against that browser's own store; its imported UUID is not authority. Weather gets only a forecast projection for a host-selected place:
 search queries come from the trusted user-operated city picker, not package code. Preview uses

@@ -58,7 +58,9 @@ export type WidgetHost = {
   identity: (path: string) => Promise<SourceIdentity>
   readSource: (identity: SourceIdentity) => Promise<Files>
   signedIn: () => boolean
-  activate: (instance: string, kind: InstanceKind, revision: { source: SourceIdentity; snapshot: Snapshot }, expectedGeneration: number, expectedIdentity: string) => Promise<void>
+  /** Installs a revision. It never grants persistent trust: the only option is an explicit `trust: false`
+   * ("Trust always" is the person's own click on the desktop, with no command or host call for it). */
+  activate: (instance: string, kind: InstanceKind, revision: { source: SourceIdentity; snapshot: Snapshot }, expectedGeneration: number, expectedIdentity: string, options: { trust: false }) => Promise<void>
   allow: (instance: string, revision: { source: SourceIdentity; snapshot: Snapshot }) => void
   /** The user's answer in an OS dialog; resolves false for Deny, Escape and a cancelled call. */
   approve?: (request: ApprovalRequest, signal: AbortSignal) => Promise<boolean>
@@ -325,7 +327,7 @@ async function activateCommand(ctx: Ctx, host: WidgetHost, args: string[]) {
   ctx.signal.throwIfAborted()
   const revision = { source: identity, snapshot: rebuilt }
   try {
-    await host.activate(instance, kind, revision, before.generation, before.identity)
+    await host.activate(instance, kind, revision, before.generation, before.identity, { trust: false })
   } catch (e) {
     const message = explain(e)
     throw fail(/removed/.test(message) ? `${message} (change the source so its digest differs, or use another folder)` : `activation failed: ${message}`)
@@ -446,6 +448,8 @@ const MAN = `{c:bold}NAME{/}
        Workshop for the user. Only activate changes anything: it asks the user in a dialog and
        installs the exact revision that was approved. Denied, or no dialog to ask in: exit 1,
        "activation requires approval", no change. Retrying the same activate is harmless.
+       Activation never trusts a widget: it runs after the user allows it on the desktop, and
+       only the user can choose Trust always there.
        Reads follow the same permission rules as cat.
 
        Recommended loop: write the files, validate, test, preview, activate. widget docs has the

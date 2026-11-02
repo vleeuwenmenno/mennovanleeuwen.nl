@@ -438,7 +438,7 @@ try {
   assert.equal(unknownGuest.meta(KEY), null, 'failed account discovery is unknown, even without an account cookie')
 
   const unsupported = new Page('15', 'unsupported')
-  servers.get('15')!.set(KEY, { value: { schema: 3, future: true }, updatedAt: ++tick })
+  servers.get('15')!.set(KEY, { value: { schema: 4, future: true }, updatedAt: ++tick })
   await unsupported.init()
   await unsupported.login()
   await unsupported.pull()

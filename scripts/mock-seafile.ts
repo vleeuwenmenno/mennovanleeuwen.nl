@@ -17,7 +17,8 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http'
 import { deflateSync } from 'node:zlib'
 
-type Node = { dir: boolean; data: Buffer; mtime: number }
+/** `type`: the dirent type to report instead of file/dir (checks use it for entries Seafile itself would never list as a plain file or folder). */
+type Node = { dir: boolean; data: Buffer; mtime: number; type?: string }
 export type MockRepo = { id: string; name: string; files: Map<string, Node>; trash: { path: string; node: Node; deleted: number }[] }
 
 export const MY_LIBRARY = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -142,7 +143,7 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { vid
         if (!node?.dir) return fail(res, 404, 'Folder not found')
         const dirent_list = [...r.files.entries()]
           .filter(([k]) => k !== '/' && parentOf(k) === p)
-          .map(([k, n]) => ({ type: n.dir ? 'dir' : 'file', name: nameOf(k), id: `${k.length}${n.mtime}`, size: n.data.length, mtime: n.mtime }))
+          .map(([k, n]) => ({ type: n.type ?? (n.dir ? 'dir' : 'file'), name: nameOf(k), id: `${k.length}${n.mtime}`, size: n.data.length, mtime: n.mtime }))
         return json(res, 200, { user_perm: 'rw', dirent_list })
       }
       const form = await formOf(req)

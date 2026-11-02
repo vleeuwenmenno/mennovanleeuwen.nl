@@ -112,3 +112,8 @@
 @media (pointer: coarse) { .wp-banner button { min-height: 44px; padding: 8px 12px; } }
 .wp-chips { margin-top: 8px; }
 .wp-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.wp-consent { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wp-trust { padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 4px; color: inherit; background: var(--wp-soft); font: inherit; cursor: pointer; }
+.wp-trust-reason { flex-basis: 100%; opacity: .75; }
+.wp-trust-option { display: block; }
+.wp-trust-option small { display: block; opacity: .75; }

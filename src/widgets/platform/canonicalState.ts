@@ -9,6 +9,7 @@ import {
   mergeWidgetStates, normalizeConfigs, normalizePending, normalizeWidgetState, unconsumed,
   installationToken, placementAliases, stableJSON, type Configs, type InstallationRecords, type WidgetDelta, type WidgetState,
 } from './canonicalModel'
+import { emptyTrust, type TrustState } from './trust'
 
 export const WIDGET_STATE_KEY = 'widgets:state:v2'
 const PENDING_KEY = 'mvlos.widgets.pending:v2'
@@ -113,11 +114,13 @@ const syncedListeners = new Set<() => void>()
 let configs = configsOf(view)
 let placements = bindPlacementAliases(view.placements, placementAliases(view, writer))
 let installations = view.installations
+let trust = view.trust ?? emptyTrust()
 function refresh(next: WidgetState, remote = false) {
   const configNext = configsOf(next)
   if (stableJSON(configNext) !== stableJSON(configs)) configs = configNext
   if (stableJSON(next.placements) !== stableJSON(placements) || stableJSON(next.remaps) !== stableJSON(view.remaps)) placements = bindPlacementAliases(next.placements, placementAliases(next, writer))
   if (stableJSON(next.installations) !== stableJSON(installations)) installations = next.installations
+  if (stableJSON(next.trust ?? emptyTrust()) !== stableJSON(trust)) trust = next.trust ?? emptyTrust()
   view = next
   listeners.forEach(l => l())
   remoteListeners.forEach(l => l(remote))
@@ -257,6 +260,15 @@ export const canonicalInstallations = facade<InstallationRecords>(() => installa
     queue({ ...emptyDelta(), installations: edits, expectedInstallations: Object.fromEntries(Object.keys(edits).map(id => [id, installationToken(installations[id])])) })
     commit()
   }
+})
+
+/** Trust is only ever added to: a set queues the grants and revocations that are new, as a delta.
+ * Only installations.ts writes here, from a person's own gesture (see trustInstallation/revokeTrust). */
+export const canonicalTrust = facade<TrustState>(() => trust, next => {
+  const grants = Object.fromEntries(Object.entries(next.grants).filter(([id, g]) => stableJSON(g) !== stableJSON(trust.grants[id])))
+  const revoked = Object.fromEntries(Object.entries(next.revoked).filter(([id, r]) => stableJSON(r) !== stableJSON(trust.revoked[id])))
+  queue({ ...emptyDelta(), trust: { grants, revoked } })
+  commit()
 })
 
 state.onRemote(next => {
