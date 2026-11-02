@@ -171,6 +171,8 @@ let unhandled: Event | null = null
 /** When the last long press opened something, to drop Android's own event for the same press. */
 let firedAt = 0
 let swallowClickUntil = 0
+/** The second hold opened a menu and the finger is still down: its lift's click is the hold's. */
+let heldClick = false
 const fingers = new Set<number>()
 
 function buzz() {
@@ -218,7 +220,7 @@ export const SECOND_HOLD_MS = 3000
 
 let primed: { el: Element; at: number } | null = null
 /** The finger that a hold gesture owns, and until when its contextmenu events are still dropped. */
-let owner: { id: number; until: number } | null = null
+let owner: { id: number; until: number; /** A second finger touched down while this one was held */ spoiled?: boolean } | null = null
 
 /** A lift ended without a drag: the next hold on `el` is the menu's. */
 export function primeSecondHold(el: Element | null) {
@@ -231,8 +233,8 @@ export function isSecondHold(el: Element | null): boolean {
 export function forgetSecondHold() {
   primed = null
 }
-/** How many fingers are down, so a hold can stand down when a second one joins (a pinch). */
-export const touchFingers = () => fingers.size
+/** Whether a second finger joined the gesture (a pinch, a two-finger scroll), even if it is gone again: a hold must stand down. */
+export const touchSpoiled = () => fingers.size > 1 || !!owner?.spoiled
 
 /** Called from a hold gesture's pointerdown: this finger is its own, not a long press that sends a contextmenu. */
 export function ownTouchPress(pointerId: number) {
@@ -260,7 +262,9 @@ export function openHeldMenu(target: Element | null, x: number, y: number): bool
   if (!ev.defaultPrevented) return false
   forgetSecondHold()
   firedAt = Date.now()
+  // The click that follows the lift is dropped (set at the lift, or taken back if the gesture is cancelled).
   swallowClickUntil = Date.now() + 10_000
+  heldClick = true
   buzz()
   return true
 }
@@ -313,7 +317,11 @@ export function installTouchContextMenu() {
       if (primed && !(e.target instanceof Node && primed.el.contains(e.target))) primed = null
       fingers.add(e.pointerId)
       // A second finger is a pinch or a two-finger scroll, never a press.
-      if (fingers.size > 1) return cancelTouchMenu()
+      if (fingers.size > 1) {
+        if (owner) owner.spoiled = true
+        forgetSecondHold()
+        return cancelTouchMenu()
+      }
       const el = e.target instanceof Element ? e.target : null
       if (!el || el.closest(NO_TOUCH_MENU) || wantsNativeMenu(e)) return
       press = { id: e.pointerId, target: el, x: e.clientX, y: e.clientY, timer: setTimeout(fire, LONG_PRESS_MS), fired: false, selected: !window.getSelection()?.isCollapsed }
@@ -340,6 +348,10 @@ export function installTouchContextMenu() {
       if (e.pointerType !== 'touch') return
       fingers.delete(e.pointerId)
       if (owner?.id === e.pointerId) owner.until = Date.now() + 700
+      if (heldClick) {
+        heldClick = false
+        swallowClickUntil = Date.now() + 600
+      }
       const p = press
       if (p?.id !== e.pointerId) return
       press = null
@@ -359,6 +371,12 @@ export function installTouchContextMenu() {
       if (e.pointerType !== 'touch') return
       fingers.delete(e.pointerId)
       if (owner?.id === e.pointerId) owner.until = Date.now() + 700
+      // A cancelled gesture never ends in a hold's click, and its first hold is not a lift to come back to.
+      forgetSecondHold()
+      if (heldClick) {
+        heldClick = false
+        swallowClickUntil = 0
+      }
       if (press?.id === e.pointerId) {
         if (press.timer) clearTimeout(press.timer)
         press = null

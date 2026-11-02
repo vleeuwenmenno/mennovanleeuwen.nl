@@ -2,7 +2,7 @@ import { fitWidget } from './widgetLayout'
 import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { addWidgetItems } from '../widgets/registry'
 import { APP_META } from './apps'
-import { cancelTouchMenu, forgetSecondHold, isSecondHold, linkAt, linkMenu, openContextMenu, openHeldMenu, ownTouchPress, primeSecondHold, TOUCH_HOLD_MS, touchFingers, wantsNativeMenu, type MenuItem } from './ContextMenu'
+import { cancelTouchMenu, forgetSecondHold, isSecondHold, linkAt, linkMenu, openContextMenu, openHeldMenu, ownTouchPress, primeSecondHold, TOUCH_HOLD_MS, touchSpoiled, wantsNativeMenu, type MenuItem } from './ContextMenu'
 import { maxReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { useSwing } from './swing'
@@ -250,7 +250,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
         hold.timer = null
         if (drag.current !== d) return
         // A second finger is a pinch or a two-finger scroll, never a hold.
-        if (touchFingers() > 1) {
+        if (touchSpoiled()) {
           forgetSecondHold()
           hold.stop()
           drag.current = null
@@ -442,6 +442,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       if (!d.phone.armed) {
         // Moved before the hold was up: a swipe, and the page has the finger.
         if (Math.hypot(e.clientX - d.phone.sx, e.clientY - d.phone.sy) > HOLD_SLOP) {
+          forgetSecondHold()
           d.phone.stop()
           drag.current = null
         }

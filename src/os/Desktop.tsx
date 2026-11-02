@@ -21,7 +21,7 @@ import { notify } from './notify'
 import { cvMode } from './cvMode'
 import { useAccount } from './account'
 import { ask } from './Dialogs'
-import { cancelTouchMenu, closeContextMenu, forgetSecondHold, isSecondHold, openContextMenu, openHeldMenu, ownTouchPress, primeSecondHold, TOUCH_HOLD_MS, touchFingers, type MenuItem } from './ContextMenu'
+import { cancelTouchMenu, closeContextMenu, forgetSecondHold, isSecondHold, openContextMenu, openHeldMenu, ownTouchPress, primeSecondHold, TOUCH_HOLD_MS, touchSpoiled, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { openLink } from '../data/links'
 import { useSwing } from './swing'
@@ -377,7 +377,7 @@ export function Desktop() {
     const timer = setTimeout(() => {
       if (!drag.current || drag.current.kind !== 'icons') return
       // A second finger is a pinch or a two-finger scroll, never a hold.
-      if (touchFingers() > 1) return void (forgetSecondHold(), hold.stop(), (drag.current = null))
+      if (touchSpoiled()) return void (forgetSecondHold(), hold.stop(), (drag.current = null))
       suppressTap.current = true
       if (second) {
         forgetSecondHold()

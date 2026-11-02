@@ -185,18 +185,28 @@ try {
   await sleep(700)
   s = await state(p)
   check('a cancelled second hold opens nothing', s.menus === 1 && !s.open && !(await arranging(p)), s)
+  await touch(p, 'touchStart', [c])
+  await sleep(600)
+  const afterCancel = await arranging(p)
+  await touch(p, 'touchEnd')
+  await sleep(400)
+  s = await state(p)
+  check('and the hold after the cancel is a first hold again: it lifts, still no menu', afterCancel && s.menus === 1 && !s.open, { afterCancel, s })
 
-  // 6) a second finger
+  // 6) a second finger, even one that is gone again before the hold is up
   await unprime(p)
   await hold(p, c, 650)
   await touch(p, 'touchStart', [c])
-  await sleep(150)
+  await sleep(100)
   await touch(p, 'touchStart', [c, { x: c.x + 60, y: c.y - 200 }])
+  await sleep(100)
+  await touch(p, 'touchEnd', [{ x: c.x + 60, y: c.y - 200, id: 2 }])
   await sleep(600)
+  const oneFinger = await menuOpen(p)
   await touch(p, 'touchEnd')
   await sleep(500)
   s = await state(p)
-  check('a second finger during the second hold opens nothing', s.menus === 1 && !s.open, s)
+  check('a second finger during the second hold (even briefly) opens nothing', s.menus === 1 && !s.open && !oneFinger, s)
 
   // 7) tap still works: a tap on a folder opens it, and nothing else happens
   await unprime(p)

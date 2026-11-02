@@ -2,7 +2,7 @@ import { useEffect, useRef, type RefObject } from 'react'
 import { DRAG_FILES, getDragged, setDragged } from '../data/seafile'
 import { droppedFiles, type Picked } from '../data/uploads'
 import { kindOfName, type FileKind } from '../terminal/vfs'
-import { closeContextMenu, forgetSecondHold, isSecondHold, openHeldMenu, ownTouchPress, primeSecondHold, releaseTouchPress, TOUCH_HOLD_MS, touchFingers } from './ContextMenu'
+import { closeContextMenu, forgetSecondHold, isSecondHold, openHeldMenu, ownTouchPress, primeSecondHold, releaseTouchPress, TOUCH_HOLD_MS, touchSpoiled } from './ContextMenu'
 import type { AppId } from './wm'
 import { toUi, uiPoint } from './uiScale'
 
@@ -435,7 +435,7 @@ export function holdToDrag(e: React.PointerEvent | PointerEvent, items: () => Dr
   }
   const timer = setTimeout(() => {
     // A second finger is a pinch or a two-finger scroll, never a hold.
-    if (touchFingers() > 1) return stop()
+    if (touchSpoiled()) return stop()
     if (second) {
       forgetSecondHold()
       // An item without a menu (nothing took the contextmenu) is lifted again instead.
@@ -470,7 +470,7 @@ export function holdToDrag(e: React.PointerEvent | PointerEvent, items: () => Dr
     }
     if (!drag && far) {
       const list = items()
-      if (!list?.length || touchFingers() > 1) return stop()
+      if (!list?.length || touchSpoiled()) return stop()
       releaseTouchPress()
       closeContextMenu()
       drag = beginPointerDrag(list, source, { ghost: 'always', files })
