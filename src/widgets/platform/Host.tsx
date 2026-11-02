@@ -7,7 +7,7 @@ import { accountGuard } from '../../os/accountSpace'
 import { isMobile, useIsMobile } from '../../os/useIsMobile'
 import { useWM, type WinState } from '../../os/wm'
 import { defaultBuild } from './defaults'
-import { hasGrant, useRevisionGrant, allowRevision, revokeRevision, installations, installationVersion, useInstallationPresence, useInstallationRemoved, type Revision } from './installations'
+import { hasAccess, useRevisionGrant, useTrustStatus, useRetainsTrust, allowRevision, revokeRevision, revokeTrust, trustEligibility, trustInstallation, installations, installationVersion, useInstallationPresence, useInstallationRemoved, type Revision } from './installations'
 import { CUSTOM_KIND, customState, isInstanceKind, supportsCapabilities, descriptor, verifySnapshot, sourceIdentityOf, type Capability, type Descriptor, type Snapshot, type WidgetInput } from './package'
 import { customInput, customRevision } from './records'
 import { getWidgetConfig, setWidgetConfig, useWidgetConfig } from '../config'
@@ -87,14 +87,22 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
   const [pages, setPages] = useState<number[]>([0])
   const revision: Revision | null = current ? verified?.current === current ? verified.revision : null : !unavailable && builtin ? { source: { kind: 'system', path: `/usr/share/mvlos/widgets/${kind}` }, snapshot: builtin } : null
   const visible = shellVisible && phoneAllowed(mobile, revision) && !win.minimized
-  const permitted = useRevisionGrant(id, revision)
+  // Allowed once in this session, or trusted always (a valid persistent grant for exactly this installation).
+  const session = useRevisionGrant(id, revision)
+  // Trusted only with live evidence from this device's own storage (see useTrustStatus): while it is
+  // being checked nothing runs, and a missing or mismatching source falls back to asking.
+  const trust = useTrustStatus(id, revision)
+  const trusted = trust.state === 'trusted'
+  const retained = useRetainsTrust(id)
+  const permitted = session || trusted
+  const [trustOffer, setTrustOffer] = useState<{ key: string; ok: boolean; reason: string } | null>(null)
   const holdsState = !!revision?.snapshot.manifest.capabilities.includes('custom.state')
   const stateProblem = custom && holdsState ? (() => { try { customState(stored); return '' } catch { return 'Stored widget state is invalid or too large. Reset it from Source.' } })() : ''
-  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent, permitted])
+  const identity = JSON.stringify([id, kind, account.status, account.user?.id, revision?.source, revision?.snapshot.digest, version.identity, consent, permitted, trust.state])
   const latest = useRef({ identity, visible })
   latest.current = { identity, visible }
   const eligible = () => latest.current.visible && !notesHidden.get() && document.visibilityState === 'visible' && phoneAllowed(isMobile(), revision) && !!root.current?.isConnected && !root.current.closest('.is-notes-hidden, .is-covered') && accountGuard() && getAccount().user?.id === account.user?.id
-  const validNow = (expected = identity) => eligible() && latest.current.identity === expected && !!revision && hasGrant(id, revision) && installationVersion(id).identity === version.identity
+  const validNow = (expected = identity) => eligible() && latest.current.identity === expected && !!revision && hasAccess(id, revision) && installationVersion(id).identity === version.identity
   const weather = usePackageForecast(id, kind === 'weather' && visible && !!permitted && !!revision?.snapshot.manifest.capabilities.includes('weather.read'), tick, identity, () => validNow())
   const domain = ['agenda','inbox','status','minecraft'].includes(kind)
   const presentedBroker = broker?.identity===identity?broker.value:undefined
@@ -114,6 +122,19 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
     }).catch(() => live && setError({ code: 'package', message: 'Installed package unavailable; rebuild or recover in Source. Nothing was deleted.' }))
     return () => { live = false }
   }, [current, kind, retry])
+  // Whether the consent banner may also offer "Trust always": the same canonical gate the click runs again.
+  const offerKey = custom && !permitted && trust.state !== 'checking' && revision ? JSON.stringify([id, account.user?.id, revision.source, revision.snapshot.digest, version.identity]) : ''
+  // Storage changes (here or, for Seafile, elsewhere) can make a refused offer eligible again: a refused
+  // offer is looked at again every 10 s. (Not on every storage event: the check's own reads are events.)
+  const [offerTick, setOfferTick] = useState(0)
+  useEffect(() => {
+    if (!offerKey || !revision) return
+    let live = true
+    void trustEligibility(id, revision).then(result => { if (live) setTrustOffer({ key: offerKey, ok: result.ok, reason: result.ok ? '' : result.reason }) })
+    return () => { live = false }
+  }, [offerKey, retry, offerTick]) // eslint-disable-line react-hooks/exhaustive-deps
+  const offer = trustOffer?.key === offerKey ? trustOffer : null
+  useEffect(() => { if (!offerKey || offer?.ok !== false) return; const timer = setTimeout(() => setOfferTick(n => n + 1), 10_000); return () => clearTimeout(timer) }, [offerKey, offer])
   // The clock's one timer: the next minute (or second) boundary, only while the widget is eligible. Hidden, covered, minimized or off a phone: no timer at all.
   useEffect(() => {
     if (!clock || !visible) return
@@ -210,11 +231,18 @@ export function PackageHost({ win, id }: { win: WinState; id: string }) {
       {domain&&<ToolButton icon="refresh" label="Refresh" onClick={()=>setTick(value=>value+1)} />}
       {kind === 'weather' && <WeatherControls id={id} refresh={() => setTick(n => n + 1)} eligible={eligible} onOpen={setPlaceOpen} slot={placeSlot} />}
       <ToolButton icon="code" label="Source" title="Edit widget source" aria="Edit widget source" onClick={() => wm.open('widgetworkshop', { id, kind })} />
-      {permitted && revision?.source.kind !== 'system' && <ToolButton icon="pause" label="Pause access" onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }} />}
+      {session && revision?.source.kind !== 'system' && <ToolButton icon="pause" label="Pause access" onClick={() => { if (revision) revokeRevision(id, revision); setConsent(n => n + 1); setView(null) }} />}
+      {retained && <ToolButton icon="shield" label="Revoke trust" title={trusted ? 'Stop trusting this widget on every device; it asks again before it runs' : 'End every earlier Trust always decision for this widget, on every device'} onClick={() => { setView(null); setConsent(n => n + 1); revokeTrust(id).catch(error => setError({ code: 'grant', message: error instanceof Error ? error.message : 'Trust was not revoked' })) }} />}
       {kind === 'sticky' && <ToolButton icon="book" label="Notebook & links" onClick={() => wm.open('notebook', { id })} />}
     </Toolbar>
     <div ref={setPlaceSlot} />
-    {!permitted && revision ? <button className="wp-allow" onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button> : <>
+    {!permitted && revision && trust.state === 'checking' ? <p className="wp-loading" role="status" data-trust-checking>Checking this trusted widget's folder…</p> : !permitted && revision ? <div className="wp-consent">
+      {trust.state === 'refused' && <small className="wp-trust-reason" data-trust-refused>{trust.unsaved ? trust.reason : `Trusted, but not on this device now: ${trust.reason}`}</small>}
+      {trust.state === 'refused' && trust.unsaved && <button className="wp-trust-retry" data-trust-retry onClick={() => { revokeTrust(id).then(() => setError(null), error => setError({ code: 'grant', message: error instanceof Error ? error.message : 'Trust was not revoked' })) }}>Retry saving the revocation</button>}
+      <button className="wp-allow" title="Allow once: until you pause it, reload or sign out" onClick={() => { try { allowRevision(id, revision); setConsent(n => n + 1) } catch (error) { setError({ code: 'grant', message: error instanceof Error ? error.message : 'Source unavailable; clone and rebuild locally' }) } }}>Allow this revision to access this {kind === 'sticky' ? 'note' : kind === 'weather' ? 'forecast' : custom ? 'widget\'s small saved state' : kind+' data and selected actions'}</button>
+      {custom && offer?.ok && <button className="wp-trust" title="Runs without asking on every device you sign in to, for these exact bytes only. Any edit asks again. Revoke it from the widget's toolbar." onClick={event => { const gesture = event.nativeEvent; trustInstallation(id, revision, gesture).then(() => setConsent(n => n + 1), error => setError({ code: 'grant', message: error instanceof Error ? error.message : 'Could not trust this widget' })) }}>Trust always</button>}
+      {custom && offer && !offer.ok && <small className="wp-trust-reason">Allow once only: {offer.reason}</small>}
+    </div> : <>
       <Renderer key={identity} view={shown?.tree ?? EMPTY_VIEW} note={permitted && input.note ? note?.text : undefined} write={revision?.snapshot.manifest.capabilities.includes('note.write') ? write : undefined} event={event} actionsEnabled={actionsEnabled} resource={resource} />
       {input.note && <Pager label="Checklist pages" page={pages.length} previous={{ text: 'Previous items', disabled: pages.length <= 1, run: () => setPages(value => value.slice(0, -1)) }} next={{ text: 'Next items', disabled: input.note.next === undefined, run: () => setPages(value => [...value, input.note!.next!]) }} />}
       {domainPaging&&<Pager label="Data pages" page={domainPaging.page+1} pages={domainPaging.pages} detail={`${domainPaging.shown} of ${domainPaging.total}`} previous={{ text: 'Previous results', disabled: domainPaging.page===0, run: ()=>setDomainPage(domainPaging.page-1) }} next={{ text: 'Next results', disabled: domainPaging.page+1>=domainPaging.pages, run: ()=>setDomainPage(domainPaging.page+1) }} />}

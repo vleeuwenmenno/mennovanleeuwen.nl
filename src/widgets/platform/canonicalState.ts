@@ -9,6 +9,7 @@ import {
   mergeWidgetStates, normalizeConfigs, normalizePending, normalizeWidgetState, unconsumed,
   installationToken, placementAliases, stableJSON, type Configs, type InstallationRecords, type WidgetDelta, type WidgetState,
 } from './canonicalModel'
+import { emptyTrust, type TrustState } from './trust'
 
 export const WIDGET_STATE_KEY = 'widgets:state:v2'
 const PENDING_KEY = 'mvlos.widgets.pending:v2'
@@ -113,11 +114,13 @@ const syncedListeners = new Set<() => void>()
 let configs = configsOf(view)
 let placements = bindPlacementAliases(view.placements, placementAliases(view, writer))
 let installations = view.installations
+let trust = view.trust ?? emptyTrust()
 function refresh(next: WidgetState, remote = false) {
   const configNext = configsOf(next)
   if (stableJSON(configNext) !== stableJSON(configs)) configs = configNext
   if (stableJSON(next.placements) !== stableJSON(placements) || stableJSON(next.remaps) !== stableJSON(view.remaps)) placements = bindPlacementAliases(next.placements, placementAliases(next, writer))
   if (stableJSON(next.installations) !== stableJSON(installations)) installations = next.installations
+  if (stableJSON(next.trust ?? emptyTrust()) !== stableJSON(trust)) trust = next.trust ?? emptyTrust()
   view = next
   listeners.forEach(l => l())
   remoteListeners.forEach(l => l(remote))
@@ -258,6 +261,23 @@ export const canonicalInstallations = facade<InstallationRecords>(() => installa
     commit()
   }
 })
+
+/** Trust is read here; it is written only through updateTrust, from installations.ts. */
+export const canonicalTrust = facade<TrustState>(() => trust, () => { throw new Error('Trust changes go through updateTrust') })
+/**
+ * Trust is only ever added to. `change` sees the freshest view (this tab's pending changes and every
+ * other tab's journal applied) and returns the delta to queue verbatim, or null for none. A grant's
+ * delta carries the revocation records it lists as seen (and its generation floor), so every fragment
+ * that holds a grant also holds what it observed and merges the same in any grouping.
+ */
+export function updateTrust(change: (current: TrustState) => TrustState | null) {
+  if (!accountGuard()) throw new Error('Account changed')
+  refresh(pendingView())
+  const delta = change(trust)
+  if (!delta) return
+  queue({ ...emptyDelta(), trust: delta })
+  commit()
+}
 
 state.onRemote(next => {
   if (next && ready) try { refresh(pendingView(), true) } catch (error) { reportSyncFailure(error) }

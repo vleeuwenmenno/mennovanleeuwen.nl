@@ -1,11 +1,15 @@
 import { EMPTY, mergeSets, normalizeSet, removedKeys, type WidgetSet } from './placementSet'
+import { emptyTrust, mergeTrust, normalizeTrust, trustEmpty, type TrustState } from './trust'
 
 export type Configs = Record<string, Record<string, unknown>>
 export type ConfigRecord = { at: number; value?: Record<string, unknown>; removed?: true }
 export type InstallationRecords = Record<string, unknown>
-/** The presence of this envelope is the migration marker. Never saved separately from its data. */
+/** The presence of this envelope is the migration marker. Never saved separately from its data.
+ * Schema 3 adds `trust` (persistent per-instance widget trust, see trust.ts). Schema 2 envelopes are
+ * read as schema 3 with no trust; the account key stays `widgets:state:v2`. */
+export const WIDGET_SCHEMA = 3
 export type WidgetState = {
-  schema: 2
+  schema: 3
   configs: Record<string, ConfigRecord>
   placements: WidgetSet
   installations: InstallationRecords
@@ -13,11 +17,14 @@ export type WidgetState = {
   consumed?: Record<string, number>
   /** Writer-local original placement key -> permanent remapped key. */
   remaps?: Record<string, Record<string, string>>
+  /** Trust grants and their revocation tombstones. Absent means none. */
+  trust?: TrustState
 }
 export const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const own = (v: object, key: string) => Object.hasOwn(v, key)
 const counter = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
-export const emptyWidgetState = (): WidgetState => ({ schema: 2, configs: {}, placements: EMPTY, installations: {} })
+export const emptyWidgetState = (): WidgetState => ({ schema: 3, configs: {}, placements: EMPTY, installations: {} })
+const withTrust = (trust: TrustState) => trustEmpty(trust) ? {} : { trust }
 
 /** Config ties compare data, independent of object insertion order on either device. */
 export function stableJSON(value: unknown): string {
@@ -45,7 +52,7 @@ export function mergeInstallationRecords(local: InstallationRecords, remote: Ins
   return out
 }
 export function normalizeWidgetState(raw: unknown): WidgetState | null {
-  if (!record(raw) || raw.schema !== 2 || !record(raw.configs) || !record(raw.placements) || !record(raw.placements.places) || typeof raw.placements.removed !== 'string' || !record(raw.installations)) return null
+  if (!record(raw) || raw.schema !== 2 && raw.schema !== 3 || !record(raw.configs) || !record(raw.placements) || !record(raw.placements.places) || typeof raw.placements.removed !== 'string' || !record(raw.installations)) return null
   const configs = Object.fromEntries(Object.entries(raw.configs).flatMap<[string, ConfigRecord]>(([id, v]) => {
     if (!record(v) || !counter(v.at)) return []
     if (v.removed === true) return [[id, { at: v.at, removed: true }]]
@@ -53,7 +60,9 @@ export function normalizeWidgetState(raw: unknown): WidgetState | null {
   })) as WidgetState['configs']
   const consumed = normalizeConsumed(raw.consumed), remaps = normalizeRemaps(raw.remaps)
   if (!consumed || !remaps) return null
-  return { schema: 2, configs, placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations), ...(Object.keys(consumed).length ? { consumed } : {}), ...(Object.keys(remaps).length ? { remaps } : {}) }
+  // A schema 2 envelope predates trust: whatever it might carry under that name is not trust.
+  const trust = raw.schema === 3 ? normalizeTrust(raw.trust) : emptyTrust()
+  return { schema: 3, configs, placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations), ...(Object.keys(consumed).length ? { consumed } : {}), ...(Object.keys(remaps).length ? { remaps } : {}), ...withTrust(trust) }
 }
 export function mergeWidgetStates(local: WidgetState | null, remote: WidgetState | null): WidgetState | null {
   if (!local) return remote
@@ -65,7 +74,8 @@ export function mergeWidgetStates(local: WidgetState | null, remote: WidgetState
     if (!other || value.at > other.at || value.at === other.at && (Number(!!value.removed) > Number(!!other.removed) || !!value.removed === !!other.removed && stableJSON(value) > stableJSON(other))) Object.defineProperty(configs, id, { value, enumerable: true, writable: true, configurable: true })
   }
   const consumed = mergeConsumed(local.consumed, remote.consumed), remaps = mergeRemaps(local.remaps, remote.remaps)
-  return { schema: 2, configs, placements: mergeSets(local.placements, remote.placements), installations: mergeInstallationRecords(local.installations, remote.installations), ...(Object.keys(consumed).length ? { consumed } : {}), ...(Object.keys(remaps).length ? { remaps } : {}) }
+  const trust = mergeTrust(local.trust ?? emptyTrust(), remote.trust ?? emptyTrust())
+  return { schema: 3, configs, placements: mergeSets(local.placements, remote.placements), installations: mergeInstallationRecords(local.installations, remote.installations), ...(Object.keys(consumed).length ? { consumed } : {}), ...(Object.keys(remaps).length ? { remaps } : {}), ...withTrust(trust) }
 }
 export const configsOf = (state: WidgetState): Configs => Object.fromEntries(Object.entries(state.configs).flatMap(([id, v]) => v.removed ? [] : [[id, v.value!]]))
 export function withConfigs(state: WidgetState, next: Configs, now = Date.now()): WidgetState {
@@ -81,7 +91,7 @@ export function withConfigs(state: WidgetState, next: Configs, now = Date.now())
 /** Legacy records are inputs only while no canonical envelope exists. Import counters start at
  * zero so any canonical edit wins. Geometry, note identity and tombstones use the original set. */
 export function importLegacy(configs: unknown, placements: unknown, installations: unknown): WidgetState {
-  return { schema: 2, configs: Object.fromEntries(Object.entries(normalizeConfigs(configs)).map(([id, value]) => [id, { at: 0, value }])), placements: normalizeSet(placements), installations: normalizeInstallations(installations) }
+  return { schema: 3, configs: Object.fromEntries(Object.entries(normalizeConfigs(configs)).map(([id, value]) => [id, { at: 0, value }])), placements: normalizeSet(placements), installations: normalizeInstallations(installations) }
 }
 
 export const JOURNAL_LIMITS = Object.freeze({ writers: 256, operations: 1024, remaps: 1024 })
@@ -123,7 +133,8 @@ function mergeRemaps(a: WidgetState['remaps'] = {}, b: WidgetState['remaps'] = {
   return out
 }
 export type ConfigEdit = { at: number; patch: Record<string, unknown>; unset: string[]; removed?: true }
-export type WidgetDelta = { configs: Record<string, ConfigEdit>; placements: WidgetSet; added: string[]; installations: InstallationRecords; expectedInstallations?: Record<string, string> }
+/** `trust` carries only the grants and revocations a gesture made, never a whole trust table. */
+export type WidgetDelta = { configs: Record<string, ConfigEdit>; placements: WidgetSet; added: string[]; installations: InstallationRecords; expectedInstallations?: Record<string, string>; trust?: TrustState }
 export const emptyDelta = (): WidgetDelta => ({ configs: {}, placements: EMPTY, added: [], installations: {} })
 export type PendingOperation = { writer: string; sequence: number; at: number; delta: WidgetDelta }
 /** Account-scoped durable operation log. A writer retains its complete unconsumed prefix. */
@@ -136,9 +147,10 @@ function normalizeDelta(raw: unknown): WidgetDelta {
     placements: normalizeSet(raw.placements), installations: normalizeInstallations(raw.installations),
     added: Array.isArray(raw.added) ? raw.added.filter((k): k is string => typeof k === 'string') : [],
     ...(record(raw.expectedInstallations) ? { expectedInstallations: Object.fromEntries(Object.entries(raw.expectedInstallations).filter(([,v]) => typeof v === 'string')) as Record<string,string> } : {}),
+    ...(raw.trust !== undefined ? withTrust(normalizeTrust(raw.trust)) : {}),
   }
 }
-const deltaEmpty = (d: WidgetDelta) => !Object.keys(d.configs).length && !Object.keys(d.placements.places).length && !d.placements.removed && !Object.keys(d.installations).length
+const deltaEmpty = (d: WidgetDelta) => !Object.keys(d.configs).length && !Object.keys(d.placements.places).length && !d.placements.removed && !Object.keys(d.installations).length && (!d.trust || trustEmpty(d.trust))
 export function normalizePending(raw: unknown): PendingWidgets {
   if (!record(raw)) return emptyPending()
   if (record(raw.operations)) {
@@ -228,7 +240,11 @@ function applyDelta(state: WidgetState, pending: WidgetDelta, canonicalExists: b
     const expected = pending.expectedInstallations?.[id]
     return expected === undefined || expected === installationToken(state.installations[id]) || same(value,state.installations[id])
   }))
-  return { ...next, placements: mergeSets({ places: puts, removed: removals }, state.placements), installations: mergeInstallationRecords(accepted, state.installations), ...(Object.keys(remaps).length ? { remaps } : {}) }
+  // Trust is a union: a pending grant made without seeing a revocation stays defeated by it.
+  const trust = pending.trust ? mergeTrust(pending.trust, state.trust ?? emptyTrust()) : state.trust ?? emptyTrust()
+  const out: WidgetState = { ...next, placements: mergeSets({ places: puts, removed: removals }, state.placements), installations: mergeInstallationRecords(accepted, state.installations), ...(Object.keys(remaps).length ? { remaps } : {}), trust }
+  if (trustEmpty(trust)) delete out.trust
+  return out
 }
 export function applyPending(state: WidgetState, pending: PendingWidgets, canonicalExists: boolean): WidgetState {
   let next = state
