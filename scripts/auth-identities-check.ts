@@ -559,8 +559,11 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
   check('GET /api/auth/app announces native Google sign-in with the web client id', info.googleNative?.clientId === CLIENT_ID)
   const post = async (path: string, body: unknown, headers: Record<string, string> = {}, cookie = '') => {
     const res = await fetch(`${ORIGIN}${path}`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', 'X-MvL-App-Redeem': '1', ...(cookie ? { Cookie: cookie } : {}), ...headers }, body: JSON.stringify(body) })
-    return { status: res.status, body: (await res.json().catch(() => ({}))) as { challenge?: string; error?: string; reason?: string }, cookies: res.headers.getSetCookie() }
+    const text = await res.text()
+    lastBody = text
+    return { status: res.status, body: (JSON.parse(text || '{}') as { challenge?: string; error?: string; reason?: string; detail?: string }), cookies: res.headers.getSetCookie() }
   }
+  let lastBody = ''
   const challenge = async () => (await post('/api/auth/app/google/start', {})).body.challenge ?? ''
   const nonceFor = (c: string, origin = APP_ORIGIN) => createHash('sha256').update(`${c}\n${origin}`).digest('base64url')
   /** A Google ID token as Credential Manager gives the app: aud = web client, azp = the Android client. */
@@ -586,19 +589,25 @@ check('the admin links another Google account', r === '/?auth=linked-google' && 
   let r3 = await redeemNative(c, token(ownerSub, nonceFor(c)))
   let u = await meWith(r3.cookies)
   check('native Google sign-in: the account that Google identity belongs to, admin kept, session cookies like any app sign-in', r3.status === 200 && u?.id === ownerUser.id && u.admin === true && r3.cookies.some((x) => /^mvlos_sid=.*HttpOnly/.test(x)))
-  check('the same challenge can not be used again', (await redeemNative(c, token(ownerSub, nonceFor(c)))).status === 400)
+  r3 = await redeemNative(c, token(ownerSub, nonceFor(c)))
+  check('the same challenge can not be used again, and the app is told why', r3.status === 400 && r3.body.detail === 'challenge used or expired')
   const reused = token(ownerSub, nonceFor(c))
   check('a token for an earlier challenge, with a new challenge: refused', (await redeemNative(await challenge(), reused)).status === 400)
   c = await challenge()
-  check('a nonce bound to another server (a relay): refused', (await redeemNative(c, token(ownerSub, nonceFor(c, 'https://evil.example')))).status === 400)
+  const relayed = token(ownerSub, nonceFor(c, 'https://evil.example'))
+  r3 = await redeemNative(c, relayed)
+  check('a nonce bound to another server (a relay): refused, the failed check named (wrong nonce)', r3.status === 400 && r3.body.detail === 'wrong nonce')
+  check('...and the refusal never echoes the token', !lastBody.includes(relayed.split('.')[1]))
   c = await challenge()
   check('the bare challenge as nonce (no server binding): refused', (await redeemNative(c, token(ownerSub, c))).status === 400)
   c = await challenge()
-  check('a token issued to another party (azp): refused', (await redeemNative(c, token(ownerSub, nonceFor(c), { azp: 'someone-else.apps.googleusercontent.com' }))).status === 400)
+  r3 = await redeemNative(c, token(ownerSub, nonceFor(c), { azp: 'someone-else.apps.googleusercontent.com' }))
+  check('a token issued to another party (azp): refused, named as such', r3.status === 400 && r3.body.detail === 'wrong authorized party')
   c = await challenge()
   check('a token without azp: refused', (await redeemNative(c, token(ownerSub, nonceFor(c), { azp: undefined }))).status === 400)
   c = await challenge()
-  check('an audience list instead of exactly the web client: refused', (await redeemNative(c, token(ownerSub, nonceFor(c), { aud: [CLIENT_ID, 'other'] }))).status === 400)
+  r3 = await redeemNative(c, token(ownerSub, nonceFor(c), { aud: [CLIENT_ID, 'other'] }))
+  check('an audience list instead of exactly the web client: refused (wrong audience)', r3.status === 400 && r3.body.detail === 'wrong audience')
   c = await challenge()
   check('a token signed by someone else: refused', (await redeemNative(c, idToken({ claims: { ...claims(ownerSub, nonceFor(c)), azp: ANDROID }, challenge: '', key: rogue.privateKey }))).status === 400)
   c = await challenge()

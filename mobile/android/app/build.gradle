@@ -11,8 +11,8 @@ android {
         applicationId "nl.mvlos.experiment"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 5
-        versionName mvlosTest ? "1.4-test" : "1.4"
+        versionCode 6
+        versionName mvlosTest ? "1.5-test" : "1.5"
         manifestPlaceholders = [networkSecurityConfig: mvlosTest ? "@xml/network_security_config_test" : "@xml/network_security_config"]
         buildConfigField "boolean", "MVLOS_TEST", mvlosTest ? "true" : "false"
         // Servers whose sign-in may use Android's own Google account picker (comma-separated origins).

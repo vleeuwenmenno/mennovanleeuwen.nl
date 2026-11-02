@@ -187,26 +187,34 @@ export async function startNativeGoogle(req: IncomingMessage, res: ServerRespons
 export async function redeemNativeGoogle(req: IncomingMessage, res: ServerResponse) {
   requireAppRequest(req)
   const body = (await readJson(req, 8 * 1024)) as { challenge?: unknown; idToken?: unknown }
-  const refuse = (status: number, error: string, reason?: string) => json(res, status, { error, ...(reason ? { reason } : {}) }, { 'Cache-Control': 'no-store' })
+  // Refusals are logged as one line with the failed check only (never the token or who it was for),
+  // and the check is told to the app too (`detail`), so a failure on a phone can be explained.
+  const refuse = (status: number, error: string, reason?: string, detail?: string) => {
+    console.warn(`native Google sign-in refused: ${error}${detail ? ` (${detail})` : ''}`)
+    json(res, status, { error, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}) }, { 'Cache-Control': 'no-store' })
+  }
   const native = nativeGoogle()
   const origin = appOrigin()
   if (!native || !origin) return refuse(404, 'off')
   const challenge = typeof body.challenge === 'string' ? body.challenge : ''
   const idToken = typeof body.idToken === 'string' ? body.idToken : ''
-  if (!/^[A-Za-z0-9_-]{43}$/.test(challenge)) return refuse(400, 'expired')
+  if (!/^[A-Za-z0-9_-]{43}$/.test(challenge)) return refuse(400, 'expired', undefined, 'no challenge')
   // Taken out before anything else: any attempt uses it up.
   const live = nativeChallenges.get(challenge)
   nativeChallenges.delete(challenge)
-  if (!live || live.until <= Date.now() || !idToken || idToken.length > 6000) return refuse(400, 'expired')
+  if (!live || live.until <= Date.now()) return refuse(400, 'expired', undefined, 'challenge used or expired')
+  if (!idToken || idToken.length > 6000) return refuse(400, 'error', undefined, 'no token')
   const generation = revocationGeneration()
   let who
   try {
     who = await verifyGoogleIdToken(idToken, { clientId: native.clientId, nonce: nativeNonce(challenge, origin), androidClients: native.androidClients })
-  } catch {
-    return refuse(400, 'error')
+  } catch (e) {
+    // The verifier's messages name the check ("wrong authorized party", "wrong nonce", ...).
+    const check = e instanceof Error && /^[a-z ]{1,40}$/.test(e.message) ? e.message : 'token check failed'
+    return refuse(400, 'error', undefined, check)
   }
   // Something was revoked while the token was checked: start again.
-  if (revocationGeneration() !== generation) return refuse(409, 'expired')
+  if (revocationGeneration() !== generation) return refuse(409, 'expired', undefined, 'revoked meanwhile')
   const outcome = googleAccountFor(who)
   if ('refused' in outcome) return refuse(403, outcome.refused, outcome.refused === 'banned' && outcome.reason ? outcome.reason.slice(0, 200) : undefined)
   appSession(req, res, outcome.id)

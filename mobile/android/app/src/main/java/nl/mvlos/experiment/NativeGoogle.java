@@ -48,11 +48,18 @@ final class NativeGoogle {
         final List<String> cookies;
         final String error;
         final String reason;
+        /** The server's short reason for refusing a token (which check failed), for the dialog and logs. */
+        final String detail;
 
         Result(List<String> cookies, String error, String reason) {
+            this(cookies, error, reason, null);
+        }
+
+        Result(List<String> cookies, String error, String reason, String detail) {
             this.cookies = cookies;
             this.error = error;
             this.reason = reason;
+            this.detail = detail;
         }
     }
 
@@ -87,9 +94,11 @@ final class NativeGoogle {
             JSONObject refusal = new JSONObject(CloudLogin.read(c.getErrorStream(), 4096));
             String error = refusal.optString("error", "error");
             String reason = refusal.optString("reason", "");
-            return new Result(null, error.matches("[a-z-]{1,20}") ? error : "error", reason.isEmpty() ? null : reason);
+            String detail = refusal.optString("detail", "");
+            return new Result(null, error.matches("[a-z-]{1,20}") ? error : "error", reason.isEmpty() ? null : reason,
+                detail.matches("[a-z ]{1,40}") ? detail : null);
         } catch (Exception e) {
-            return new Result(null, "error", null);
+            return new Result(null, "unreachable", null, null);
         } finally {
             if (c != null) c.disconnect();
         }

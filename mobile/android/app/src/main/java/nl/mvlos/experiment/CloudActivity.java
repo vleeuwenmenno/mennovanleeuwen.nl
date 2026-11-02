@@ -214,7 +214,8 @@ public class CloudActivity extends AppCompatActivity {
                 switch (support) {
                     case SUPPORTED:
                         if ("google".equals(provider) && info.nativeGoogleClientId != null && NativeGoogle.allowedOrigin(server)) {
-                            askNativeGoogle(op, server, info.nativeGoogleClientId);
+                            // A server this build trusts: Google's own account chooser at once.
+                            nativeGoogle(op, server, info.nativeGoogleClientId);
                         } else {
                             openBrowser(CloudLogin.begin(this, server, provider));
                         }
@@ -240,25 +241,6 @@ public class CloudActivity extends AppCompatActivity {
 
     // ---- Native Google sign-in (Android's account picker) ----
 
-    /**
-     * Asks first, naming the server: the Google sheet itself only shows the Google project's name.
-     * Choosing an account is the deliberate step; the browser stays one tap away.
-     */
-    private void askNativeGoogle(int op, String server, String clientId) {
-        // This replaces any browser sign-in still waiting: its return no longer counts.
-        CloudLogin.clear(this);
-        new AlertDialog.Builder(this)
-            .setTitle(R.string.native_google_title)
-            .setMessage(getString(R.string.native_google_body, server))
-            .setPositiveButton(R.string.native_google_choose, (d, w) -> nativeGoogle(op, server, clientId))
-            .setNeutralButton(R.string.native_google_browser, (d, w) -> {
-                if (op == authOp && server.equals(origin)) openBrowser(CloudLogin.begin(this, server, "google"));
-            })
-            .setNegativeButton(android.R.string.cancel, (d, w) -> authOp++)
-            .setOnCancelListener(d -> authOp++)
-            .show();
-    }
-
     private boolean current(int op, String server) {
         return !isFinishing() && !isDestroyed() && op == authOp && server.equals(origin);
     }
@@ -271,7 +253,7 @@ public class CloudActivity extends AppCompatActivity {
                 if (!current(op, server)) return;
                 if (challenge == null) {
                     progress.setVisibility(View.GONE);
-                    offerBrowser(op, server, getString(R.string.native_google_failed));
+                    offerBrowser(op, server, getString(R.string.native_google_failed_code, "server: no challenge"));
                     return;
                 }
                 // The account chooser every time (no automatic choice), with every Google account on
@@ -285,27 +267,40 @@ public class CloudActivity extends AppCompatActivity {
                     new androidx.credentials.CredentialManagerCallback<androidx.credentials.GetCredentialResponse, androidx.credentials.exceptions.GetCredentialException>() {
                         @Override
                         public void onResult(androidx.credentials.GetCredentialResponse result) {
-                            if (!current(op, server)) return;
+                            if (!current(op, server)) {
+                                dropped(op, "result");
+                                return;
+                            }
                             String idToken = googleIdToken(result.getCredential());
                             if (idToken == null) {
                                 progress.setVisibility(View.GONE);
-                                offerBrowser(op, server, getString(R.string.native_google_failed));
+                                offerBrowser(op, server, getString(R.string.native_google_failed_code, "no Google ID token"));
                                 return;
                             }
+                            android.util.Log.i(TAG, "native sign-in: account chosen, redeeming");
                             redeemNative(op, server, challenge, idToken);
                         }
 
                         @Override
                         public void onError(androidx.credentials.exceptions.GetCredentialException e) {
-                            progress.setVisibility(View.GONE);
-                            if (!current(op, server)) return;
-                            // Cancelled: the person said no; nothing else opens by itself.
-                            if (e instanceof androidx.credentials.exceptions.GetCredentialCancellationException) {
-                                authOp++;
+                            String name = e.getClass().getSimpleName();
+                            String code = NativeGoogleErrors.code(name, e.getMessage());
+                            android.util.Log.w(TAG, "native sign-in failed: " + code);
+                            if (!current(op, server)) {
+                                dropped(op, code);
                                 return;
                             }
-                            offerBrowser(op, server, getString(e instanceof androidx.credentials.exceptions.NoCredentialException
-                                ? R.string.native_google_no_account : R.string.native_google_failed));
+                            progress.setVisibility(View.GONE);
+                            // Never silent: a refusal from Google after an account was chosen also arrives
+                            // as a "cancellation" (status 16). Only the person closing the chooser gets the
+                            // softer wording; both say it didn't sign in and offer the browser.
+                            if (NativeGoogleErrors.userCancelled(name, e.getMessage())) {
+                                offerBrowser(op, server, getString(R.string.native_google_cancelled));
+                            } else if (e instanceof androidx.credentials.exceptions.NoCredentialException) {
+                                offerBrowser(op, server, getString(R.string.native_google_no_account));
+                            } else {
+                                offerBrowser(op, server, getString(R.string.native_google_failed_code, code));
+                            }
                         }
                     });
             });
@@ -330,20 +325,46 @@ public class CloudActivity extends AppCompatActivity {
         new Thread(() -> {
             NativeGoogle.Result r = NativeGoogle.redeem(server, challenge, idToken, oldCookie);
             runOnUiThread(() -> {
-                if (!current(op, server)) return;
+                if (!current(op, server)) {
+                    dropped(op, r.cookies != null ? "signed in, but the sign-in was replaced" : "server: " + r.error);
+                    return;
+                }
                 if (r.cookies == null) {
                     progress.setVisibility(View.GONE);
+                    android.util.Log.w(TAG, "native sign-in refused by the server: " + r.error + (r.detail != null ? " (" + r.detail + ")" : ""));
                     // The server's own refusals (banned, sign-up closed or full) are final; other failures can try the browser.
                     if ("banned".equals(r.error) || "closed".equals(r.error) || "full".equals(r.error)) {
                         message(R.string.login_failed_title, errorText(r.error, r.reason));
                     } else {
-                        offerBrowser(op, server, getString(R.string.native_google_failed));
+                        offerBrowser(op, server, getString(R.string.native_google_failed_code, "server: " + r.error + (r.detail != null ? ", " + r.detail : "")));
                     }
                     return;
                 }
                 install(server, r.cookies, 0, op);
             });
         }).start();
+    }
+
+    private static final String TAG = "MvLOS";
+    /** A sign-in outcome that arrived after this screen was gone: shown when it is back (same process). */
+    private static String pendingNotice;
+
+    /**
+     * An answer for a sign-in that no longer counts. Replaced by a newer attempt: nothing to say.
+     * The screen itself went away meanwhile (recreated): keep a notice for the next one, so a
+     * failure is never just lost.
+     */
+    private void dropped(int op, String what) {
+        android.util.Log.w(TAG, "native sign-in answer dropped (" + (isDestroyed() || isFinishing() ? "screen gone" : "replaced") + "): " + what);
+        if (isDestroyed() || isFinishing()) pendingNotice = getString(R.string.native_google_failed_code, what);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        String notice = pendingNotice;
+        pendingNotice = null;
+        if (notice != null && web != null) message(R.string.login_failed_title, notice);
     }
 
     /** Native sign-in didn't work: say so, and offer the browser as an explicit choice. */
