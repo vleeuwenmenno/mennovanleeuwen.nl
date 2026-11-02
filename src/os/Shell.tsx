@@ -1,5 +1,5 @@
 import { WidgetVisibility } from '../widgets/platform/visibility'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
 import { dropInTrash, trashOp } from '../data/fileDrop'
 import { openFromParams } from './openUrl'
@@ -16,7 +16,7 @@ import { setOverlay, toggleOverlay, useOverlay } from './overlays'
 import { spotlightPrefs } from '../data/spotlightPrefs'
 import { Spotlight } from './Spotlight'
 import { useSnapPreview } from './snapPreview'
-import { DOCK_MODES, getDockMode, setDockMode, type DockMode } from './dockPrefs'
+import { DOCK_MODES, getDockMode, mobileDockApps, setDockMode, type DockMode } from './dockPrefs'
 import { ContextMenuHost, closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
 import { Desktop } from './Desktop'
 import { PowerScreens } from './Power'
@@ -39,9 +39,13 @@ import { notify } from './notify'
 import { isDefaultDock, isDockableApp, isLauncherId, pinToDock, resetDock, setDockOrder, unpinFromDock, useCanCustomizeDock, useDock, type DockId } from './dockItems'
 import { AppIcon } from './icons'
 import { TopBar } from './TopBar'
-import { useIsMobile } from './useIsMobile'
+import { isMobile, useIsMobile } from './useIsMobile'
 import { toUi, uiScale, viewH, viewW } from './uiScale'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
+import { setBackFallback, useBackLayer } from './backLayers'
+import { goToPage, homeUi, onPageRemoved, useHomeUi } from './homePager'
+import { MAX_PAGES, PAGE_STRIDE, pageOfX } from './homePages'
+import { useDesktop } from './desktopStore'
 import { NoteStackSlot, Window } from './Window'
 import { SINGLE_INSTANCE, useWM, workspaceOf, WORKSPACES, type AppId, type Geometry, type WinState } from './wm'
 
@@ -223,6 +227,8 @@ function Dock() {
   const runningApps = [...new Set(wm.windows.filter((w) => workspaceOf(w) !== null).sort((a, b) => a.pid - b.pid).map((w) => w.app))].filter((a) => !order.includes(a))
   const [fit, setFit] = useState(order.length + runningApps.length)
   const [moreOpen, setMoreOpen] = useState(false)
+  const appsCap = mobileDockApps.use()
+  useBackLayer(moreOpen, () => setMoreOpen(false))
   const navRef = useRef<HTMLElement>(null)
   const firstRef = useRef<HTMLButtonElement>(null)
   const appWindows = wm.windows.filter((w) => !w.minimized && wm.shown(w) && APP_META[w.app].chrome !== 'note')
@@ -263,8 +269,10 @@ function Dock() {
       // n apps plus All apps and Trash (plus More when it is needed), with gaps between all children.
       const width = (n: number, more: boolean) => (n + 2 + +more) * W + (n + 3 + +more) * gap
       const n = order.length + runningApps.length
-      if (width(n, false) <= room) return setFit(n)
-      let k = n - 1
+      // On a phone the apps shown are capped (Settings → Dock) before the width is.
+      const cap = isMobile() ? mobileDockApps.get() : n
+      if (n <= cap && width(n, false) <= room) return setFit(n)
+      let k = Math.min(n - 1, cap)
       while (k > 0 && width(k, true) > room) k--
       setFit(k)
     }
@@ -272,7 +280,7 @@ function Dock() {
     window.addEventListener('resize', measure)
     document.fonts?.ready.then(measure)
     return () => window.removeEventListener('resize', measure)
-  }, [order.length, runningApps.length])
+  }, [order.length, runningApps.length, appsCap])
 
   // Open apps keep their place when room runs out; pinned ones go behind More first.
   const runShown = runningApps.slice(0, fit)
@@ -761,11 +769,42 @@ export function Shell() {
   // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
   // the front, or just added, scrolls into view.
   const mobile = useIsMobile()
+  const desk = useDesktop()
+  const home = useHomeUi()
+  const wmRef = useRef(wm)
+  wmRef.current = wm
+  // The home screens are fixed pages side by side (homePager.ts). Their number is what was made
+  // (at least one) or as many as hold something; the widgets' share of "holds something" is here.
+  const widgetPages = useMemo(() => {
+    const counts: number[] = []
+    if (mobile) for (const w of wm.windows) if (NOTE_APPS.has(w.app) && wm.shown(w)) counts[pageOfX(w.x)] = (counts[pageOfX(w.x)] ?? 0) + 1
+    return Array.from(counts, (n) => n ?? 0)
+  }, [wm.windows, mobile])
+  const pageCount = mobile ? Math.min(MAX_PAGES, Math.max(desk.mobilePages ?? 1, home.icons.length, widgetPages.length, 1)) : 1
+  useEffect(() => { if (mobile) homeUi.set({ widgets: widgetPages, count: pageCount }) }, [mobile, widgetPages, pageCount])
+  // A note brought to the front, or just added, turns to its page.
   useEffect(() => {
     if (!mobile || wm.focusedPid === null) return
-    const el = document.querySelector(`.window.chrome-note[data-pid="${wm.focusedPid}"]`)
-    el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    const w = wmRef.current.windows.find((x) => x.pid === wm.focusedPid)
+    if (w && NOTE_APPS.has(w.app) && pageOfX(w.x) !== homeUi.get().page) goToPage(pageOfX(w.x))
   }, [mobile, wm.focusedPid])
+  // Taking an empty page away moves the widgets on later pages down one.
+  useEffect(() => mobile ? onPageRemoved((removed) => {
+    for (const w of wmRef.current.windows) if (NOTE_APPS.has(w.app) && pageOfX(w.x) > removed) wmRef.current.setGeometry(w.pid, { x: w.x - PAGE_STRIDE }, { automatic: true })
+  }) : undefined, [mobile])
+  // Back with nothing on top of the page: an app window leaves to the home screen (it stays
+  // running, in the dock), and a later home screen goes back to the first.
+  useEffect(() => {
+    if (!mobile) return setBackFallback(null)
+    setBackFallback(() => {
+      const w = wmRef.current.windows.find((x) => x.pid === wmRef.current.focusedPid)
+      if (w && !NOTE_APPS.has(w.app) && !w.minimized && wmRef.current.shown(w)) return wmRef.current.minimize(w.pid), true
+      if (homeUi.get().page > 0) return goToPage(0), true
+      return false
+    })
+    return () => setBackFallback(null)
+  }, [mobile])
+  useBackLayer(!!overlay, () => setOverlay(null))
 
   // The mouse's Back and Forward buttons (and the browser's Back) work in the focused window.
   useEffect(initBackButton, [])
@@ -914,7 +953,7 @@ export function Shell() {
       <TopBar />
       {/* Icons and windows. On phones this layer scrolls down when windows reach below the
           screen; the top bar, the dock and the wallpaper stay where they are. */}
-      <WidgetVisibility value={!hidden && !covered}><div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
+      <WidgetVisibility value={!hidden && !covered}><div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`} style={mobile ? { ['--home-pages' as string]: pageCount } : undefined}>
         <Desktop />
         <main className="windows">
           {/* A phone only draws the widgets whose package says it works there (`phone: true`). */}
@@ -923,6 +962,7 @@ export function Shell() {
           ))}
           {/* Phones: where a note being moved up or down the column will land. */}
           <NoteStackSlot />
+          {mobile && Array.from({ length: pageCount }, (_, i) => <span key={i} className="home-snap" style={{ left: `calc(${i} * 100vw / var(--ui-scale, 1))` }} aria-hidden />)}
         </main>
       </div>
       </WidgetVisibility>

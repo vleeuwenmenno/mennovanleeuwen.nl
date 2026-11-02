@@ -1,11 +1,15 @@
 import { useEffect, useRef } from 'react'
+import { closeTopLayer, runBackFallback } from './backLayers'
 
 // The mouse's Back and Forward buttons, and the browser's own Back (its button, Alt+Left, a swipe):
 // they go back in the focused window (Files a folder, Preview a picture, Archive up a folder)
-// instead of off the site. The browser's Back is caught with one extra history entry, put there
+// instead of off the site. Whatever sits on top of the page closes first (src/os/backLayers.ts: a
+// menu, a dialog, Spotlight...), and a window with nothing left to go back in lets Back fall
+// through to what the phone does with it (leave the app window, then the first home screen). The browser's Back is caught with one extra history entry, put there
 // after the first click or key press (browsers skip entries added without one).
 
-type Handler = { back?: () => void; forward?: () => void }
+/** A handler returns false when there is nothing left to go back (or forward) to. */
+type Handler = { back?: () => boolean | void; forward?: () => boolean | void }
 
 const handlers = new Map<number, React.RefObject<Handler>>()
 let focused: number | null = null
@@ -13,10 +17,15 @@ let ignorePopUntil = 0
 
 export const setBackFocus = (pid: number | null) => void (focused = pid)
 
+/** Whether the focused window took it. */
 function go(dir: 'back' | 'forward') {
-  if (focused === null) return
-  handlers.get(focused)?.current?.[dir]?.()
+  if (focused === null) return false
+  const handler = handlers.get(focused)?.current?.[dir]
+  return !!handler && handler() !== false
 }
+
+/** Back, in order: what is on top of the page, the focused window, then the phone's own fallback. */
+const goBack = () => closeTopLayer() || go('back') || runBackFallback()
 
 /** What Back and Forward do while this window is focused. */
 export function useBackButton(pid: number, handler: Handler) {
@@ -49,7 +58,8 @@ export function initBackButton() {
       e.preventDefault()
       // Some browsers navigate anyway: the guard below then catches it, without going twice.
       ignorePopUntil = Date.now() + 600
-      go(e.button === 3 ? 'back' : 'forward')
+      if (e.button === 3) goBack()
+      else go('forward')
     },
     true,
   )
@@ -65,6 +75,6 @@ export function initBackButton() {
   window.addEventListener('keydown', arm, true)
   window.addEventListener('popstate', () => {
     if (!iosHomeScreen()) guard()
-    if (Date.now() > ignorePopUntil) go('back')
+    if (Date.now() > ignorePopUntil) goBack()
   })
 }

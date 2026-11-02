@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useBackLayer } from './backLayers'
 import { timeAgo } from '../data/recents'
 import { openContextMenu, type MenuItem } from './ContextMenu'
 import { AppIcon } from './icons'
@@ -22,6 +23,7 @@ export function NotificationCenter() {
   // What needs you counts until it is dealt with (src/os/alerts.ts), on top of what is unread.
   const unread = entries.filter((e) => !e.read).length + alerts.length
 
+  useBackLayer(open, () => setOpen(false))
   useEffect(() => {
     if (!open) return
     pruneEntries()

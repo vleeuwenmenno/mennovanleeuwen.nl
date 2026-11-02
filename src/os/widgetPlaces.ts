@@ -1,4 +1,5 @@
 import { mobileHomeGeometry } from './homeLayout'
+import { localX, mobileWidgetRect, pageOfX } from './homePages'
 import { synced } from './synced'
 import { viewH, viewW } from './uiScale'
 import { accountGuard } from './accountSpace'
@@ -180,7 +181,11 @@ if (import.meta.hot) import.meta.hot.dispose(disposeMobile)
  * Otherwise deleting an earlier legacy entry would change every later entry's row on reload. */
 export function migrateMobileWidgets(set: WidgetSet, width: number, height: number): WidgetSet {
   const ordered = Object.entries(set.places).sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
-  return { ...set, places: Object.fromEntries(ordered.map(([key, p], index) => [key, p.homeGrid ? p : {
-    ...p, ...mobileHomeGeometry(p, index, width), homeGrid: true, phone: true, vw: width, vh: height, at: nextAt(p),
-  }])) }
+  return { ...set, places: Object.fromEntries(ordered.map(([key, p], index) => {
+    if (p.homeGrid) return [key, p]
+    // The page it was on (from the screen it was saved on) is frozen with its coordinates, since
+    // vh is replaced by this screen's: otherwise a later edit would move untouched widgets between pages.
+    const r = mobileWidgetRect(p, index, width, height)
+    return [key, { ...p, ...mobileHomeGeometry(p, index, width), x: localX(r.x), y: r.y, page: pageOfX(r.x), homeGrid: true, phone: true, vw: width, vh: height, at: nextAt(p) }]
+  })) }
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import { useBackLayer } from './backLayers'
 
 // The desktop's own dialogs, instead of the browser's confirm and alert: a question in the
 // middle of the screen, the desktop dimmed behind it. One at a time; more wait their turn.
@@ -105,6 +106,7 @@ export function Dialogs() {
     () => queue[0] ?? null,
   )
   const box = useRef<HTMLDivElement>(null)
+  useBackLayer(!!current, () => current && answer(current.buttons.some((b) => b.id === 'cancel') ? 'cancel' : null))
   useEffect(() => {
     if (!current) return
     const onKey = (e: KeyboardEvent) => {

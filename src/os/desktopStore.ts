@@ -4,10 +4,13 @@ import { synced } from './synced'
 // called, and which icons are in the trash. Remembered per browser, so a visitor's tidy (or messy)
 // desktop survives a reload, and synced to the server for the signed-in user.
 
-export type IconPos = { col: number; row: number }
+/** A cell counts columns from the right. `page` is the phone home screen (absent on older saves: the one tall home, cut into pages by rows). */
+export type IconPos = { col: number; row: number; page?: number }
 export type DesktopState = {
   positions: Record<string, IconPos>
   mobilePositions?: Record<string, IconPos>
+  /** How many phone home screens exist (empty ones included); at least as many as hold something. */
+  mobilePages?: number
   names: Record<string, string>
   trashed: string[]
 }
