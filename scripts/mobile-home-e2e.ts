@@ -172,12 +172,17 @@ try {
   await sleep(500)
   const dockEight = await dockApps()
   check('a cap above what fits is clamped to the width, never overflowing', !dockEight.overflowX && dockEight.items <= 8, dockEight)
+  // With the cap at 2 there is always something under More: it must open, list the rest, stay on screen, and Back closes it.
+  await p.eval(`(async () => { (await import('/src/os/dockPrefs.ts')).mobileDockApps.set(2) })()`)
+  await sleep(500)
   await click(p, '.dock-more .dock-item')
   await sleep(300)
-  check('More lists the rest and stays on screen', await p.eval(`(() => { const s = document.querySelector('.dock-stack'); if (!s) return true; const r = s.getBoundingClientRect(); return r.top >= 0 && r.left >= 0 && r.right <= innerWidth })()`))
+  check('More opens and lists the rest, on screen', await p.eval(`(() => { const s = document.querySelector('.dock-stack'); if (!s || s.querySelectorAll('.dock-stack-item').length < 1) return false; const r = s.getBoundingClientRect(); return r.top >= 0 && r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight })()`))
   await p.eval(`history.back()`)
   await sleep(300)
   check('Back closes More', await p.eval(`!document.querySelector('.dock-stack')`))
+  await p.eval(`(async () => { (await import('/src/os/dockPrefs.ts')).mobileDockApps.set(8) })()`)
+  await sleep(500)
   await p.eval(`(async () => { (await import('/src/os/dockPrefs.ts')).mobileDockApps.set(4) })()`)
 
   // --- Back leaves an app window for the home screen ---
@@ -225,6 +230,16 @@ try {
   await sleep(900)
   const geoBack = await geometry()
   check('back at the first size the widget is as wide as it was put', Math.abs(geoBack.w - 362) < 1.5 && JSON.stringify(geoBack) === JSON.stringify(geo0), { geoBack, geo0 })
+  // Loaded on a narrow phone first, then a wider one: the width it was put at comes back.
+  await r.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 568, deviceScaleFactor: 2, mobile: true })
+  await r.send('Page.navigate', { url: origin })
+  await r.waitFor(`!!document.querySelector('[data-app="widget"]') && !!document.querySelector('.home-pages')`, 90_000)
+  await sleep(900)
+  const narrowFirst = await geometry()
+  await r.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+  await sleep(900)
+  const widerAfter = await geometry()
+  check('first load on a narrow phone shows it narrower, and a wider screen brings the saved width back', narrowFirst.w <= 320 - 28 + 1.5 && Math.abs(widerAfter.w - 362) < 1.5 && (await savedSet()) === set0, { narrowFirst, widerAfter })
   // The first edit freezes old places by an order that does not depend on how the entries were added.
   const frozen = await r.eval<{ a: string; b: string }>(`(async () => {
     const { migrateMobileWidgets } = await import('/src/os/widgetPlaces.ts')
@@ -236,6 +251,38 @@ try {
   check('first-edit migration gives each key the same page and place whatever order the entries were added in', frozen.a === frozen.b && frozen.a.includes('z~a') && frozen.a.includes('"page"') === false, frozen)
   check('no script errors with phone widgets', r.errors.length === 0, r.errors)
   await r.close()
+
+  // --- icons out of sight keep their place when an empty page before them is removed ---
+  const h = await open()
+  await h.send('Page.navigate', { url: origin })
+  await h.waitFor(`!!document.querySelector('.topbar') && !document.querySelector('.boot')`, 90_000)
+  await sleep(1200)
+  await h.eval(`(async () => {
+    const ds = await import('/src/os/desktopStore.ts')
+    ds.updateDesktop((s) => ({ ...s, trashed: ['games'], mobilePositions: { games: { col: 0, row: 1, page: 3 } }, mobilePages: 4 }))
+    // The pages of this browser profile are shared: the widget an earlier check put on page 2 goes.
+    ;(await import('/src/os/widgetPlaces.ts')).widgetPlaces.set(() => ({ places: {}, removed: 'wide' }))
+    ;(await import('/src/os/startup.ts')).setStartupPrefs({ windows: 'empty' })
+  })()`)
+  await h.send('Page.navigate', { url: origin })
+  await h.waitFor(`!!document.querySelector('.home-pages')`, 90_000)
+  await sleep(900)
+  await click(h, '.home-edit')
+  await sleep(200)
+  await click(h, '.home-dot:nth-child(2)')
+  await sleep(700)
+  check('a page that only holds a trashed icon is not empty, an empty one is', await h.eval(`(() => { const b = [...document.querySelectorAll('.home-edit-bar button')].find((x) => x.textContent.trim() === 'Remove page'); return !b.disabled })()`))
+  await click(h, '.home-dot:nth-child(4)')
+  await sleep(700)
+  check('the page holding the trashed icon cannot be removed', await h.eval(`[...document.querySelectorAll('.home-edit-bar button')].find((x) => x.textContent.trim() === 'Remove page').disabled`))
+  await click(h, '.home-dot:nth-child(2)')
+  await sleep(700)
+  await buttonByText(h, '.home-edit-bar', 'Remove page')
+  await sleep(700)
+  const afterRemoval = (await desk(h))?.mobilePositions?.games
+  check('removing an empty page before it moves the trashed icon down with the pages', afterRemoval?.page === 2 && (await dots(h)).count === 3, { afterRemoval, dots: await dots(h) })
+  check('no script errors with hidden icons', h.errors.length === 0, h.errors)
+  await h.close()
 
   // --- storage blocked: everything keeps working in memory ---
   const blocked = `(() => { const bad = () => { throw new DOMException('blocked', 'SecurityError') }; Storage.prototype.setItem = bad; Storage.prototype.getItem = () => null; Storage.prototype.removeItem = bad })()`

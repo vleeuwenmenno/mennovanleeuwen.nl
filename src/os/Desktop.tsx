@@ -28,7 +28,7 @@ import { useSwing } from './swing'
 import { mobileWidgetEnvelope, widgetEnvelope } from './widgetLayout'
 import { drawnHeight, drawnWidth, useWM, type AppId } from './wm'
 import { freeHomeRect, iconLayout, ICON_W, ICON_H, HOME_LEFT, HOME_TOP, type HomeRect } from './homeLayout'
-import { dropCell, fromContentX, iconPages, joinX, localX, pageOfX, takenCells, type PageObstacle } from './homePages'
+import { cellOnPreviousPage, dropCell, fromContentX, iconPages, joinX, localX, pageOfX, savedIconPage, takenCells, type PageObstacle } from './homePages'
 import { addHomePage, edgeDwell, goToPage, homeScroller, homeUi, itemsOnPage, onPageRemoved } from './homePager'
 import { HomePager, pageMenu } from './HomePager'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
@@ -254,15 +254,26 @@ export function Desktop() {
   // How many icons each page holds, for the page dots (which pages can be taken away).
   const iconCounts = useMemo(() => {
     const counts: number[] = []
-    if (mobile) for (const p of Object.values(positions)) counts[p.page ?? 0] = (counts[p.page ?? 0] ?? 0) + 1
+    if (mobile) {
+      for (const p of Object.values(positions)) counts[p.page ?? 0] = (counts[p.page ?? 0] ?? 0) + 1
+      // Icons out of sight that can come back (trashed, or the site's own while hidden) still hold their page.
+      const shown = new Set(visible.map((i) => i.id))
+      const restorable = new Set([...desk.trashed, ...DESKTOP_ICONS.map((i) => i.id)])
+      for (const [id, p] of Object.entries(storedPositions)) if (!shown.has(id) && restorable.has(id)) counts[savedIconPage(p)] = (counts[savedIconPage(p)] ?? 0) + 1
+    }
     return Array.from(counts, (n) => n ?? 0)
-  }, [positions, mobile])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions, mobile, storedPositions, desk.trashed])
   useEffect(() => { if (mobile) homeUi.set({ icons: iconCounts }) }, [iconCounts, mobile])
 
   // Taking an empty page away: the icons on later pages move down one. Everything is pinned
   // (page and cell) so nothing else is guessed again afterwards.
+  // The ones out of sight (trashed, hidden) move with the rest, so showing them again finds them in place.
   useEffect(() => mobile ? onPageRemoved((removed) => updateDesktop((s) => ({ ...s,
-    mobilePositions: { ...s.mobilePositions, ...Object.fromEntries(Object.entries(positions).map(([id, p]) => [id, (p.page ?? 0) > removed ? { ...p, page: (p.page ?? 0) - 1 } : p])) } }))) : undefined, [mobile, positions])
+    mobilePositions: {
+      ...Object.fromEntries(Object.entries(s.mobilePositions ?? s.positions).map(([id, p]) => [id, savedIconPage(p) > removed ? cellOnPreviousPage(p) : p])),
+      ...Object.fromEntries(Object.entries(positions).map(([id, p]) => [id, (p.page ?? 0) > removed ? { ...p, page: (p.page ?? 0) - 1 } : p])),
+    } }))) : undefined, [mobile, positions])
 
   useEffect(() => {
     const onResize = () => setViewport((n) => n + 1)

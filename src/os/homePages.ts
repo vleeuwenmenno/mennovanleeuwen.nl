@@ -57,13 +57,15 @@ export const LEGACY_HEIGHT = 800
 /** Geometry (logical x) of a phone widget from its saved place: explicit page, or the old column cut into pages. */
 export function mobileWidgetRect(p: HomeRect & { homeGrid?: boolean; page?: number; vh?: number; vw?: number; phone?: boolean }, index: number, width: number, _height: number): HomeRect {
   const base = mobileHomeGeometry(p, index, width)
-  const room = Math.max(1, width - base.w - HOME_LEFT)
-  const x = clamp(base.x, HOME_LEFT, Math.max(HOME_LEFT, room))
-  if (typeof p.page === 'number') return { ...base, x: joinX(p.page, x) }
+  // The place as it was put (at least the narrowest a widget is): fitting it to this screen is
+  // what the display does (fitPhoneWidget), so a narrow phone never shrinks what is kept.
+  const x = Math.max(HOME_LEFT, base.x)
+  const put = { ...base, w: Math.max(180, p.w) }
+  if (typeof p.page === 'number') return { ...put, x: joinX(p.page, x) }
   // Saved on a phone: cut at the height of that screen; from a big screen: at the fixed legacy height.
   const onPhone = p.phone ?? (p.vw ?? 0) < 720
   const legacy = legacyWidgetPage(base.y, base.h, onPhone && p.vh ? p.vh : LEGACY_HEIGHT)
-  return { ...base, x: joinX(legacy.page, x), y: legacy.y }
+  return { ...put, x: joinX(legacy.page, x), y: legacy.y }
 }
 
 /**
@@ -127,6 +129,11 @@ export function arrangePages(items: (PagedItem & { drawnW?: number; drawnH?: num
 // --- icons ---
 
 export type PageCell = { page: number; col: number; row: number }
+
+/** The page a saved icon cell is on: its own, or (older saves) the old tall home cut by LEGACY_ROWS. */
+export const savedIconPage = (p: { row: number; page?: number }) => (typeof p.page === 'number' ? clampPage(p.page) : clampPage(Math.floor(Math.max(0, p.row) / LEGACY_ROWS)))
+/** The same cell with its page moved down one (and pinned: an older cell's row becomes its row on that page). */
+export const cellOnPreviousPage = <T extends { row: number; page?: number }>(p: T): T => ({ ...p, row: typeof p.page === 'number' ? p.row : Math.max(0, p.row) % LEGACY_ROWS, page: savedIconPage(p) - 1 })
 type StoredCell = { col?: unknown; row?: unknown; page?: unknown }
 
 /** Icon cells count columns from the right, as on the desktop. */

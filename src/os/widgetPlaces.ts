@@ -1,4 +1,3 @@
-import { mobileHomeGeometry } from './homeLayout'
 import { localX, mobileWidgetRect, pageOfX } from './homePages'
 import { synced } from './synced'
 import { viewH, viewW } from './uiScale'
@@ -187,6 +186,6 @@ export function migrateMobileWidgets(set: WidgetSet, width: number, height: numb
     // The page it was on (from the screen it was saved on) is frozen with its coordinates, since
     // vh is replaced by this screen's: otherwise a later edit would move untouched widgets between pages.
     const r = mobileWidgetRect(p, index, width, height)
-    return [key, { ...p, ...mobileHomeGeometry(p, index, width), x: localX(r.x), y: r.y, page: pageOfX(r.x), homeGrid: true, phone: true, vw: width, vh: height, at: nextAt(p) }]
+    return [key, { ...p, w: r.w, h: r.h, x: localX(r.x), y: r.y, page: pageOfX(r.x), homeGrid: true, phone: true, vw: width, vh: height, at: nextAt(p) }]
   })) }
 }

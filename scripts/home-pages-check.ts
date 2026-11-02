@@ -2,7 +2,7 @@
 // pnpm check:home-pages
 import assert from 'node:assert/strict'
 import { HOME_LEFT, HOME_TOP, ICON_H, ICON_W, overlaps } from '../src/os/homeLayout.ts'
-import { MAX_PAGES, PAGE_DOCK, PAGE_STRIDE, arrangePages, dropCell, drawX, fitOnPage, fitPhoneWidget, fromContentX, iconPages, joinX, legacyWidgetPage, localX, mobileWidgetRect, pageCols, pageOfX, pageRows, takenCells } from '../src/os/homePages.ts'
+import { MAX_PAGES, PAGE_DOCK, PAGE_STRIDE, arrangePages, cellOnPreviousPage, savedIconPage, dropCell, drawX, fitOnPage, fitPhoneWidget, fromContentX, iconPages, joinX, legacyWidgetPage, localX, mobileWidgetRect, pageCols, pageOfX, pageRows, takenCells } from '../src/os/homePages.ts'
 import { mobileWidgetEnvelope } from '../src/os/widgetLayout.ts'
 import { phoneOrder, type WidgetPlace, type WidgetSet } from '../src/widgets/platform/placementSet.ts'
 
@@ -154,3 +154,19 @@ assert.deepEqual(saved, snapshot2, 'the saved place is not changed by fitting')
 assert.equal(fitPhoneWidget(saved, 312).w, 284)
 assert.equal(fitPhoneWidget({ x: joinX(0, 300), w: 100 }, 320).x, joinX(0, 320 - 100 - HOME_LEFT), 'a widget that no longer fits sideways moves in, to the page margin')
 console.log('PASS home pages: phone widget width fits the page and restores')
+
+// Round 4: the width and place a widget was put at are kept as they are; only the display fits them to the screen.
+for (const width of [390, 360, 320, 290]) {
+  const r = mobileWidgetRect({ x: 14, y: 60, w: 362, h: 200, homeGrid: true, page: 1, vh: 844, vw: 390, phone: true }, 0, width, 800)
+  assert.equal(r.w, 362, `saved width kept when hydrated at ${width}`)
+  assert.equal(localX(r.x), 14)
+  assert.equal(pageOfX(r.x), 1)
+}
+assert.equal(fitPhoneWidget(mobileWidgetRect({ x: 14, y: 60, w: 362, h: 200, homeGrid: true, page: 1 }, 0, 320, 800), 390).w, 362, 'narrow first load, then wider: as it was put')
+// Icons out of sight move with a removed page: cells with and without a page.
+assert.equal(savedIconPage({ row: 3 }), 0)
+assert.equal(savedIconPage({ row: 7 }), 1)
+assert.equal(savedIconPage({ row: 1, page: 3 }), 3)
+assert.deepEqual(cellOnPreviousPage({ col: 1, row: 7 }), { col: 1, row: 2, page: 0 })
+assert.deepEqual(cellOnPreviousPage({ col: 1, row: 1, page: 3 }), { col: 1, row: 1, page: 2 })
+console.log('PASS home pages: saved widget width is kept; out-of-sight icons shift with a removed page')

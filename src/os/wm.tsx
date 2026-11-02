@@ -615,7 +615,7 @@ function showWidgets(state: State, list: WidgetShown[]): State {
   const seen = new Set<string>()
   let changed = false
   let pid = state.nextPid
-  const fit = (g: Geometry, screen?: Screen | null) => (state.phone ? g : projectWidget(g, screen, viewW(), viewH()))
+  const fit = (g: Geometry, screen?: Screen | null) => (state.phone ? { ...g, ...fitPhoneWidget(g, viewW()) } : projectWidget(g, screen, viewW(), viewH()))
   const windows: WinState[] = []
   for (const w of state.windows) {
     if (w.app !== 'widget') {
