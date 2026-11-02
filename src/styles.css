@@ -467,15 +467,34 @@ body.is-resizing iframe {
 .topbar.is-unlocked .topbar-spacer.is-dragged {
   cursor: grabbing;
   opacity: 0.9;
-  pointer-events: none;
 }
 .topbar.is-unlocked .topbar-slot {
   outline: 1px dashed color-mix(in srgb, var(--accent) 35%, transparent);
   outline-offset: 1px;
 }
-.topbar.is-reordering .topbar-slot:not(.is-dragged),
-.topbar.is-reordering .topbar-spacer:not(.is-dragged) {
-  transition: transform 0.2s ease;
+/* Editing handles reserve touch gestures without disabling panning on the widgets. */
+.topbar.is-unlocked .topbar-slot,
+.topbar.is-unlocked .topbar-spacer {
+  position: relative;
+}
+.topbar-reorder-handle {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 0 0 4px 4px;
+  background: var(--bg);
+  color: var(--fg);
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.topbar-reorder-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .logo {
   display: inline-flex;

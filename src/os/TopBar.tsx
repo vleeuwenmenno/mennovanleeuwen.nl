@@ -15,6 +15,7 @@ import {
   setTopbarLocked,
   setTopbarOrder,
   toggleTopbarWidget,
+  topbarPrefs,
   TOPBAR_IDS,
   TOPBAR_LABELS,
   useTopbarPrefs,
@@ -23,7 +24,7 @@ import {
 } from './topbarPrefs'
 import { ClockWidget, MinecraftWidget, SystemMenu } from './TopbarWidgets'
 import { useWM, workspaceOf, WORKSPACES, type WinState } from './wm'
-import { toUi, uiScale } from './uiScale'
+import { toUi } from './uiScale'
 
 const DRAG_SLOP = 6
 
@@ -175,12 +176,16 @@ export function TopBar() {
   const [order, setOrder] = useState<TopbarSlot[]>(resolved)
   const orderRef = useRef(order)
   orderRef.current = order
-  const [dragging, setDragging] = useState<{ index: number; dx: number } | null>(null)
+  const [dragging, setDragging] = useState<{ index: number; clientX: number; grabOffset: number } | null>(null)
   const drag = useRef<{ index: number; startX: number; moved: boolean } | null>(null)
   const items = useRef(new Map<number, HTMLElement>())
-  const prevRects = useRef<Map<number, number> | null>(null)
   const suppressClick = useRef(false)
-  const dxRef = useRef(0)
+  const cancelDrag = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => cancelDrag.current?.(), [])
+  useEffect(() => {
+    cancelDrag.current?.()
+  }, [resolvedKey, prefs.locked, prefs.hidden.join('|')])
 
   useEffect(() => {
     if (drag.current) return
@@ -216,99 +221,139 @@ export function TopBar() {
   }
 
   useLayoutEffect(() => {
-    const prev = prevRects.current
-    if (!prev) return
-    prevRects.current = null
-    for (const [index, el] of items.current) {
-      if (index === drag.current?.index) continue
-      const before = prev.get(index)
-      if (before === undefined) continue
-      const dx = toUi(before - el.getBoundingClientRect().left)
-      if (!dx) continue
-      el.style.transition = 'none'
-      el.style.transform = `translateX(${dx}px)`
-      requestAnimationFrame(() => {
-        el.style.transition = 'transform 0.2s ease'
-        el.style.transform = ''
-      })
-    }
-  }, [order])
+    // Read the slot's new natural position after each reorder, so the handle stays under the finger.
+    for (const node of items.current.values()) node.style.transform = ''
+    if (!dragging) return
+    const node = items.current.get(dragging.index)
+    if (node) node.style.transform = `translateX(${toUi(dragging.clientX - dragging.grabOffset - node.getBoundingClientRect().left)}px)`
+  }, [dragging, order])
 
-  const onSlotPointerDown = (e: React.PointerEvent, index: number) => {
-    if (!unlocked || e.button !== 0) return
-    // A press that stays put is still a click on the widget. Moving past a few pixels drags it.
+  const saveOrder = (next: TopbarSlot[]) => {
+    const current = topbarPrefs()
+    if (current.locked) return
+    const hiddenSlots = current.order.filter((s) => s !== 'spacer' && isTopbarHidden(s, current))
+    setTopbarOrder([...next, ...hiddenSlots])
+  }
+
+  const moveSlot = (index: number, by: number) => {
+    const next = [...orderRef.current]
+    // CSS-hidden mobile widgets have no position to move to.
+    let to = index + by
+    while (to >= 0 && to < next.length && !items.current.get(to)?.getBoundingClientRect().width) to += by
+    if (to < 0 || to >= next.length) return
+    const [slot] = next.splice(index, 1)
+    next.splice(to, 0, slot)
+    saveOrder(next)
+  }
+
+  const onSlotPointerDown = (e: React.PointerEvent, index: number, handle = false) => {
+    if (!unlocked || e.button !== 0 || !e.isPrimary || (e.pointerType !== 'mouse' && !handle)) return
+    if (cancelDrag.current) return
+    e.stopPropagation()
+    const target = e.currentTarget as HTMLElement
+    const pointerId = e.pointerId
+    // Only handles disable native panning. The rest of the bar remains usable for scrolling/taps.
+    if (handle) target.setPointerCapture(pointerId)
     const startX = e.clientX
     const startY = e.clientY
-    dxRef.current = 0
+    const original = [...orderRef.current]
+    const el = items.current.get(index)
+    if (!el) return
+    const grabOffset = startX - el.getBoundingClientRect().left
 
     const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return
       let d = drag.current
       if (!d) {
         if (Math.hypot(ev.clientX - startX, ev.clientY - startY) <= DRAG_SLOP) return
-        d = { index, startX, moved: false }
+        d = { index, startX, moved: true }
         drag.current = d
       }
-      if (!d.moved && Math.abs(ev.clientX - d.startX) < DRAG_SLOP) return
-      d.moved = true
+      ev.preventDefault()
       document.body.classList.add('is-dragging')
-      const el = items.current.get(d.index)
-      if (!el) return
-      const r = el.getBoundingClientRect()
-      const naturalCenter = r.left + r.width / 2 - dxRef.current * uiScale()
+      const node = items.current.get(d.index)
+      if (!node) return
       const from = d.index
       const slot = orderRef.current[from]
       const others = orderRef.current.filter((_, i) => i !== from)
-      let idx = 0
+      // Keep CSS-hidden slots in the saved layout without treating their zero rect as a target.
+      let at = from
       for (let i = 0; i < orderRef.current.length; i++) {
         if (i === from) continue
-        const node = items.current.get(i)
-        if (!node) continue
-        const o = node.getBoundingClientRect()
-        if (ev.clientX > o.left + o.width / 2) idx++
+        const r = items.current.get(i)?.getBoundingClientRect()
+        if (!r?.width) continue
+        if (i < from && ev.clientX < r.left + r.width / 2) { at = i; break }
+        if (i > from && ev.clientX > r.left + r.width / 2) at = i
       }
-      const next = [...others.slice(0, idx), slot, ...others.slice(idx)]
-      const newIndex = next.indexOf(slot) === idx ? idx : next.findIndex((s, i) => i >= idx && s === slot)
-      // Prefer the insert index we computed (spacers/widgets can repeat only as spacers).
-      const at = idx
       const arranged = [...others.slice(0, at), slot, ...others.slice(at)]
-      if (arranged.join('|') !== orderRef.current.join('|')) {
-        prevRects.current = new Map([...items.current].map(([i, node]) => [i, node.getBoundingClientRect().left]))
-        // Remap refs: after reorder, indices change — clear and let refs rebind on commit.
-        items.current = new Map()
+      if (at !== from) {
         d.index = at
         orderRef.current = arranged
         setOrder(arranged)
       }
-      dxRef.current = toUi(ev.clientX - naturalCenter)
-      setDragging({ index: d.index, dx: dxRef.current })
-      void newIndex
+      setDragging({ index: d.index, clientX: ev.clientX, grabOffset })
     }
 
-    const stop = () => {
+    const finish = (commit: boolean) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
-    }
-
-    const onUp = () => {
-      stop()
-      const d = drag.current
+      window.removeEventListener('pointercancel', onCancel)
+      window.removeEventListener('blur', onCancel)
+      window.removeEventListener('keydown', onKey)
+      target.removeEventListener('lostpointercapture', onCancel)
+      cancelDrag.current = null
+      const moved = !!drag.current?.moved
       drag.current = null
       document.body.classList.remove('is-dragging')
-      if (d?.moved) {
+      if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+      if (moved) {
         suppressClick.current = true
-        setTimeout(() => (suppressClick.current = false), 50)
-        const hide = new Set(TOPBAR_IDS.filter((id) => isTopbarHidden(id, prefs)))
-        const hiddenSlots = prefs.order.filter((s) => s !== 'spacer' && hide.has(s as TopbarId))
-        setTopbarOrder([...orderRef.current, ...hiddenSlots])
+        setTimeout(() => (suppressClick.current = false), 400)
+      }
+      if (commit && moved) saveOrder(orderRef.current)
+      else {
+        orderRef.current = original
+        setOrder(resolveTopbar(topbarPrefs()))
       }
       setDragging(null)
     }
-
-    window.addEventListener('pointermove', onMove)
+    const onUp = (ev: PointerEvent) => { if (ev.pointerId === pointerId) finish(true) }
+    const onCancel = (ev?: Event) => {
+      if (ev instanceof PointerEvent && ev.pointerId !== pointerId) return
+      finish(false)
+    }
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.preventDefault(); finish(false) } }
+    cancelDrag.current = onCancel
+    window.addEventListener('pointermove', onMove, { passive: false })
     window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
+    window.addEventListener('pointercancel', onCancel)
+    window.addEventListener('blur', onCancel)
+    window.addEventListener('keydown', onKey)
+    target.addEventListener('lostpointercapture', onCancel)
   }
+
+  const reorderHandle = (slot: TopbarSlot, index: number) => unlocked && (
+    <button
+      type="button"
+      className="topbar-reorder-handle"
+      aria-label={`Reorder ${slot === 'spacer' ? 'spacer' : TOPBAR_LABELS[slot]}`}
+      title="Drag to reorder; Left/Right arrows to move; tap for menu"
+      aria-description="Use Left and Right arrow keys to move, or activate for move and lock actions."
+      onPointerDown={(e) => onSlotPointerDown(e, index, true)}
+      onKeyDown={(e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+        e.preventDefault()
+        e.stopPropagation()
+        moveSlot(index, e.key === 'ArrowLeft' ? -1 : 1)
+      }}
+      onClick={(e) => openContextMenu(e, [
+        { label: 'Move left', onSelect: () => moveSlot(index, -1) },
+        { label: 'Move right', onSelect: () => moveSlot(index, 1) },
+        { separator: true },
+        ...barMenu(),
+      ])}
+    >↔</button>
+  )
 
   const editMenu = (e: React.MouseEvent) => {
     if (!unlocked) return
@@ -321,6 +366,7 @@ export function TopBar() {
     <header
       className={`topbar ${unlocked ? 'is-unlocked' : ''} ${dragging ? 'is-reordering' : ''}`}
       data-no-touch-menu={unlocked ? '' : undefined}
+      onPointerDownCapture={() => { suppressClick.current = false }}
       onContextMenu={(e) => openContextMenu(e, barMenu())}
       onClickCapture={(e) => {
         if (suppressClick.current) {
@@ -331,11 +377,11 @@ export function TopBar() {
     >
       {order.map((slot, index) => {
         const isDragged = dragging?.index === index
-        const style = isDragged ? { transform: `translateX(${dragging.dx}px)`, zIndex: 2 } : undefined
+        const style = isDragged ? { zIndex: 2 } : undefined
         if (slot === 'spacer') {
           return (
             <div
-              key={`spacer-${index}`}
+              key={`spacer-${order.slice(0, index).filter((s) => s === 'spacer').length}`}
               ref={(el) => {
                 if (el) items.current.set(index, el)
                 else items.current.delete(index)
@@ -345,8 +391,9 @@ export function TopBar() {
               style={style}
               onPointerDown={(e) => onSlotPointerDown(e, index)}
               onContextMenu={editMenu}
-              aria-hidden
-            />
+            >
+              {reorderHandle(slot, index)}
+            </div>
           )
         }
         const Widget = WIDGETS[slot]
@@ -364,6 +411,7 @@ export function TopBar() {
             onContextMenu={editMenu}
           >
             {Widget()}
+            {reorderHandle(slot, index)}
           </div>
         )
       })}

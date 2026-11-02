@@ -128,7 +128,11 @@ The top bar itself ([`src/os/TopBar.tsx`](src/os/TopBar.tsx), [`src/os/topbarPre
 holds the MvL OS menu, workspaces, clock, search, activity, Minecraft status, theme and
 notifications. Minecraft status is on by default away from `/cv`, and off on `/cv` (the opposite of
 the earlier CV-only rule). Right-click the bar to **Unlock the top bar**, then drag a widget
-to reorder it, or use *Show or hide* for each widget; **Lock the top bar** when you are done. A
+to reorder it, or use *Show or hide* for each widget. On touch screens, long-press the locked
+bar to unlock it, then drag the ↔ handles below its items. Tap a handle for *Move left*,
+*Move right* and **Lock the top bar**; keyboard users can focus a handle and use Left/Right.
+Widget taps and scrolling outside the handles still work. Escape, a cancelled touch or losing
+focus cancels the drag without saving its preview. **Lock the top bar** when you are done. A
 click that does not move still activates the widget. The
 layout is kept in this browser, and follows your account when you are signed in.
 A window's menu (right-click its title bar) has *Move to workspace*, and dragging a window onto a
