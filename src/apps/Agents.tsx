@@ -23,6 +23,7 @@ import {
   ALWAYS_ON_TOOLS,
   choosableTools,
   TOOL_GROUPS,
+  TOOL_CATEGORIES,
   toolState,
   addMemory,
   agentModels,
@@ -2086,12 +2087,20 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
   }
   const toolMenu = (e: React.MouseEvent) =>
     openMenuAt(e.currentTarget, [
-      ...TOOL_GROUPS.map((g) => {
-        const on = tools.includes(g.id)
-        const blocked = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir)
-        const { hint, muted } = toolState(g, on, !!blocked)
-        // Greyed but clickable while it is on, so it can be switched off; off and blocked it cannot be switched on.
-        return { label: g.name, checked: on, muted: muted && on, disabled: muted && !on, hint, onSelect: () => toggleTool(g.id) }
+      ...TOOL_CATEGORIES.map((c) => {
+        const groups = c.groups.flatMap((id) => TOOL_GROUPS.find((g) => g.id === id) ?? [])
+        const enabled = groups.filter((g) => tools.includes(g.id)).length
+        return {
+          label: c.name,
+          shortcut: `${enabled}/${groups.length}`,
+          submenu: groups.map((g) => {
+            const on = tools.includes(g.id)
+            const blocked = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir)
+            const { hint, muted } = toolState(g, on, !!blocked)
+            // Greyed but clickable while it is on, so it can be switched off; off and blocked it cannot be switched on.
+            return { label: g.name, checked: on, muted: muted && on, disabled: muted && !on, hint, onSelect: () => toggleTool(g.id) }
+          }),
+        }
       }),
       { separator: true },
       { label: tools.length === ALL_TOOLS.length ? 'Turn all off (just the model)' : 'Turn all on', onSelect: () => (tools.length === ALL_TOOLS.length ? setTools([]) : setTools(ALL_TOOLS)) },

@@ -2693,6 +2693,8 @@ and months, search album names, select photos, then Attach. It reads the origina
 GIF, camera raw or HEIC through the authenticated Photos proxy, not the thumbnail. Images keep the normal 5 MB per-file,
 10-attachment and combined payload limits (measured after the conversions below); videos show an error.
 
+The **Tools** menu lists four categories (Context, Images, Personal, Files & code), each with its on/total count. A category opens a submenu with each tool's toggle and description; **Turn all on/off** sits below them. The categories are `TOOL_CATEGORIES` in [`src/data/agents.ts`](src/data/agents.ts).
+
 **Camera raws, HEIC and multi-picture JPEGs** are turned into one still JPEG in the browser before
 they are attached, wherever they come from (this computer, Seafile, Files, Photos, a drop or a
 paste), by [`src/data/rawImage.ts`](src/data/rawImage.ts) and
