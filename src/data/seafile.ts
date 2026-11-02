@@ -288,7 +288,9 @@ export function useDir(path: string | null, maxAge = 30_000): DirState & { reloa
 export async function listDir(path: string, maxAge = 30_000, guard?: IoGuard): Promise<Listing> {
   const hit = dirCache.get(path)
   guard?.check()
-  if (hit?.listing && !hit.loading && Date.now() - hit.at < maxAge) {
+  // maxAge 0 always asks Seafile. A cached listing from "the future" (the clock was set back) is never fresh.
+  const age = hit ? Date.now() - hit.at : -1
+  if (maxAge > 0 && hit?.listing && !hit.loading && age >= 0 && age < maxAge) {
     await guard?.snapshot?.(hit.listing)
     guard?.check()
     return hit.listing

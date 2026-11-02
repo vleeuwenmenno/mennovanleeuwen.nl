@@ -1,4 +1,4 @@
-import { browserChangedElsewhere, browserEntrySeq, browserFilesReady, browserStoreIdentity, listBrowser, mkdirBrowser, readBrowserText, realBrowserEntry, refreshBrowserTree, writeBrowserFile } from '../../data/browserfs'
+import { browserChangeAffects, browserChangedElsewhere, browserEntrySeq, browserFilesReady, browserStoreIdentity, listBrowser, mkdirBrowser, readBrowserText, realBrowserEntry, refreshBrowserTree, writeBrowserFile } from '../../data/browserfs'
 import { browserMountPoint, isBind, isBrowserType, isSeafileType, mounts, posixOf, whereIs } from '../../data/mounts'
 import { cachedListing, listDir, mkdir, parseSf, readText, sfPath, writeText } from '../../data/seafile'
 import { getAccount } from '../../os/account'
@@ -184,9 +184,7 @@ function browserEntries(identity: Stored): unknown[] | undefined {
   const parts = identity.path.split('/').filter(Boolean)
   // Another tab changed something on the way to the folder or in it: this tab's memory is stale until
   // the folder is read again from the store (unknown: nothing runs until the full check has done that).
-  for (const changed of browserChangedElsewhere().keys()) {
-    if (changed === identity.path || changed.startsWith(`${identity.path}/`) || identity.path.startsWith(changed === '/' ? '/' : `${changed}/`)) return undefined
-  }
+  for (const marker of browserChangedElsewhere().keys()) if (browserChangeAffects(marker, identity.path)) return undefined
   const out: unknown[] = []
   for (let i = 0; i <= parts.length; i++) {
     const at = `/${parts.slice(0, i).join('/')}`

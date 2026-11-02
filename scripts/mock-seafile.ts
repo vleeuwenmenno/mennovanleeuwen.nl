@@ -76,7 +76,7 @@ function png(r: number, g: number, b: number): Buffer {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))])
 }
 
-export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { videoThumbs?: boolean } = {}): Promise<{ base: string; repos: Map<string, MockRepo>; server: Server; control: { listDelay: number }; close: () => Promise<void> }> {
+export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { videoThumbs?: boolean } = {}): Promise<{ base: string; repos: Map<string, MockRepo>; server: Server; control: { listDelay: number; readOnly: string[] }; close: () => Promise<void> }> {
   const repos = new Map<string, MockRepo>([
     [MY_LIBRARY, repo(MY_LIBRARY, 'My Library', ['/Desktop', '/Documents', '/Downloads', '/Music', '/Pictures', '/Videos'])],
     [PHOTOS, repo(PHOTOS, 'Photos', ['/2024'])],
@@ -113,7 +113,8 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { vid
   }
 
   // Checks can slow folder listings down (ms) to hold a request open while something else happens.
-  const control = { listDelay: 0 }
+  // readOnly: folders (path prefixes) this account may only read, as Seafile's user_perm 'r' says for a share.
+  const control = { listDelay: 0, readOnly: [] as string[] }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x')
     const path = url.pathname
@@ -147,7 +148,7 @@ export async function startMockSeafile(port = 0, host = '127.0.0.1', opts: { vid
         const dirent_list = [...r.files.entries()]
           .filter(([k]) => k !== '/' && parentOf(k) === p)
           .map(([k, n]) => ({ type: n.type ?? (n.dir ? 'dir' : 'file'), name: nameOf(k), id: `${k.length}${n.mtime}`, size: n.data.length, mtime: n.mtime }))
-        return json(res, 200, { user_perm: 'rw', dirent_list })
+        return json(res, 200, { user_perm: control.readOnly.some((d) => p === d || p.startsWith(`${d}/`)) ? 'r' : 'rw', dirent_list })
       }
       const form = await formOf(req)
       if (form.get('operation') === 'mkdir') {

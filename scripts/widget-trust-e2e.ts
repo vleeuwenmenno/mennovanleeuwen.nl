@@ -252,6 +252,14 @@ try {
   await boot(p)
   await runs(p)
   // A stalled re-read: tab A's IndexedDB reads hang. It fails closed meanwhile, and the check times out.
+  // Tab B makes an unrelated folder at the top of home: only the root's list changed. A keeps running, no reload or new trust.
+  await run(other, `const b=await import('/src/data/browserfs.ts');await b.mkdirBrowser('/unrelated-folder')`)
+  await sleep(1500)
+  check('tab B creates an unrelated top-level folder: tab A\'s trusted widget is unaffected (no reload, no new trust)', await trusted(p, id) && !(await p.eval(`!!document.querySelector('${pkg} [data-trust-checking]')`)) && await run<number>(p, `return Object.keys(c.canonicalTrust.get().grants).length`) === 1)
+  await run(other, `const b=await import('/src/data/browserfs.ts');await b.writeBrowserFile('/unrelated-folder/x.txt','x');await b.mkdirBrowser('/.local/unrelated',true)`)
+  await sleep(1500)
+  await runs(p)
+  check('... nor by a file in it or a sibling folder beside the widgets path', await trusted(p, id))
   await p.eval(`window.__getAll=IDBObjectStore.prototype.getAll;IDBObjectStore.prototype.getAll=function(){return {}}`)
   await run(other, sneaky(false))
   await sleep(1500)
@@ -477,6 +485,18 @@ try {
   check('with the clock set back and Seafile unreachable, the evidence still runs out (within 20 s): no access', await noAccess(A, sid))
   await A.eval(`Date.now=window.__realNow`)
   await A.send('Network.setBlockedURLs', { urls: [] })
+  await runs(A)
+  // Online, with the clock set back: the folder becomes read-only in Seafile while every byte stays readable.
+  // A check must ask Seafile (not reuse a listing that looks fresh because of the clock) and stop it in time.
+  await A.eval(`(()=>{const real=Date.now;window.__realNow=real;Date.now=()=>real()-3600_000})()`)
+  mock.control.readOnly = [folder]
+  const t1 = Date.now()
+  await A.waitFor(`(async()=>{const i=${M.inst};return i.trustStatus(${JSON.stringify(sid)},i.installation(${JSON.stringify(sid)}).active).state!=='trusted'})()`, 30_000)
+  const took = Math.round((Date.now() - t1) / 1000)
+  check(`online clock rollback, folder made read-only remotely: no access within the evidence deadline (${took} s)`, took <= 22 && await noAccess(A, sid))
+  await A.waitFor(`(document.querySelector('${pkg} [data-trust-refused]')?.textContent??'').includes('Writable Seafile source required')`, 30_000)
+  mock.control.readOnly = []
+  await A.eval(`Date.now=window.__realNow`)
   await runs(A)
 
   // The causal race: A clicks Trust always, its gate is slow; B revokes meanwhile and A receives that before

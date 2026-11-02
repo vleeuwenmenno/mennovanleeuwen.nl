@@ -54,19 +54,31 @@ const entrySeq = new Map<string, number>()
 const changedElsewhere = new Map<string, number>()
 const outgoing = new Set<string>()
 let quiet = false
-const touch = (path: string) => {
+/** `self`: the entry at `path` was written, removed or moved. `child`: the folder's list of entries
+ * changed (an entry in it came or went); the entry that changed is announced as `self` too. */
+export type BrowserChange = 'self' | 'child'
+const touch = (path: string, kind: BrowserChange) => {
   entrySeq.set(path, ++mutations)
-  if (state === 'ready' && !quiet) outgoing.add(path)
+  if (state === 'ready' && !quiet) outgoing.add(`${kind}:${path}`)
 }
 /** This tab's mutation number of a path (0: unchanged since the store was loaded). */
 export const browserEntrySeq = (path: string) => entrySeq.get(path) ?? 0
-/** Paths another tab of this browser changed since this tab loaded the store (their memory here is stale until reload). */
+/** Changes another tab of this browser announced and this tab has not read again from the store
+ * (keys `self:<path>` and `child:<path>`, see BrowserChange). */
 export const browserChangedElsewhere = (): ReadonlyMap<string, number> => changedElsewhere
+/** Whether an announced change can affect a folder `path` and what is in it: the folder or any folder
+ * on the way to it was itself written, removed or moved, or something inside it changed. A list change
+ * of a folder above it (a sibling came or went) cannot: that sibling is announced on its own. */
+export const browserChangeAffects = (marker: string, path: string) => {
+  const kind = marker.slice(0, marker.indexOf(':')), at = marker.slice(marker.indexOf(':') + 1)
+  const inside = at === path || at.startsWith(path === '/' ? '/' : `${path}/`)
+  return kind === 'self' ? inside || path.startsWith(at === '/' ? '/' : `${at}/`) : inside
+}
 const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('mvlos-browserfs') : null
 channel?.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as { store?: unknown; paths?: unknown }
   if (!storeUUID || data?.store !== storeUUID || !Array.isArray(data.paths)) return
-  for (const p of data.paths) if (typeof p === 'string') changedElsewhere.set(p, ++mutations)
+  for (const p of data.paths) if (typeof p === 'string' && /^(self|child):\//.test(p)) changedElsewhere.set(p, ++mutations)
   version++
   listeners.forEach((l) => l())
 })
@@ -137,18 +149,18 @@ function writeError(e: unknown): BrowserFsError {
 
 function index(e: BrowserEntry) {
   nodes.set(e.path, e)
-  touch(e.path)
+  touch(e.path, 'self')
   if (e.path === '/') return
   const parent = parentOf(e.path)
-  touch(parent)
+  touch(parent, 'child')
   let set = children.get(parent)
   if (!set) children.set(parent, (set = new Set()))
   set.add(e.path)
 }
 
 function unindex(path: string) {
-  touch(path)
-  touch(parentOf(path))
+  touch(path, 'self')
+  touch(parentOf(path), 'child')
   nodes.delete(path)
   texts.delete(path)
   children.get(parentOf(path))?.delete(path)
@@ -327,7 +339,8 @@ export async function refreshBrowserTree(path: string) {
       else texts.set(e.path, text)
       changed = true
     }
-    for (const [p, n] of [...changedElsewhere]) if (inScope(p) && n <= startedAt) { changedElsewhere.delete(p); changed = true }
+    // Every change this read covers is settled: the folder, the folders on the way to it, and everything inside.
+    for (const [p, n] of [...changedElsewhere]) if (n <= startedAt && browserChangeAffects(p, path)) { changedElsewhere.delete(p); changed = true }
   } finally { quiet = false }
   // Only a real difference notifies (a check that re-reads must not wake every listener into another check).
   if (changed) {
