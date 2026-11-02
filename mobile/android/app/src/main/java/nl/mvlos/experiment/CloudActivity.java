@@ -176,6 +176,7 @@ public class CloudActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        opAtDestroy = authOp;
         authOp++;
         if (web != null) {
             web.stopLoading();
@@ -268,7 +269,7 @@ public class CloudActivity extends AppCompatActivity {
                         @Override
                         public void onResult(androidx.credentials.GetCredentialResponse result) {
                             if (!current(op, server)) {
-                                dropped(op, "result");
+                                dropped(op, server, "the account was chosen after the screen closed");
                                 return;
                             }
                             String idToken = googleIdToken(result.getCredential());
@@ -285,9 +286,9 @@ public class CloudActivity extends AppCompatActivity {
                         public void onError(androidx.credentials.exceptions.GetCredentialException e) {
                             String name = e.getClass().getSimpleName();
                             String code = NativeGoogleErrors.code(name, e.getMessage());
-                            android.util.Log.w(TAG, "native sign-in failed: " + code);
+                            android.util.Log.w(TAG, "native sign-in failed: " + NativeGoogleErrors.logCode(name, e.getMessage()));
                             if (!current(op, server)) {
-                                dropped(op, code);
+                                dropped(op, server, code);
                                 return;
                             }
                             progress.setVisibility(View.GONE);
@@ -326,7 +327,7 @@ public class CloudActivity extends AppCompatActivity {
             NativeGoogle.Result r = NativeGoogle.redeem(server, challenge, idToken, oldCookie);
             runOnUiThread(() -> {
                 if (!current(op, server)) {
-                    dropped(op, r.cookies != null ? "signed in, but the sign-in was replaced" : "server: " + r.error);
+                    dropped(op, server, r.cookies != null ? "signed in after the screen closed; sign in again" : "server: " + r.error);
                     return;
                 }
                 if (r.cookies == null) {
@@ -346,25 +347,53 @@ public class CloudActivity extends AppCompatActivity {
     }
 
     private static final String TAG = "MvLOS";
-    /** A sign-in outcome that arrived after this screen was gone: shown when it is back (same process). */
-    private static String pendingNotice;
+    /** The sign-in that was current when this screen was destroyed: its late answer is not a superseded one. */
+    private int opAtDestroy = -1;
+    private boolean resumed;
+    /**
+     * A sign-in outcome that arrived after its screen was gone (same process): for which server and
+     * what to say. Shown by the next screen of that server, with the browser offered; forgotten when
+     * a sign-in succeeds or another server is opened.
+     */
+    private static String noticeOrigin;
+    private static String noticeText;
 
     /**
-     * An answer for a sign-in that no longer counts. Replaced by a newer attempt: nothing to say.
-     * The screen itself went away meanwhile (recreated): keep a notice for the next one, so a
-     * failure is never just lost.
+     * An answer for a sign-in that no longer counts. Replaced by a newer attempt: nothing to say
+     * (that one reports for itself). The screen went away while it was the current one: hand the
+     * failure to the next screen, so it is never just lost.
      */
-    private void dropped(int op, String what) {
-        android.util.Log.w(TAG, "native sign-in answer dropped (" + (isDestroyed() || isFinishing() ? "screen gone" : "replaced") + "): " + what);
-        if (isDestroyed() || isFinishing()) pendingNotice = getString(R.string.native_google_failed_code, what);
+    private void dropped(int op, String server, String what) {
+        boolean gone = (isDestroyed() || isFinishing()) && op == opAtDestroy;
+        android.util.Log.w(TAG, "native sign-in answer dropped (" + (gone ? "screen gone" : "replaced") + ")");
+        if (!gone) return;
+        noticeOrigin = server;
+        noticeText = getString(R.string.native_google_failed_code, what);
+        CloudActivity next = live.get();
+        if (next != null && next != this && next.resumed) next.showNotice();
+    }
+
+    /** Shows a handed-over failure if it is for this screen's server, with the browser offered. */
+    private void showNotice() {
+        if (noticeText == null || web == null || origin == null) return;
+        String text = noticeText;
+        boolean mine = origin.equals(noticeOrigin);
+        noticeText = null;
+        noticeOrigin = null;
+        if (mine && installingOp == 0) offerBrowser(++authOp, origin, text);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        String notice = pendingNotice;
-        pendingNotice = null;
-        if (notice != null && web != null) message(R.string.login_failed_title, notice);
+        resumed = true;
+        showNotice();
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        super.onPause();
     }
 
     /** Native sign-in didn't work: say so, and offer the browser as an explicit choice. */
@@ -458,6 +487,8 @@ public class CloudActivity extends AppCompatActivity {
         }
         if (i == cookies.size()) {
             installingOp = 0;
+            noticeText = null;
+            noticeOrigin = null;
             CookieManager.getInstance().flush();
             errorView.setVisibility(View.GONE);
             freshStart = true;

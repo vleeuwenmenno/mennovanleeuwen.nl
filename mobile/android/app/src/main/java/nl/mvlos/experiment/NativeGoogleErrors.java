@@ -21,6 +21,16 @@ final class NativeGoogleErrors {
     }
 
     /**
+     * What may go to the system log: the exception's category and Google's numeric status if the
+     * message starts with one ("[16] …" or "16: …"), never the free-form text.
+     */
+    static String logCode(String exceptionName, String message) {
+        String name = code(exceptionName, null);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^\\s*\\[?(\\d{1,5})\\]?[:\\s]").matcher(message == null ? "" : message);
+        return m.find() ? name + " status " + m.group(1) : name;
+    }
+
+    /**
      * A short code to show and report: the exception's name and its message, first line only,
      * printable ASCII, at most 120 characters. Google's messages carry status codes and reasons,
      * not account data.

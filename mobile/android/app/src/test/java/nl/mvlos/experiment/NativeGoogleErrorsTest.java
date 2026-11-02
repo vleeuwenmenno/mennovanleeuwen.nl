@@ -29,6 +29,15 @@ public class NativeGoogleErrorsTest {
     }
 
     @Test
+    public void logsCarryOnlyTheCategoryAndStatus() {
+        assertEquals("Cancellation status 16", NativeGoogleErrors.logCode(CANCEL, "[16] Account reauth failed for someone@example.com"));
+        assertEquals("Cancellation status 16", NativeGoogleErrors.logCode(CANCEL, "16: Cancelled by user."));
+        assertEquals("Unknown status 28444", NativeGoogleErrors.logCode("GetCredentialUnknownException", "[28444] Developer console is not set up correctly."));
+        assertEquals("Cancellation", NativeGoogleErrors.logCode(CANCEL, "activity is cancelled by the user."));
+        assertEquals("Unknown", NativeGoogleErrors.logCode("GetCredentialUnknownException", "eyJhbGciOiJSUzI1NiJ9.secret"));
+    }
+
+    @Test
     public void codesAreShortAndPrintable() {
         assertEquals("Cancellation: 16: Account reauth failed.", NativeGoogleErrors.code(CANCEL, "16: Account reauth failed.\nmore"));
         assertEquals("Unknown: [28444] Developer console is not set up correctly.", NativeGoogleErrors.code("GetCredentialUnknownException", "[28444] Developer console is not set up correctly."));
