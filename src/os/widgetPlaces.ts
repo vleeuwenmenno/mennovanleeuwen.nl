@@ -4,8 +4,8 @@ import { synced } from './synced'
 import { viewH, viewW } from './uiScale'
 import { accountGuard } from './accountSpace'
 import { canonicalPlacements, hasWidgetCutover, widgetsHydrated } from '../widgets/platform/canonicalState'
-import { changeSet, newKey, nextAt, importPlaces, num, normalizeSet, mergeSets, liveWidgets as liveSet, type WidgetPlace, type WidgetSet } from '../widgets/platform/placementSet'
-export { changeSet, entriesOf, mergeSets, newKey, nextAt, normalizeSet, placedOnPhone, removedKeys, wins } from '../widgets/platform/placementSet'
+import { changeSet, newKey, nextAt, importPlaces, num, normalizeSet, mergeSets, phoneOrder, liveWidgets as liveSet, type WidgetPlace, type WidgetSet } from '../widgets/platform/placementSet'
+export { changeSet, entriesOf, mergeSets, newKey, nextAt, normalizeSet, phoneOrder, placedOnPhone, removedKeys, wins } from '../widgets/platform/placementSet'
 export type { WidgetPlace, WidgetSet } from '../widgets/platform/placementSet'
 
 export const widgetPlaces = canonicalPlacements
@@ -180,11 +180,8 @@ if (import.meta.hot) import.meta.hot.dispose(disposeMobile)
 /** Freeze the old column's ordered starting coordinates on first edit, without touching its source.
  * Otherwise deleting an earlier legacy entry would change every later entry's row on reload. */
 export function migrateMobileWidgets(set: WidgetSet, width: number, height: number): WidgetSet {
-  // The same order as widgetsShown (wm.tsx) projects them in: keys first (as liveWidgets lists
-  // them), then the stable stack/id sort, so equal ids and stacks keep the same index in both.
-  const ordered = Object.entries(set.places)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
+  // The same order widgetsShown (wm.tsx) projects them in: equal ids and stacks keep one index.
+  const ordered = phoneOrder(set)
   return { ...set, places: Object.fromEntries(ordered.map(([key, p], index) => {
     if (p.homeGrid) return [key, p]
     // The page it was on (from the screen it was saved on) is frozen with its coordinates, since

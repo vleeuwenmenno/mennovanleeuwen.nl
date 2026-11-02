@@ -191,6 +191,52 @@ try {
   check('no script errors', p.errors.length === 0, p.errors)
   await p.close()
 
+  // --- phone widgets: width after a resize or a UI scale change, and the first-edit migration order ---
+  const r = await open('(() => { window.__writes = 0; const set = Storage.prototype.setItem; Storage.prototype.setItem = function (k, v) { if (/widgets:placed/.test(k)) window.__writes++; return set.call(this, k, v) } })()')
+  await r.send('Page.navigate', { url: origin })
+  await r.waitFor(`!!document.querySelector('.topbar') && !document.querySelector('.boot')`, 90_000)
+  await sleep(1200)
+  await r.eval(`(async () => {
+    const { widgetPlaces } = await import('/src/os/widgetPlaces.ts')
+    widgetPlaces.set(() => ({ places: { wide: { id: 'wide', kind: 'status', x: 14, y: 60, w: 362, h: 200, vw: 390, vh: 844, phone: true, homeGrid: true, page: 1, at: 50 } }, removed: '' }))
+    ;(await import('/src/os/startup.ts')).setStartupPrefs({ windows: 'empty' })
+  })()`)
+  await r.send('Page.navigate', { url: origin })
+  await r.waitFor(`!!document.querySelector('[data-app="widget"]') && !!document.querySelector('.home-pages')`, 90_000)
+  await sleep(900)
+  const geometry = () => r.eval<{ w: number; left: number; page: number }>(`(() => { const e = document.querySelector('[data-app="widget"]'); const l = parseFloat(e.style.getPropertyValue('--home-x')); return { w: e.getBoundingClientRect().width, left: l, page: Math.floor((l + 1) / innerWidth) } })()`)
+  const savedSet = () => r.eval<string>(`(async () => JSON.stringify((await import('/src/os/widgetPlaces.ts')).screenWidgets(true)))()`)
+  const geo0 = await geometry()
+  const set0 = await savedSet()
+  const writes0 = await r.eval<number>(`window.__writes`)
+  check('a phone widget shows at the width it was put at, on its page', Math.abs(geo0.w - 362) < 1.5 && geo0.page === 1, geo0)
+  await r.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 568, deviceScaleFactor: 2, mobile: true })
+  await sleep(900)
+  const geo320 = await geometry()
+  check('narrower screen: the widget is shown at most as wide as the page, on the same page', geo320.w <= 320 - 28 + 1.5 && geo320.page === 1 && geo320.left >= 320 + 13 && geo320.left + geo320.w <= 640 - 13, geo320)
+  check('narrower screen: the saved place is unchanged and nothing was written', (await savedSet()) === set0 && (await r.eval<number>(`window.__writes`)) === writes0)
+  await r.eval(`(async () => (await import('/src/os/uiScale.ts')).uiScalePref.set(1.25))()`)
+  await sleep(900)
+  const geoScaled = await geometry()
+  const pageW = await r.eval<number>(`(async () => (await import('/src/os/uiScale.ts')).viewW())()`)
+  check('UI scale 125%: still at most as wide as the page, nothing saved', geoScaled.w / 1.25 <= pageW - 28 + 1.5 && (await savedSet()) === set0 && (await r.eval<number>(`window.__writes`)) === writes0, { geoScaled, pageW })
+  await r.eval(`(async () => (await import('/src/os/uiScale.ts')).uiScalePref.set(1))()`)
+  await r.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+  await sleep(900)
+  const geoBack = await geometry()
+  check('back at the first size the widget is as wide as it was put', Math.abs(geoBack.w - 362) < 1.5 && JSON.stringify(geoBack) === JSON.stringify(geo0), { geoBack, geo0 })
+  // The first edit freezes old places by an order that does not depend on how the entries were added.
+  const frozen = await r.eval<{ a: string; b: string }>(`(async () => {
+    const { migrateMobileWidgets } = await import('/src/os/widgetPlaces.ts')
+    const place = (id) => ({ id, kind: 'status', x: 14, y: 40, w: 280, h: 260, vw: 390, vh: 844, phone: true, at: 1 })
+    const entries = [['a', place('a')], ['z~b', place('z')], ['z~a', place('z')], ['c', place('c')], ['d', place('d')]]
+    const run = (list) => Object.fromEntries(Object.entries(migrateMobileWidgets({ places: Object.fromEntries(list), removed: '' }, 390, 844).places).map(([k, v]) => [k, [v.page, v.x, v.y]]))
+    return { a: JSON.stringify(run(entries)), b: JSON.stringify(run([...entries].reverse())) }
+  })()`)
+  check('first-edit migration gives each key the same page and place whatever order the entries were added in', frozen.a === frozen.b && frozen.a.includes('z~a') && frozen.a.includes('"page"') === false, frozen)
+  check('no script errors with phone widgets', r.errors.length === 0, r.errors)
+  await r.close()
+
   // --- storage blocked: everything keeps working in memory ---
   const blocked = `(() => { const bad = () => { throw new DOMException('blocked', 'SecurityError') }; Storage.prototype.setItem = bad; Storage.prototype.getItem = () => null; Storage.prototype.removeItem = bad })()`
   const q = await open(blocked)

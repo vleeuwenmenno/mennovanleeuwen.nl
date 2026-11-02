@@ -1,5 +1,5 @@
 import { HOME_LEFT, HOME_TOP, HOME_GRID } from './homeLayout'
-import { PAGE_DOCK, arrangePages, joinX, localX, mobileWidgetRect, pageOfX } from './homePages'
+import { PAGE_DOCK, arrangePages, fitPhoneWidget, joinX, localX, mobileWidgetRect, pageOfX } from './homePages'
 import { arrangeDesktop, mobileWidgetEnvelope } from './widgetLayout'
 import { avoidWidgetOverlap, desktopLayoutPriority, mobileLayoutPriority } from './widgetLayoutPrefs'
 import { closeGuards } from './closeGuards'
@@ -13,7 +13,7 @@ import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
-import { changeScreenWidgets, mobileWidgetPlaces, screenWidgets, changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
+import { phoneOrder, changeScreenWidgets, mobileWidgetPlaces, screenWidgets, changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
 import { widgetMigrationUnresolved } from './accountSpace'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
@@ -451,9 +451,7 @@ function apply(state: State, action: Action): State {
             if (!action.phone) return { ...w, ...projectWidget(w.want ?? w, w.wantScreen, width, height) }
             // A phone page is only as wide as the screen: shown narrower (and kept on its page) when
             // it is smaller than the widget, wide again when it grows back; the saved place is untouched.
-            const g = w.want ?? w
-            const wide = Math.max(1, Math.min(g.w, width - 2 * HOME_LEFT))
-            return { ...w, w: wide, x: joinX(pageOfX(g.x), Math.max(HOME_LEFT, Math.min(localX(g.x), width - wide - HOME_LEFT))) }
+            return { ...w, ...fitPhoneWidget(w.want ?? w, width) }
           }
           if (w.snap) return { ...w, ...snapRect(w.snap, width, height) }
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
@@ -573,8 +571,7 @@ function widgetsShown(all: WidgetSet, phone: boolean, known: (kind: string) => b
   // A widget's index is its place among all of the set's widgets, known kinds or not: it is what
   // the first phone edit freezes the old column's rows and pages by (migrateMobileWidgets), so
   // a kind this build does not know yet must not shift the ones after it.
-  return liveWidgets(all)
-    .sort((a, b) => phone ? (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id) : 0)
+  return (phone ? phoneOrder(all).map(([, p]) => p) : liveWidgets(all))
     .map((p, i) => ({ p, i }))
     .filter(({ p }) => known(p.kind))
     .map(({ p, i }) => ({ id: p.id, kind: p.kind, ...widgetGeometry(p, i, phone, place), minimized: !!p.minimized, stack: p.stack }))

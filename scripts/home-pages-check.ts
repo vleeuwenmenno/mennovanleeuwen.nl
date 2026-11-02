@@ -2,8 +2,9 @@
 // pnpm check:home-pages
 import assert from 'node:assert/strict'
 import { HOME_LEFT, HOME_TOP, ICON_H, ICON_W, overlaps } from '../src/os/homeLayout.ts'
-import { MAX_PAGES, PAGE_DOCK, PAGE_STRIDE, arrangePages, dropCell, drawX, fitOnPage, fromContentX, iconPages, joinX, legacyWidgetPage, localX, mobileWidgetRect, pageCols, pageOfX, pageRows, takenCells } from '../src/os/homePages.ts'
+import { MAX_PAGES, PAGE_DOCK, PAGE_STRIDE, arrangePages, dropCell, drawX, fitOnPage, fitPhoneWidget, fromContentX, iconPages, joinX, legacyWidgetPage, localX, mobileWidgetRect, pageCols, pageOfX, pageRows, takenCells } from '../src/os/homePages.ts'
 import { mobileWidgetEnvelope } from '../src/os/widgetLayout.ts'
+import { phoneOrder, type WidgetPlace, type WidgetSet } from '../src/widgets/platform/placementSet.ts'
 
 const W = 390
 const H = 800
@@ -123,3 +124,33 @@ assert.ok(localX(fromContentX(350, 100, 390, 3)) >= 0)
 assert.equal(pageOfX(fromContentX(390 - 60, 100, 390, 3)), 0, 'middle still on page 0')
 assert.equal(localX(fromContentX(390 - 60, 100, 390, 3)), 290)
 console.log('PASS home pages: straddling drops land on one page')
+
+// Round 3: the order the first phone edit freezes widgets by is the order the display projects them in,
+// whatever order the entries were added in, also for the same widget under two keys.
+const place = (id: string, extra: Partial<WidgetPlace> = {}): WidgetPlace => ({ id, kind: 'status', x: 14, y: 40, w: 280, h: 200, vw: 390, vh: 844, at: 1, ...extra })
+const entries: [string, WidgetPlace][] = [['a', place('a')], ['z~b', place('z')], ['z~a', place('z')], ['m', place('m', { stack: 0 })], ['b', place('b', { stack: 1 })]]
+const orderOf = (list: [string, WidgetPlace][]) => phoneOrder({ places: Object.fromEntries(list), removed: '' } as WidgetSet).map(([k]) => k).join()
+const expected = orderOf(entries)
+assert.equal(expected, 'm,b,a,z~a,z~b', 'hand-ordered first, then by id, equal ids by key')
+const permutations = (xs: [string, WidgetPlace][]): [string, WidgetPlace][][] => xs.length < 2 ? [xs] : xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p]))
+for (const p of permutations(entries)) assert.equal(orderOf(p), expected, 'insertion order never changes the order')
+console.log('PASS home pages: widget order is independent of insertion order')
+
+// Round 3: phone widget width after a resize or a UI scale change; the saved place is untouched and grows back.
+const saved = { x: joinX(2, 14), y: 80, w: 362, h: 240 }
+const snapshot2 = { ...saved }
+for (const width of [390, 360, 320, 290, 240]) {
+  const f = fitPhoneWidget(saved, width)
+  assert.ok(f.w <= Math.max(1, width - 2 * HOME_LEFT), `at ${width} it is at most page wide`)
+  assert.equal(pageOfX(f.x), 2, 'stays on its page')
+  assert.ok(localX(f.x) >= HOME_LEFT && localX(f.x) + f.w <= Math.max(width - HOME_LEFT, HOME_LEFT + f.w), `inside the page at ${width}`)
+}
+assert.equal(fitPhoneWidget(saved, 390).w, 362, 'fits at the screen it was put on')
+assert.equal(fitPhoneWidget(saved, 320).w, 292)
+assert.deepEqual(fitPhoneWidget(saved, 390), fitPhoneWidget(saved, 390), 'deterministic')
+assert.equal(fitPhoneWidget(saved, 480).w, 362, 'a wider screen never makes it wider than it was put')
+assert.deepEqual(saved, snapshot2, 'the saved place is not changed by fitting')
+// UI scale 125% makes the page 312 css px wide on a 390 px screen: the same as a narrower screen
+assert.equal(fitPhoneWidget(saved, 312).w, 284)
+assert.equal(fitPhoneWidget({ x: joinX(0, 300), w: 100 }, 320).x, joinX(0, 320 - 100 - HOME_LEFT), 'a widget that no longer fits sideways moves in, to the page margin')
+console.log('PASS home pages: phone widget width fits the page and restores')

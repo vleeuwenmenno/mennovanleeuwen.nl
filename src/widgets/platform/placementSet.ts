@@ -119,6 +119,18 @@ export const liveWidgets = (set: WidgetSet) =>
     .sort()
     .map((k) => set.places[k])
 
+/**
+ * The order the phone counts its widgets in (the old column's rows and, from them, pages): the
+ * ones moved by hand by their place (`stack`), then by id, and entries that tie (the same widget
+ * under two keys, put back by two devices at once) by key. The same list the display projects and
+ * the first phone edit freezes from, whatever order the entries were added in.
+ */
+export function phoneOrder(set: WidgetSet): [string, WidgetPlace][] {
+  return Object.entries(set.places)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
+}
+
 /** The entries of a widget on the desktop (one, unless two devices put it back at once), first key first. */
 export const entriesOf = (set: WidgetSet, id: string) =>
   Object.keys(set.places)

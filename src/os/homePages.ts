@@ -66,6 +66,16 @@ export function mobileWidgetRect(p: HomeRect & { homeGrid?: boolean; page?: numb
   return { ...base, x: joinX(legacy.page, x), y: legacy.y }
 }
 
+/**
+ * A phone widget as a screen `width` wide shows it: at most as wide as the page and kept on its
+ * page, from the place it was put (`g`, logical x). Display only: asking again with the first
+ * width gives the place back, and nothing here is saved.
+ */
+export function fitPhoneWidget(g: { x: number; w: number }, width: number): { x: number; w: number } {
+  const wide = Math.max(1, Math.min(g.w, width - 2 * HOME_LEFT))
+  return { w: wide, x: joinX(pageOfX(g.x), Math.max(HOME_LEFT, Math.min(localX(g.x), width - wide - HOME_LEFT))) }
+}
+
 /** The nearest free lattice cell wholly on a page, or none. Ties go to the earlier row, then column. */
 export function fitOnPage(want: HomeRect, occupied: HomeRect[], width: number, height: number, stepX = HOME_GRID, stepY = HOME_GRID): HomeRect | undefined {
   const maxX = Math.max(HOME_LEFT, width - HOME_LEFT - want.w)
