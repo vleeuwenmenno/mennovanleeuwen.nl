@@ -1,5 +1,5 @@
 import { HOME_LEFT, HOME_TOP, HOME_GRID } from './homeLayout'
-import { PAGE_DOCK, PAGE_STRIDE, arrangePages, fitPhoneWidget, joinX, localX, mobileWidgetRect, pageOfX } from './homePages'
+import { pageDock, PAGE_STRIDE, arrangePages, fitPhoneWidget, joinX, localX, mobileWidgetRect, pageOfX } from './homePages'
 import { arrangeDesktop, mobileWidgetEnvelope } from './widgetLayout'
 import { avoidWidgetOverlap, desktopLayoutPriority, mobileLayoutPriority } from './widgetLayoutPrefs'
 import { closeGuards } from './closeGuards'
@@ -534,7 +534,7 @@ export function fitNote(g: Geometry, width: number, height: number, phone: boole
   // Phones: fixed pages, x counts the page too (homePages.ts) and nothing hangs below the dock.
   if (pages) {
     const x = Math.max(NOTE_MARGIN, Math.min(localX(g.x), width - w - NOTE_MARGIN))
-    return { w, h, x: joinX(pageOfX(g.x), x), y: Math.max(NOTE_TOP, Math.min(g.y, Math.max(NOTE_TOP, height - PAGE_DOCK - Math.min(shown, height - NOTE_TOP - PAGE_DOCK)))) }
+    return { w, h, x: joinX(pageOfX(g.x), x), y: Math.max(NOTE_TOP, Math.min(g.y, Math.max(NOTE_TOP, height - pageDock() - Math.min(shown, height - NOTE_TOP - pageDock())))) }
   }
   return {
     w,

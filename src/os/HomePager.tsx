@@ -18,7 +18,7 @@ export function pageMenu(current: number, move: (page: number) => void): MenuIte
 
 /**
  * The phone's page dots, and the home editor behind the pencil (or a long press on the empty
- * home screen). Dots are small but their buttons are 44px tall. Editing adds and removes pages; an
+ * home screen). Dots are small (a 28px pill) but their buttons are 40px tall. Editing adds and removes pages; an
  * empty page can go, one with something on it can't (move its items first, with their menu or
  * by dragging them to the screen's edge).
  */
@@ -68,7 +68,7 @@ export function HomePager() {
             Done
           </button>
           <span className="home-hint" role="status">
-            {empty ? `Page ${ui.page + 1} is empty` : 'Hold an icon or widget, then drag it to the screen edge for another page'}
+            {empty ? `Page ${ui.page + 1} is empty` : 'Hold an icon or widget, then drag it to the screen edge for another page. Let go and hold again for its menu'}
           </span>
         </div>
       )}

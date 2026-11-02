@@ -1,8 +1,8 @@
 // Phone home screens, pure layout: pages, migration of older places, drops. No browser needed.
 // pnpm check:home-pages
 import assert from 'node:assert/strict'
-import { HOME_LEFT, HOME_TOP, ICON_H, ICON_W, overlaps } from '../src/os/homeLayout.ts'
-import { pageHeight, MAX_PAGES, PAGE_DOCK, PAGE_STRIDE, arrangePages, cellOnPreviousPage, savedIconPage, dropCell, drawX, fitOnPage, fitPhoneWidget, fromContentX, iconPages, joinX, legacyWidgetPage, localX, mobileWidgetRect, pageCols, pageOfX, pageRows, takenCells } from '../src/os/homePages.ts'
+import { HOME_LEFT, HOME_TOP, ICON_H, ICON_VISUAL_H, ICON_W, deskRows, overlaps, setDeskBottomReserve } from '../src/os/homeLayout.ts'
+import { pageHeight, pageDock, setPageDock, MAX_PAGES, PAGE_DOCK, PAGE_STRIDE, arrangePages, cellOnPreviousPage, savedIconPage, dropCell, drawX, fitOnPage, fitPhoneWidget, fromContentX, iconPages, joinX, legacyWidgetPage, localX, mobileWidgetRect, pageCols, pageOfX, pageRows, takenCells } from '../src/os/homePages.ts'
 import { mobileWidgetEnvelope } from '../src/os/widgetLayout.ts'
 import { phoneOrder, type WidgetPlace, type WidgetSet } from '../src/widgets/platform/placementSet.ts'
 
@@ -173,3 +173,46 @@ assert.equal(savedIconPage({ row: 1, page: 3 }), 3)
 assert.deepEqual(cellOnPreviousPage({ col: 1, row: 7 }), { col: 1, row: 2, page: 0 })
 assert.deepEqual(cellOnPreviousPage({ col: 1, row: 1, page: 3 }), { col: 1, row: 1, page: 2 })
 console.log('PASS home pages: saved widget width is kept; out-of-sight icons shift with a removed page')
+
+// The bottom edge: the lowest row is the last whose icon (not its gap) fits above what is reserved, for any
+// reserve (a bigger dock, a safe area, a hidden dock) and any screen height.
+assert.equal(pageDock(), PAGE_DOCK, 'the fallback reserve until the dock is measured')
+for (const reserve of [60, 80, 122, 156, 200]) {
+  setPageDock(reserve)
+  for (let h = 300; h <= 1100; h++) {
+    const n = pageRows(h)
+    const bottom = (rows: number) => HOME_TOP + (rows - 1) * ICON_H + ICON_VISUAL_H
+    assert(n === 1 || bottom(n) <= h - reserve, `${n} rows fit at ${h} with ${reserve} reserved`)
+    assert(bottom(n + 1) > h - reserve, `a row more would not fit at ${h} with ${reserve} reserved (${n} shown)`)
+  }
+  // Icons fill every one of those rows before a page spills over.
+  const ids = Array.from({ length: 60 }, (_, i) => `i${i}`)
+  const placed = iconPages(ids, {}, W, 844)
+  const onFirst = Object.values(placed).filter((c) => c.page === 0)
+  assert.equal(onFirst.length, pageCols(W) * pageRows(844), `a full first page is cols x rows at reserve ${reserve}`)
+  assert(onFirst.every((c) => c.row < pageRows(844)))
+}
+setPageDock(PAGE_DOCK)
+// A smaller reserve never gives fewer rows, a bigger one never more.
+for (let h = 300; h <= 1100; h += 7) {
+  setPageDock(PAGE_DOCK)
+  const normal = pageRows(h)
+  setPageDock(PAGE_DOCK + 40)
+  const bigger = pageRows(h)
+  setPageDock(PAGE_DOCK - 40)
+  assert(pageRows(h) >= normal && normal >= bigger, `rows follow the reserve at ${h}`)
+}
+setPageDock(Number.NaN)
+assert.equal(pageDock(), PAGE_DOCK, 'a nonsense reserve falls back')
+setPageDock(PAGE_DOCK)
+// The desktop's rows follow its reserve the same way.
+for (const reserve of [4, 88, 100, 140]) {
+  setDeskBottomReserve(reserve)
+  for (let h = 400; h <= 1400; h += 3) {
+    const n = deskRows(h)
+    assert(n === 1 || HOME_TOP + (n - 1) * ICON_H + ICON_VISUAL_H <= h - reserve, `desk ${n} rows fit at ${h} with ${reserve}`)
+    assert(HOME_TOP + n * ICON_H + ICON_VISUAL_H > h - reserve, `desk: one more would not fit at ${h} with ${reserve}`)
+  }
+}
+setDeskBottomReserve(Number.NaN)
+console.log('PASS home pages: the lowest row is the last that fits above the measured reserve')

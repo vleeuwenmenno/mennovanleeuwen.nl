@@ -21,13 +21,14 @@ import { notify } from './notify'
 import { cvMode } from './cvMode'
 import { useAccount } from './account'
 import { ask } from './Dialogs'
-import { cancelTouchMenu, closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
+import { cancelTouchMenu, closeContextMenu, forgetSecondHold, isSecondHold, openContextMenu, openHeldMenu, ownTouchPress, primeSecondHold, TOUCH_HOLD_MS, touchFingers, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { openLink } from '../data/links'
 import { useSwing } from './swing'
 import { mobileWidgetEnvelope, widgetEnvelope } from './widgetLayout'
 import { drawnHeight, drawnWidth, useWM, type AppId } from './wm'
-import { freeHomeRect, iconLayout, ICON_W, ICON_H, HOME_LEFT, HOME_TOP, type HomeRect } from './homeLayout'
+import { freeHomeRect, iconLayout, deskBottomReserve, ICON_W, ICON_H, HOME_LEFT, HOME_TOP, type HomeRect } from './homeLayout'
+import { watchBottomReserve } from './bottomReserve'
 import { cellOnPreviousPage, dropCell, fromContentX, iconPages, joinX, localX, pageOfX, savedIconPage, takenCells, type PageObstacle } from './homePages'
 import { addHomePage, edgeDwell, goToPage, homeScroller, homeUi, itemsOnPage, onPageRemoved } from './homePager'
 import { HomePager, pageMenu } from './HomePager'
@@ -93,9 +94,8 @@ const CELL_W = ICON_W
 const CELL_H = ICON_H
 const TOP = HOME_TOP
 const LEFT = HOME_LEFT
-const DOCK_SPACE = 100
 function gridSize() {
-  return { cols: Math.max(1, Math.floor((viewW() - LEFT * 2) / CELL_W)), rows: Math.max(1, Math.floor((viewH() - TOP - DOCK_SPACE) / CELL_H)) }
+  return { cols: Math.max(1, Math.floor((viewW() - LEFT * 2) / CELL_W)), rows: Math.max(1, Math.floor((viewH() - TOP - deskBottomReserve()) / CELL_H)) }
 }
 const rightX = () => LEFT + (gridSize().cols - 1) * CELL_W
 const toPx = (p: IconPos) => ({ x: (p.page ?? 0) * viewW() + rightX() - p.col * CELL_W, y: TOP + p.row * CELL_H })
@@ -147,12 +147,13 @@ export function Desktop() {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [viewport, setViewport] = useState(0)
   const drag = useRef<Drag | null>(null)
-  const holdRef = useRef<{ armed: boolean; startX: number; startY: number; x: number; y: number; stop: () => void } | null>(null)
+  const holdRef = useRef<{ armed: boolean; el: HTMLElement; startX: number; startY: number; x: number; y: number; stop: () => void } | null>(null)
   const lastMove = useRef<ReactPointerEvent | null>(null)
   // A new page only when the last one holds something: dwelling on an empty last page just stays there.
   const dwell = useRef(edgeDwell(() => itemsOnPage(homeUi.get().count - 1) > 0))
   const moveRef = useRef<(e: ReactPointerEvent) => void>(() => {})
   useEffect(() => () => holdRef.current?.stop(), [])
+  useEffect(() => watchBottomReserve(), [])
   // Mirrors `offset` so pointerup sees the last move even if no render happened in between.
   const offsetRef = useRef({ dx: 0, dy: 0 })
   const surface = useRef<HTMLDivElement>(null)
@@ -250,7 +251,7 @@ export function Desktop() {
   [visible.map((i) => i.id).join(), storedPositions, viewport, obstacleKey, pageObstacleKey, mobile])
   // A phone edit changes the icons in sight; the ones out of sight (trashed, hidden) keep their cells.
   const savePositions = (next: Record<string, IconPos>) => updateDesktop((s) => ({ ...s, ...(mobile ? { mobilePositions: { ...(s.mobilePositions ?? s.positions), ...next } } : { positions: next }) }))
-  const extent = mobile ? undefined : Math.max(viewH(), ...Object.values(positions).map((p) => TOP + (p.row + 1) * CELL_H + DOCK_SPACE), ...obstacles.map((r) => r.y + r.h + DOCK_SPACE))
+  const extent = mobile ? undefined : Math.max(viewH(), ...Object.values(positions).map((p) => TOP + (p.row + 1) * CELL_H + deskBottomReserve()), ...obstacles.map((r) => r.y + r.h + deskBottomReserve()))
 
   // How many icons each page holds, for the page dots (which pages can be taken away).
   const iconCounts = useMemo(() => {
@@ -354,14 +355,19 @@ export function Desktop() {
 
   /**
    * A finger on an icon on the phone: a swipe turns the page, a tap opens it, and only holding
-   * still lifts it (a buzz). Lifted, the page stops following the finger and the icon does. Let go
-   * without moving and it is a long press: its menu.
+   * still lifts it (a buzz). Lifted, the page stops following the finger and the icon does. A lift
+   * never opens the menu: let go without moving, then hold the icon again within a few seconds
+   * (SECOND_HOLD_MS) and that second hold opens its menu, with a second buzz.
    */
   function armHold(e: ReactPointerEvent, icon: DesktopIcon) {
     holdRef.current?.stop()
     const startX = e.clientX
     const startY = e.clientY
-    const hold = { armed: false, startX, startY, x: startX, y: startY, stop: () => {} }
+    const el = e.currentTarget as HTMLElement
+    // The finger is this gesture's: no long press, and no contextmenu from the browser, on top of it.
+    ownTouchPress(e.pointerId)
+    const second = isSecondHold(el)
+    const hold = { armed: false, el, startX, startY, x: startX, y: startY, stop: () => {} }
     const block = (t: TouchEvent) => hold.armed && t.cancelable && t.preventDefault()
     // The page turning under a still finger carries the icon with it.
     const rescroll = () => hold.armed && lastMove.current && moveRef.current(lastMove.current)
@@ -370,13 +376,21 @@ export function Desktop() {
     scroller?.addEventListener('scroll', rescroll, { passive: true })
     const timer = setTimeout(() => {
       if (!drag.current || drag.current.kind !== 'icons') return
-      hold.armed = true
+      // A second finger is a pinch or a two-finger scroll, never a hold.
+      if (touchFingers() > 1) return void (forgetSecondHold(), hold.stop(), (drag.current = null))
       suppressTap.current = true
-      cancelTouchMenu()
+      if (second) {
+        forgetSecondHold()
+        setSelected(new Set([icon.id]))
+        // The icon stays where it is: the menu is this hold's whole job, and a finger moving
+        // after it opened never drags.
+        if (openHeldMenu(el, hold.x, hold.y)) return void (drag.current = null)
+      }
+      hold.armed = true
       try { navigator.vibrate?.(10) } catch { /* no vibration motor */ }
       homeScroller()?.classList.add('is-arranging')
       setSelected(new Set([icon.id]))
-    }, 380)
+    }, TOUCH_HOLD_MS)
     hold.stop = () => {
       clearTimeout(timer)
       document.removeEventListener('touchmove', block)
@@ -409,6 +423,7 @@ export function Desktop() {
       // Moved before the hold was up: a swipe. The page has the finger, not the icon.
       if (!hold.armed) {
         if (Math.hypot(e.clientX - hold.startX, e.clientY - hold.startY) > 8) {
+          forgetSecondHold()
           hold.stop()
           drag.current = null
         }
@@ -490,12 +505,8 @@ export function Desktop() {
       return
     }
     if (!d.moved) {
-      // Held and let go without moving: a long press, so its menu.
-      if (held?.armed && e) {
-        const icon = visible.find((i) => i.id === d.clickedId)
-        if (icon) openContextMenu({ clientX: e.clientX, clientY: e.clientY, preventDefault() {}, stopPropagation() {} } as never, iconMenu(icon))
-        return
-      }
+      // Lifted and put back down without moving: the next hold on this icon is its menu's.
+      if (held?.armed && e) return void primeSecondHold(held.el)
       // A plain click on an already-selected icon narrows the selection to it; Ctrl-click toggles.
       if (d.additive && selected.has(d.clickedId) && d.ids.length > 1) setSelected(new Set([...selected].filter((s) => s !== d.clickedId)))
       else if (!d.additive) setSelected(new Set([d.clickedId]))

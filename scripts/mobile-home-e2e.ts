@@ -120,7 +120,13 @@ try {
   await sleep(700)
   await touch(p, 'touchEnd')
   await sleep(300)
-  check('holding without moving opens its menu (with Move to page)', await p.eval(`[...document.querySelectorAll('.ctx-menu button')].some((b) => b.textContent.includes('Move to page'))`))
+  check('holding without moving only lifts: no menu yet (scripts/home-hold-e2e.ts covers the gesture)', await p.eval(`!document.querySelector('.ctx-menu')`))
+  // Hold the same icon again: the menu.
+  await touch(p, 'touchStart', onPage2)
+  await sleep(700)
+  await touch(p, 'touchEnd')
+  await sleep(300)
+  check('holding it again opens its menu (with Move to page)', await p.eval(`[...document.querySelectorAll('.ctx-menu button')].some((b) => b.textContent.includes('Move to page'))`))
   // Back closes that menu before anything else.
   await p.eval(`history.back()`)
   await sleep(400)

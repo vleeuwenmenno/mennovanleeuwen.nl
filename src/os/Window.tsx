@@ -2,7 +2,7 @@ import { fitWidget } from './widgetLayout'
 import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { addWidgetItems } from '../widgets/registry'
 import { APP_META } from './apps'
-import { cancelTouchMenu, linkAt, linkMenu, openContextMenu, wantsNativeMenu, type MenuItem } from './ContextMenu'
+import { cancelTouchMenu, forgetSecondHold, isSecondHold, linkAt, linkMenu, openContextMenu, openHeldMenu, ownTouchPress, primeSecondHold, TOUCH_HOLD_MS, touchFingers, wantsNativeMenu, type MenuItem } from './ContextMenu'
 import { maxReserve } from './dockPrefs'
 import { setSnapPreview } from './snapPreview'
 import { useSwing } from './swing'
@@ -14,7 +14,7 @@ import { drawnHeight, fitNote, setDrawnSize, SINGLE_INSTANCE, snapRect, stackOrd
 import { toUi, viewH, viewW } from './uiScale'
 import { addHomePage, edgeDwell, goToPage, homeScroller, homeUi, itemsOnPage, pageAtScroll } from './homePager'
 import { pageMenu } from './HomePager'
-import { PAGE_DOCK, drawX, fromContentX, joinX, pageOfX } from './homePages'
+import { pageDock, drawX, fromContentX, joinX, pageOfX } from './homePages'
 import { HOME_LEFT, HOME_TOP } from './homeLayout'
 
 const TOP_BAR = 28
@@ -51,6 +51,8 @@ type Drag = {
   w: number
   h: number
   moved: boolean
+  /** The strip the finger went down on (what a lift is primed on for the menu's second hold) */
+  el?: HTMLElement
   /** How far the phone desktop was scrolled when the finger went down */
   scroll?: number
   /** A finger on a phone note's strip: the note only lifts after it is held still (HOLD_MS) */
@@ -60,7 +62,7 @@ type Drag = {
   /** How far the home pages were scrolled sideways when the finger went down */
   scrollX?: number
 }
-type PhoneHold = { timer: ReturnType<typeof setTimeout> | null; armed: boolean; sx: number; sy: number; last: { clientX: number; clientY: number; pointerId: number; type: string; currentTarget: EventTarget | null } | null; page: number; stop: () => void }
+type PhoneHold = { timer: ReturnType<typeof setTimeout> | null; armed: boolean; /** The second hold opened the menu: nothing lifts or drags after it */ menu?: boolean; sx: number; sy: number; last: { clientX: number; clientY: number; pointerId: number; type: string; currentTarget: EventTarget | null } | null; page: number; stop: () => void }
 type Target = SnapZone | 'max' | null
 /** What a drag reads of a pointer event: React's, or the browser's own (a drag started with a key held). */
 type Ptr = { clientX: number; clientY: number; pointerId: number; type: string; currentTarget: EventTarget | null }
@@ -75,7 +77,7 @@ type Ptr = { clientX: number; clientY: number; pointerId: number; type: string; 
 // across the strip scrolls the desktop instead, since that is what a quick swipe there means.
 // Letting go of a lifted note without moving it opens its menu.
 
-const HOLD_MS = 400
+const HOLD_MS = TOUCH_HOLD_MS
 /** How far a finger may wander while holding, in px, before it counts as a scroll. */
 const HOLD_SLOP = 8
 
@@ -229,7 +231,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     e.preventDefault()
     wm.focus(win.pid)
     const el = e.currentTarget as HTMLElement
-    const d: Drag = { mode, edge, pointerId: e.pointerId, startX: toUi(e.clientX), startY: toUi(e.clientY), x: win.x, y: win.y, w: win.w, h: win.h, moved: false, scroll: el.closest('.desk-scroll')?.scrollTop, scrollX: el.closest('.desk-scroll')?.scrollLeft }
+    const d: Drag = { mode, edge, pointerId: e.pointerId, startX: toUi(e.clientX), startY: toUi(e.clientY), x: win.x, y: win.y, w: win.w, h: win.h, moved: false, el, scroll: el.closest('.desk-scroll')?.scrollTop, scrollX: el.closest('.desk-scroll')?.scrollLeft }
     drag.current = d
     const phoneMove = mobileNote && mode === 'move' && e.pointerType === 'touch'
     if (phoneMove) {
@@ -241,11 +243,28 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       const rescroll = () => hold.armed && hold.last && onMoveRef.current(hold.last)
       document.addEventListener('touchmove', block, { passive: false })
       scroller?.addEventListener('scroll', rescroll, { passive: true })
+      // The finger is this gesture's: no long press, and no contextmenu from the browser, on top of it.
+      ownTouchPress(e.pointerId)
+      const second = isSecondHold(el)
       hold.timer = setTimeout(() => {
         hold.timer = null
         if (drag.current !== d) return
+        // A second finger is a pinch or a two-finger scroll, never a hold.
+        if (touchFingers() > 1) {
+          forgetSecondHold()
+          hold.stop()
+          drag.current = null
+          return
+        }
+        // The second hold on a lifted widget is its menu; nothing lifts under it.
+        if (second) {
+          forgetSecondHold()
+          if (openHeldMenu(el, hold.last?.clientX ?? hold.sx, hold.last?.clientY ?? hold.sy)) {
+            hold.menu = true
+            return
+          }
+        }
         hold.armed = true
-        cancelTouchMenu()
         try {
           navigator.vibrate?.(10)
         } catch {
@@ -530,14 +549,15 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
     // A cancelled gesture (the browser took the finger) puts the note back where it was.
     if (d?.mode === 'stack') liftEnd(e.type === 'pointerup')
     if (pressed) {
-      // The click that follows this lift would land on the menu opening under the finger.
+      // Lifted and put back down without moving: the next hold on this strip is its menu's. The
+      // click that follows this lift is not a tap on what is underneath.
+      primeSecondHold(d?.el ?? null)
       const swallow = (c: MouseEvent) => {
         c.preventDefault()
         c.stopPropagation()
       }
       window.addEventListener('click', swallow, { capture: true, once: true })
       setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 600)
-      onMenu({ clientX: e.clientX, clientY: e.clientY, preventDefault() {}, stopPropagation() {} } as React.MouseEvent)
     }
     swing.end()
     document.body.classList.remove('is-dragging', 'is-resizing')
@@ -747,7 +767,7 @@ export function Window({ win, title, chrome = 'default', className = '', style, 
       ref={sectionRef}
       className={`window chrome-${chrome} ${focused ? 'is-focused' : ''} ${win.maximized ? 'is-max' : ''} ${win.minimized ? 'is-min' : ''} ${wm.shown(win) ? '' : 'is-away'} ${win.snap ? 'is-snapped' : ''} ${className}`}
       // --stack: the note's place in the phone layout's column (only that layout reads it).
-      style={{ ...style, ...(win.app === 'widget' ? { ['--widget-body-max' as string]: `${Math.max(140, viewH() - (wantedHere(win)?.y ?? win.y) - (mobileNote ? PAGE_DOCK + 10 : 70))}px` } : {}), ['--home-x' as string]: `${mobileNote ? drawX(win.x, viewW()) : win.x}px`, ['--home-y' as string]: `${win.y}px`, ['--home-w' as string]: `${win.w}px`, left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z, ...(chrome === 'note' ? { ['--stack' as string]: stackOrder(wm.windows).indexOf(win.pid) } : {}) }}
+      style={{ ...style, ...(win.app === 'widget' ? { ['--widget-body-max' as string]: `${Math.max(140, viewH() - (wantedHere(win)?.y ?? win.y) - (mobileNote ? pageDock() + 10 : 70))}px` } : {}), ['--home-x' as string]: `${mobileNote ? drawX(win.x, viewW()) : win.x}px`, ['--home-y' as string]: `${win.y}px`, ['--home-w' as string]: `${win.w}px`, left: win.x, top: win.y, width: win.w, height: win.h, zIndex: win.z, ...(chrome === 'note' ? { ['--stack' as string]: stackOrder(wm.windows).indexOf(win.pid) } : {}) }}
       onPointerDown={() => wm.focus(win.pid)}
       onPointerDownCapture={modPressDown}
       onContextMenuCapture={modContextMenu}
