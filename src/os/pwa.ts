@@ -1,3 +1,4 @@
+import { inNativeApp } from './nativeApp'
 import { notify } from './notify'
 
 /** A new release installed and waiting (src/os/alerts.ts shows it in Settings and the notification center). */
@@ -54,6 +55,13 @@ function installed(reg: ServiceWorkerRegistration): Promise<ServiceWorker | null
 
 export function registerServiceWorker() {
   if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return
+  // The Android app's on-device desktop (src/os/nativeApp.ts) ships its files in the APK: a worker
+  // there would keep serving the previous APK's files after an update. Earlier builds registered
+  // one, so it is removed.
+  if (inNativeApp()) {
+    void navigator.serviceWorker.getRegistrations().then((regs) => Promise.all(regs.map((r) => r.unregister())), () => {})
+    return
+  }
   window.addEventListener('load', async () => {
     let reg: ServiceWorkerRegistration
     try {

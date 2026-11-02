@@ -71,11 +71,10 @@ export function Git({ win }: { win: WinState }) {
     setStackNow(to)
   }, [])
   useEffect(() => {
-    setCloseGuard(win.pid, async () => {
+    return setCloseGuard(win.pid, async () => {
       const left = unsentItems(stackRef.current)
       return !left.length || confirmLeave(`#${left[0].number}`)
     })
-    return () => setCloseGuard(win.pid, null)
   }, [win.pid])
 
   // Opened again with a route (Spotlight's "Open in Git"): go there.

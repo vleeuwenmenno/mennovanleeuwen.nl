@@ -29,6 +29,202 @@ Dev servers reached through `pnpm dev:proxy` in its cookie mode (the Tailscale n
 origin, so their browser storage is shared too: the same account id on two scratch `DATA_DIR`s
 uses the same `mvlos.u.<id>.` space (src/os/accountSpace.ts). That only matters in development.
 
+## Android app (experiment): on this device or a cloud server
+
+`mobile/` is an isolated Capacitor 8.6 package. It packages the real Vite frontend. The
+on-device mode needs no server; signing in to a cloud server from the app needs a server with
+*app sign-in* (below). This is an experiment, not a release-ready mobile client. Android 9/API 28
+or newer is required (the cloud desktop's separate WebView data needs it), with a current Android
+System WebView. iOS is not generated or tested yet; the shared
+frontend and Capacitor configuration can be reused on a Mac with Xcode.
+
+The app (**MvL OS**, `nl.mvlos.experiment`) opens on a native chooser
+(`LauncherActivity`):
+
+- **On this device**: the bundled desktop at `https://localhost` inside the app's WebView, as a
+  guest. Relative `/api` requests have no backend there, so sign-in, sync, Mail, Agents and other
+  server features don't work; notes and settings stay on the phone and are never uploaded.
+  Settings → Account says so and has *Use a cloud server…*.
+- **Cloud server**: an `https://` address the user types. It is checked natively
+  (`ServerUrl.java`): HTTPS only (`http://` is refused, not upgraded), no user name or password, a
+  valid host (IDN converted to ASCII, IPv4 only as a plain dotted quad, bracketed IPv6) and port;
+  only the origin is kept. The server's desktop then runs **inside the app**, full screen, with the
+  system bar and keyboard insets and Android Back like the on-device desktop (`CloudActivity`).
+- The saved server has *Open* and *Disconnect*. Disconnect signs the app out of that server (best
+  effort: if the server can't be reached the app says the sign-out wasn't confirmed) and deletes
+  everything the app kept for it (WebView's own complete deletion, or on WebViews without it the
+  cloud process ends and its profile directory is deleted), then forgets the address. Nothing
+  changes unless that cleanup finished. Connecting to another server does the
+  same for the previous one first. It doesn't touch the user's browser: a session there stays.
+- **Full screen** everywhere (`Immersive.java`): the status and navigation bars are hidden and
+  come back for a moment with a swipe from the screen edge; Back and gesture navigation keep
+  working, and full screen returns after dialogs, the keyboard or the sign-in browser. The content
+  draws edge to edge. Both desktops pad only for the keyboard and hand a display cutout to the
+  page as `env(safe-area-inset-*)`, which MvL OS already uses (`viewport-fit=cover`), so its top
+  bar stays clear of a camera notch; WebViews before version 140, which don't pass insets on,
+  get the cutout as padding instead (a black strip). The on-device desktop gets this from
+  Capacitor's SystemBars (`insetsHandling: "native"`), the cloud desktop from the same rule in
+  `Immersive.webViewInsets`; the chooser pads for the cutout and the keyboard.
+- *Open my choice automatically* skips the chooser on a fresh launch. The chooser stays reachable:
+  Back at the root of either desktop, *Choose mode* in Settings → Account of the cloud desktop, and
+  the launcher icon's long-press shortcut *Choose mode*.
+
+**The cloud desktop** is a plain Android WebView, not Capacitor, in a process of its own (`:cloud`)
+with its own WebView data directory (`MvlosApplication`), so its cookies, storage, cache and
+service workers never mix with the on-device desktop's. The page gets no native bridge, no
+JavaScript interface and no file or content access; camera, microphone and location requests are
+denied; downloads aren't supported yet. Uploads use Android's own document picker, and only
+`content://` documents of other apps are passed on, never `file://` paths or this app's own files. Only the saved server's exact origin (scheme, host, port)
+loads in it (`CloudPolicy.java`, unit-tested): other sites open in the browser after a tap,
+anything else is refused, including form POSTs and redirects that would leave the origin. The
+user agent ends in ` MvLOSApp/<version>` so the site can show app hints
+(`src/os/nativeApp.ts inCloudApp`); it grants nothing. `mvlosapp://chooser`, followed from a tap,
+opens the chooser and does nothing else.
+
+**Signing in from the app** never shows GitHub's or Google's pages inside the app (RFC 8252: no
+embedded user-agents; Google refuses it too). When the cloud desktop navigates to
+`/api/auth/github/login` or `/api/auth/google/login`, the app takes over
+([`server/appLogin.ts`](server/appLogin.ts)):
+
+1. It asks `GET /api/auth/app`. A server without app sign-in (older versions answer 401 or 404)
+   gets a native message: *Sign-in needs a server update*; the desktop stays usable as a guest. The
+   server must have an https `PUBLIC_URL` equal to the address the app uses, or it answers
+   `app: 0` and the app says the server isn't set up for it.
+2. It keeps a random verifier and state (cloud process only, ten minutes) and opens the system
+   browser (a Custom Tab) at `/api/auth/app/start?provider=…&challenge=…&state=…`. The challenge
+   is `base64url(SHA-256(verifier + "\n" + origin))` with the server's origin, and the server
+   checks it against its own `PUBLIC_URL`, never a request header: a server that relays the code
+   and verifier to another server gets nothing there (protocol version 2).
+3. The normal GitHub or Google round trip runs there, with bans, registration limits and admin
+   rules as always, but makes no session in the browser. It ends on a page naming the account and
+   the server with an *Open the app* button: the fixed private-use redirect
+   `nl.mvlos.experiment:/oauth?code=…&state=…` (never taken from a request). The code works once,
+   for two minutes, and is forgotten when the account is signed out everywhere, banned, deleted
+   or a sign-in is removed. Refusals (closed, full, banned) go back to the app too.
+4. `AuthReturnActivity` (the only exported cloud component) accepts exactly that URI with a state
+   matching the sign-in this app started; anything else is ignored.
+5. The app itself, not its WebView, POSTs the code and the verifier as JSON with the header
+   `X-MvL-App-Redeem: 1` to `/api/auth/app/redeem` on the same server, without following redirects.
+   The server takes the code out first, checks the verifier, that the account and the sign-in
+   that made the code are still there and allowed in, ends any session the app's WebView had, and
+   answers with fresh session cookies. The app accepts only MvL OS's own cookies, each once, with
+   every attribute parsed once (Secure and `Path=/` required, no `Domain`, the session one
+   HttpOnly), rebuilds them from the checked parts, puts them into the cloud WebView and opens the
+   desktop. A web page can't redeem: a form can send neither JSON nor that header, and the server
+   grants no CORS preflight. The code and verifier never appear in a WebView URL, in storage the
+   page can read, or in the session cookie.
+
+**Native Google sign-in (the phone's own account picker).** For servers the app was built to trust,
+"Sign in with Google" opens Android's Google account chooser (Credential Manager) straight away,
+with the accounts on the phone and "add account"; Google's sheet names the app ("to continue to
+MvL OS") and there is no automatic choice. It needs, together:
+
+- the server's origin in the APK's list (gradle property `mvlosNativeGoogleOrigins`, default
+  `https://mennovanleeuwen.nl`). Any other server keeps the browser flow, whatever it announces;
+- an **Android OAuth client** in the same Google Cloud project as the server's web client, for the
+  package `nl.mvlos.experiment` and the SHA-1 of the certificate that signs the installed APK (a
+  package and certificate pair can be registered in one project only, so only the owner's
+  deployment can offer this);
+- on the server, Google sign-in on, an https `PUBLIC_URL`, and that Android client's id in
+  `GOOGLE_SIGNIN_ANDROID_CLIENT_IDS` (comma-separated). Then `GET /api/auth/app` announces
+  `googleNative: { clientId }` (the web client id, which is public).
+
+The app asks `POST /api/auth/app/google/start` for a one-time challenge (five minutes), asks Google
+for an ID token for the web client with the nonce `base64url(SHA-256(challenge + "\n" + origin))`,
+and POSTs `{ challenge, idToken }` to `/api/auth/app/google/redeem` (JSON, `X-MvL-App-Redeem: 1`,
+from native code, no redirects; the page never sees the token). The server takes the challenge out
+first, verifies the token (Google's signature, issuer, `aud` exactly the web client, `azp` one of the
+listed Android clients, expiry, and the nonce computed with its own `PUBLIC_URL`), then applies the
+usual Google sign-in rules (the account by `sub`, never by email; bans; registration limits; a linked
+admin stays admin) and answers with session cookies like the browser hand-off. A server that relays
+another server's challenge gets a token naming itself, which the other server refuses; a token
+without its live challenge is worth nothing; every revocation (sign out everywhere, ban, deletion,
+removing a sign-in) drops the waiting challenges. Nothing fails silently: Credential Manager
+reports both the person closing the chooser and Google Play services refusing the token after an
+account was chosen (status 16) as a "cancellation", so every outcome that doesn't sign in shows a
+dialog with a short code (for example `Cancellation: 16: …`, or the server's failed check such as
+`server: error, wrong authorized party`) and offers the browser. The server logs each refusal as
+one line naming the check, never the token or the account. Disconnect also clears the
+account picker's memory of the last account (not the Google consent).
+
+Linking another sign-in, connecting Google Calendar and allowing private repositories need
+GitHub's or Google's pages, so in the app they are done from the site in a browser: Settings
+hides the link and repository buttons there, and Connect Google Calendar (from any app) says to use
+a browser instead (`browserOnly` in `src/os/account.ts`); the app's own dialog backs this up. The redirect scheme is a private-use one: a malicious
+app installed on the same phone could register it too, but can't redeem a code without the
+verifier, and the browser page names the account before anything is handed over. Verified App
+Links would need every self-hosted server to vouch for the app, so they aren't used. Known gap: an
+iframe of another site that redirects to GitHub's or Google's sign-in isn't caught by the app
+(WebView doesn't report subframe redirects), but both send `X-Frame-Options: DENY` on those pages,
+so they don't render in a frame.
+
+The bundled page gets one native plugin, `window.Capacitor.Plugins.MvlosApp`
+(`src/os/nativeApp.ts`): `info()` (`{mode: "local", savedServer, version}`) and `openChooser()`.
+Nothing else crosses: no URL opening, storage or tokens. Capacitor's own core plugins that the
+desktop doesn't need (`CapacitorHttp`, `CapacitorCookies`, `WebView`) are replaced by empty
+plugins of the same name (`DisabledCorePlugins.java`), so their native methods are refused and
+their JavaScript interfaces removed; `SystemBars` stays. Capacitor's local server would also hand
+the page files of the app (`/_capacitor_file_/…`) and content URIs (`/_capacitor_content_/…`); those
+are refused, for the page and for service workers. The WebView never loads a remote page:
+the navigation guard in `MainActivity` sends gesture-initiated `https` links to the browser and
+blocks the rest, and remote documents are also refused at the request level, which covers form
+POSTs (Android doesn't ask the navigation guard about those) and, on WebViews too old for
+origin-restricted bridge messages, remote frames. No origin is allowlisted for the bridge, `server.url` is never set, and cleartext
+traffic stays off. Do not change API URLs or cookie/CORS policy to put accounts into the on-device
+mode: the account guard relies on the same-origin readable account cookie, and a bundled
+authenticated client would need its own reviewed authentication and storage design.
+
+### Build and try
+
+Use Node 22+, JDK 21, Android SDK platform 36 and build-tools 35.0.0. Install the SDK
+with Android Studio or Google's command-line tools (`sdkmanager 'platforms;android-36'
+'build-tools;35.0.0'`, accepting its licenses). Set `JAVA_HOME`, `ANDROID_HOME` and
+optionally `GRADLE_USER_HOME` in your shell to task-local installations; no system
+configuration or sudo is needed. In a worktree, first symlink the main checkout's
+`node_modules` as described in AGENTS.md. Mobile dependencies are separate:
+
+```sh
+pnpm typecheck
+pnpm build
+cd mobile
+npm ci
+npm run sync
+cd android
+./gradlew --no-daemon assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n nl.mvlos.experiment/.LauncherActivity
+```
+
+Alternatively transfer the debug APK to your phone and open it, allowing installation
+from that file app when Android asks. It appears as **MvL OS** (version 1.5), separately
+from the website/PWA. On this device needs no server: try local notes, Terminal and games.
+Uninstalling clears its local guest data; Android backup is disabled. Debug APKs are signed with
+the building machine's debug key (`~/.android/debug.keystore`): an APK built with another key
+can't update an installed one, so uninstall the old one first (that clears its guest data).
+`./gradlew testDebugUnitTest` runs the server address, navigation and cookie checks
+(`ServerUrlTest`, `CloudPolicyTest`, `CloudLoginCookiesTest`, `NativeGoogleTest`, `NativeGoogleErrorsTest`). `-PmvlosTest` builds an emulator
+test variant (version `1.5-test`) that also trusts user-installed CAs in the debuggable build and
+lets Chrome DevTools inspect the cloud WebView, for testing against a local HTTPS server with a
+test CA; never hand that build to users. Without the flag the APK trusts system CAs only.
+
+`npm run sync` stages `dist` without the server's `.gz`/`.br` sidecars (Android's asset
+merger otherwise reports duplicate resources). Rebuild and sync after frontend edits.
+Generated web assets, SDK paths, dependencies and APKs are ignored by git. The wrapper
+is pinned to Gradle 8.14.3. If its initial download times out, retry on a working
+connection or raise `networkTimeout` in `gradle-wrapper.properties` locally.
+
+Capacitor SystemBars handles the on-device desktop's insets natively (see Full screen above);
+`adjustResize` supports keyboard resizing. Android Back first follows WebView
+history and otherwise returns to the chooser. It does not yet close desktop windows or
+OS dialogs. The debug APK was smoke-tested on an Android 16 emulator (chooser, address checks,
+on-device desktop, Custom Tab, Disconnect, the plugin). Physical-device keyboard, rotation,
+cutout, Back/history and accessibility testing, and Android versions before 16, remain to be done.
+
+Official references: [Capacitor setup](https://capacitorjs.com/docs/getting-started/environment-setup),
+[workflow](https://capacitorjs.com/docs/basics/workflow) and
+[configuration](https://capacitorjs.com/docs/config). The normal web frontend and
+its deployment are unchanged.
+
 ## Look and themes
 
 The design follows Omarchy: square windows with a 2px accent border on the active one, a solid
@@ -76,7 +272,7 @@ class separately from scaled dimensions, so a desktop at 200% still restores des
 Like a desktop, the chrome can't be selected: dragging across title bars, the dock, menus,
 sidebars, toolbars, list rows, icons or a game, or double-clicking a label, highlights nothing, a
 long press on it gets no text callout and a tap no grey flash. Text that is there to be read and
-copied can: fields, the terminal, Zed and every Markdown preview, Agents' messages and tool output,
+copied can: fields, the terminal, Xed and every Markdown preview, Agents' messages and tool output,
 the mail being read (subject, people, the message), notes and stickies, a contact's card, a
 read-only event's place and notes, PDF text, the Viewer, Preview's and Photos' info, Spotlight's
 previews, answers and sums, the CV page, inline code and error messages. Ctrl+A selects the text
@@ -128,7 +324,11 @@ The top bar itself ([`src/os/TopBar.tsx`](src/os/TopBar.tsx), [`src/os/topbarPre
 holds the MvL OS menu, workspaces, clock, search, activity, Minecraft status, theme and
 notifications. Minecraft status is on by default away from `/cv`, and off on `/cv` (the opposite of
 the earlier CV-only rule). Right-click the bar to **Unlock the top bar**, then drag a widget
-to reorder it, or use *Show or hide* for each widget; **Lock the top bar** when you are done. A
+to reorder it, or use *Show or hide* for each widget. On touch screens, long-press the locked
+bar to unlock it, then drag the ↔ handles below its items. Tap a handle for *Move left*,
+*Move right* and **Lock the top bar**; keyboard users can focus a handle and use Left/Right.
+Widget taps and scrolling outside the handles still work. Escape, a cancelled touch or losing
+focus cancels the drag without saving its preview. **Lock the top bar** when you are done. A
 click that does not move still activates the widget. The
 layout is kept in this browser, and follows your account when you are signed in.
 A window's menu (right-click its title bar) has *Move to workspace*, and dragging a window onto a
@@ -165,6 +365,13 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+Settings → Dock → *Show the dock* picks when the dock shows (always, auto-hide when a window covers
+it, or always auto-hide). Windows snapped left, right or to a corner keep room for the dock unless
+it always auto-hides; turning off *Reserve dock space for snapped windows* (on this device only,
+[`src/os/dockPrefs.ts`](src/os/dockPrefs.ts)) lets them use the height under the dock too, with the
+top bar and the usual gaps kept. Snapped windows re-fit when it changes. Maximized windows are not
+affected: they only leave room when the dock is always shown.
+
 ## Moving windows with a key
 
 Like Hyprland, a window can be dragged by holding a key and dragging anywhere on it
@@ -193,7 +400,7 @@ Things can be dragged wherever they make sense ([`src/os/dnd.ts`](src/os/dnd.ts)
 (several at once, as a pile with a count), rows in Files, apps and launchers in All apps, rows
 in Archive, and photos in Photos (see Photos below). They land on desktop folders and the desktop itself, Files windows (a folder, the
 folder on show, a place in the sidebar, the Trash), the dock, and the windows of apps that show
-files: Preview, Player, Omamp, PDF, the Viewer, Archive and Zed show what is dropped on them, and
+files: Preview, Player, Omamp, PDF, the Viewer, Archive and Xed show what is dropped on them, and
 a sticky note takes a launcher as a link. A message being written in Mail attaches the files dropped
 on it (from the computer, Files or the desktop) and takes a launcher as its link in the text, and
 the Calendar imports the events of a dropped `.ics` file (shown first, into the calendar you pick) and
@@ -237,7 +444,7 @@ Everything the site says lives in [`src/data/profile.ts`](src/data/profile.ts): 
 sticky note, projects, contributions, skills and experience. The terminal's filesystem
 (`~/cv.md`, `~/projects/*/README.md`, ...) is generated from the same file.
 
-Markdown renders the same everywhere it shows (Zed's preview, Notebook, Spotlight and the Agents
+Markdown renders the same everywhere it shows (Xed's preview, Notebook, Spotlight and the Agents
 app's answers), through one parser of our own in [`src/data/markdown/`](src/data/markdown):
 CommonMark's blocks and inlines (emphasis nests in any combination, setext and ATX headings,
 nested and loose lists, quotes, fenced and indented code, reference links, escapes and hard
@@ -265,7 +472,7 @@ main bundle only carries the small matching code. `pnpm check:emoji` runs its te
 ### Visual blocks
 
 A fenced block with the language `visual` holds a small JSON spec that draws as a picture in every
-Markdown preview (Notebook, Zed, Spotlight, the Agents app's answers, READMEs and comments), so a
+Markdown preview (Notebook, Xed, Spotlight, the Agents app's answers, READMEs and comments), so a
 model or a note can show a diagram instead of describing one ([`src/data/visual/`](src/data/visual)):
 
 ````md
@@ -443,6 +650,148 @@ mounts: the account's quota and usage (`/api/seafile/quota`), and each library's
 what is left of the quota; `du` (`-a`, `-s`, `-c`, `-d`, `-h`, `-x`) adds up folders through the
 mounts, Seafile's included.
 
+### jq: a practical JSON subset
+
+The browser's `jq` extends the small parser in [src/terminal/jq.ts](src/terminal/jq.ts);
+it is **not full jq**. It supports field/index paths (`.user.name`, `.["odd.key"]`,
+`.[0]`, `.[-1]`), slices, optional access (`.name?`), iteration (`.[]`), pipes,
+arrays, object construction, `map`, `select`, comparisons, boolean filters, and
+`//` for missing/null/false values. Missing fields yield `null`; wrong input types
+raise errors unless the access uses `?`. Object reads use only own JSON properties;
+`__proto__`, `constructor`, and `prototype` remain ordinary data keys.
+
+Examples in msh (single quotes keep the shell from expanding filter variables):
+
+```sh
+cat people.json | jq '[.[] | select(.active and .score >= 2) | {name, score}]'
+cat response.json | jq '.user.name'
+jq -nc --arg name 'Ada "Lovelace"' --argjson tags '["math","code"]' '{name: $name, tags: $tags}'
+jq -nc --arg key 'odd.key' --arg value 'safe text' '{($key): $value}'
+cat encoded.json | jq 'fromjson | .name'
+cat response.json | jq -r 'tojson'
+```
+
+`--arg NAME VALUE` binds a literal string; `--argjson NAME JSON` parses one JSON
+value, including objects, arrays, booleans, and null. Use these with constructors
+instead of concatenating JSON text. Values never become filter source. Variable
+names use letters, digits, and underscores, cannot start with a digit, and cannot
+be `ENV` (reserved). Bindings are local to each command; `expr as $name | body`
+can temporarily shadow them. Constructors accept literal keys, shorthand
+`{name}` / `{$name}`, variable keys (`{$key: value}`), or parenthesized string keys;
+non-string keys are errors.
+`fromjson` parses a JSON string; `tojson` serializes a value, escaping its contents.
+
+Options: `-r` / `--raw-output` prints strings without JSON quotes; `-c` /
+`--compact-output` removes JSON indentation; `-n` / `--null-input` constructs
+from null; `-s` / `--slurp` collects input documents into one array; `-M` /
+`--monochrome-output` disables terminal colors. Short flags combine (`-ncr`).
+Supply one optional input file, or `-` for stdin; otherwise input comes from a
+pipe. Multiple JSON documents are accepted; empty stdin produces no values.
+Use `--` before a filter beginning with `-`. Unknown options, malformed JSON,
+undefined variables, invalid constructor keys, and malformed filters report errors.
+Serialized JSON escapes braces inside strings so literal terminal markup such as
+`{c:red}` survives pipes and redirects; JSON parsing restores the original data.
+Raw `-r` text retains the terminal's existing markup behavior.
+
+This subset also retains common sorting, aggregation, string, entry-conversion,
+and arithmetic helpers. It does not implement assignments/update operators,
+`def`, `reduce`, modules, streaming mode, or all upstream jq flags and overloads.
+`pnpm check:jq` covers the documented workflows, option parsing, invalid inputs,
+prototype-key handling, and literal-markup round trips.
+
+### jq-safe: bounded JSON for agent workflows
+
+`jq-safe` is a separate, asynchronous JSON evaluator, not a mode or fallback to rich
+`jq`. It reads exactly one JSON document from stdin (or null with `-n`); filenames,
+multiple documents and slurping are not supported. Its flags are `-n`, `-c`, `-r`
+(combinable), `--arg NAME VALUE`, and `--argjson NAME JSON`.
+
+```sh
+cat people.json | jq-safe -c '[.[] | select(.active and .score >= 2) | {name}]'
+jq-safe -nc --arg name 'Ada "Lovelace"' --argjson tags '["math"]' '{name: $name, tags: $tags}'
+cat encoded.json | jq-safe 'fromjson | .name'
+```
+
+The explicit subset is identity, field/string-key/integer-index access (negative
+indices included), iteration, final optional access `?`, pipes, array collection,
+objects (literal, shorthand, variable and parenthesized string keys), variables,
+JSON literals, `map`, `select`, scalar comparisons, `and`/`or`/`not`, `length`,
+`fromjson`, and `tojson`. Constructor keys/values and comparison operands must each
+produce exactly one value. Boolean `and`/`or` short-circuit their right operand.
+Ordering requires two strings or two numbers. No comma
+streams, slices, variable binding with `as`, interpolation, arithmetic, recursion,
+ranges, user-defined functions, regex, or additional builtins are accepted. No
+unsupported syntax can reach rich jq. Prototype-named keys remain ordinary data.
+Serialized JSON preserves literal terminal markup; raw `-r` text follows existing
+terminal behavior.
+
+Hard ceilings are 65,536 UTF-16 code units for input, combined arguments, each
+retained value/stream and output; 4,096 filter characters; 512 tokens; 32 nesting
+levels; 4,096 value nodes; 50,000 work steps; 4 MiB cumulative conservative
+allocation charges; and two seconds elapsed per invocation. Value accounting
+includes worst-case escaping and indentation, so some smaller values also hit
+limits. The evaluator yields to the event loop every 64 steps and checks abort,
+elapsed time, and shared budget. Native parsing/serialization operates only on
+size/depth-checked data. Regex evaluation is absent. Failure returns no partial
+result. `pnpm check:jq-safe` tests malicious filters, amplification, malformed/deep
+JSON, inherited keys, budget exhaustion, and timer-driven cancellation during work.
+
+For already-parsed responses, `boundedJson(value, { signal, budget, policy })`
+exports the same accounting and cancellation boundary. It validates and snapshots
+ordinary JSON data before `JSON.stringify`, preserves literal markup with JSON
+escapes, and bounds the final output. It rejects cycles, non-finite numbers,
+undefined/functions/symbols/bigints, sparse arrays, custom object prototypes and
+enumerable accessors; getters and `toJSON` hooks are never called. Shared object
+references are allowed and counted per occurrence. Pass parsed data, not proxies
+or executable host objects. Policy contexts require the shared budget.
+
+Downloads from `curl` and `wget` in budgeted runs are read incrementally. Both
+incoming bytes and decoded UTF-16 text charge the shared budget before retention;
+each response must fit the intermediate-buffer limit. File output has the same
+accounting as stdout and is persisted only after the complete response passes
+budget and cancellation checks. UTF-8 characters split across chunks are decoded
+correctly; malformed UTF-8 uses replacement characters, matching `Response.text`.
+HTTP failures with `curl --fail`, and all unsuccessful wget responses, cancel the
+body without saving it. `curl -o -` writes to stdout. Interrupted or oversized
+responses never leave a partial downloaded file.
+
+All agent-admitted command families are bounded or fail closed before unsupported modes run.
+The implementation inventory is:
+
+| Command family | Boundary before expensive work |
+| --- | --- |
+| Text filters, byte dumpers and hashes (including cat aliases and lolcat) | One input; 65,536-character synchronous ceiling; conservative reservations before splitting, decoding, sorting, hashing and markup. `od` additionally reserves rows times formats; `xxd -r` reserves sparse zero-fill and conversion before expanding offsets. |
+| Shell, variables and formatting | Sources, expanded fields, patterns, heredocs and buffers share the call budget; parser inputs, variable listings, builtin operands and printf precision/padding are charged before processing. |
+| `ls` and globs | Nonrecursive listings; cached Seafile metadata, entry arrays, names and formatting are charged. Generated site file contents are not evaluated for agent `ls -l` sizes. |
+| `seq`, `cowsay`, calculators | Each sequence element is reserved before retaining it; ranges must be finite and advance. Cowsay wraps at 40 columns. Text input and transformation reservations bound synchronous work. |
+| Network and filesystem I/O | Curl/wget, WHOIS, Git, DNS, FX and every agent-reachable Seafile metadata/link/text/mutation response stream through shared byte/text accounting before decoding or parsing. Unused JSON fields and cached metadata/rates count too; structured data also passes jq-safe depth/node/size checks. Unused error bodies are cancelled. |
+| `mvl`, `jq-safe`, fixed information commands | Account responses and JSON work use the bounded evaluator and resource grants. Capability construction is reserved; session information uses the fresh headless context (empty history/windows). Unsupported engines and filesystem modes are denied by policy. |
+
+Allocation units deliberately overestimate intermediate strings, arrays and byte conversions;
+they are not measured JavaScript heap bytes. Consequently a small input can exhaust a small
+budget even if the final output would fit. Synchronous adapters have the additional 65,536-character
+ceiling; deadlines remain cooperative. A completed remote mutation cannot be rolled back if its
+response later exceeds the budget. Cached rates stay usable offline; blocked or malformed browser
+storage does not prevent a fresh approved rate lookup.
+
+Command preparation uses actual file operands. String operations such as
+`basename /outside/file.txt`, `dirname /outside/file.txt`, and `calc 10 / 2` do not
+read those strings as paths. Data-only commands skip filesystem preparation after
+the cancellation check; file readers separate option values from real operands,
+and real reads/writes still pass their operation-level policy checks.
+
+Agent terminal calls in both the Agents app and the `agents` command enable
+`jq-safe` and keep rich `jq` blocked. Its evaluator and response decoder charge
+the same step/output budget as pipelines, nested scripts and substitutions.
+Cancellation interrupts work at cooperative checkpoints. Data arguments are never
+filesystem operands: `jq-safe -n --arg p /outside '$p'` performs no file lookup.
+`prepare` still checks cancellation before its data-command early return. File
+reads and redirects remain policy-checked shell operations (`cat file | jq-safe`).
+Capabilities derive availability from policy and report the evaluator's limits.
+`check:agents-terminal-exec` covers this integration, resource permissions, budget
+exhaustion, and cancellation; `check:agents-executor-lifecycle` executes the UI
+hook and CLI Session call lifecycle with real msh and mocked HTTP transport.
+
 `cmatrix` ([`src/terminal/cmatrix.ts`](src/terminal/cmatrix.ts)) is the film's rain: mirrored
 half-width katakana with digits and a few symbols, a glowing head, a trail that fades through a
 dozen shades into the background, characters that flicker while they fade, drops at their own
@@ -490,7 +839,7 @@ deleting inside), and `sudo` ignores all of it, down through `find -delete` and 
 makes. A file that replaces another (`mv`/`cp` over it) takes the new file's mode, never the old one's.
 Setuid, setgid and the sticky bit are kept and shown (`rws`, `r-S`, `t`, `T`; `a=rw` clears them, as in
 `chmod`), but setuid and setgid are display only: nothing here runs as someone else, so they grant
-nothing. The apps are the exception on the way out: Zed, Files and the other GUI apps save through their own paths, so a mode set with `chmod` does not stop them from saving that file. Opening one through `readFileText` (Zed's tabs and the viewer do) is still refused when the mode says so. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
+nothing. The apps are the exception on the way out: Xed, Files and the other GUI apps save through their own paths, so a mode set with `chmod` does not stop them from saving that file. Opening one through `readFileText` (Xed's tabs and the viewer do) is still refused when the mode says so. `pnpm check:terminal-cmds` tests it, with Seafile's API faked in memory.
 
 `/dev` behaves like one ([`src/terminal/devices.ts`](src/terminal/devices.ts)): `/dev/urandom` and
 `/dev/random` give random bytes, `/dev/zero` NULs, `/dev/null` nothing (and swallows writes). The
@@ -607,6 +956,275 @@ this browser and synced like notes when signed in ([`src/terminal/prefs.ts`](src
 - **Tab bar**: from the second tab on (the default, like Ghostty), or always.
 - **Startup file**: run `~/.mvshrc` when a terminal opens (on by default; see below).
 
+### Xed: msh editing and debugging
+
+The editor is named **Xed**. Its existing `zed` app ID, launch links, file associations,
+component/module names and saved-window keys remain compatible.
+
+**Project and Agents panels.** The left project tree and right Agents panel have draggable
+resize handles. Focus a handle to use Left/Right (10 px), Shift+Left/Right (50 px), Home/End
+(minimum/maximum), or Enter to reset; double-click also resets. Escape or a cancelled touch
+restores the width without saving it. Widths and docked visibility stay in this browser
+(`mvlos.xed.layout.v1`); blocked storage still works for the current session. The editor keeps
+at least 320 px beside docked panels. Narrow windows use one panel sheet at a time, including
+on phones; tap the scrim to close it.
+
+The Agents status button opens the real Agents conversation, with its normal model, mode,
+permissions, tools, approvals, queue and subagents. **Ctrl+L** opens its composer with a visible
+selection attachment (the current file buffer, including unsaved edits, if nothing is selected).
+The editor context menu attaches a selection, and a tab's context menu attaches its current contents, including unsaved edits.
+Escape in the composer returns to the editor and closes a narrow sheet. Hide the panel without
+interrupting a run; closing a window with an answering thread asks whether to stop or keep it
+running. Embedded terminal close checks also apply; cancelling either check keeps the window open.
+A server run kept after closing may wait for an executor when the project is reopened.
+
+Each project has ordinary threads, also visible in Agents; the panel offers a thread switch,
+New thread, and Open in Agents for that same thread. Browser-local, account-scoped bindings keep
+up to 50 thread IDs and their project identities. Seafile projects use their real work folder.
+Browser-kept projects use the same bounded msh executor, confined to that project and browser
+store; server permission grants still decide what each call may do. Remounting or replacing a
+store never silently redirects an existing conversation to another folder. Browser-only files
+remain available only on this browser. Folder context and selected text are visible attachments.
+
+After tools finish, Xed refreshes the tree and rereads clean open files. Unsaved buffers are
+never replaced: an external-change banner offers Reload or Keep mine. Deleted files retain
+their contents with an explicit deletion notice. In-flight reads cannot overwrite newer edits,
+saves, or reopened tabs.
+
+Files ending in `.msh` or `.sh`, and files with an msh shebang, use the shell's actual lexer
+and parser for highlighting and syntax diagnostics. Diagnostics show filename, line, column
+and the offending expression. Analysis is limited to 512 KB; larger files remain editable.
+Nothing is executed to lint a file.
+
+**msh symbols and navigation.** Ctrl+Click (or Cmd+Click) a function or variable reference
+to go to a reliable parsed definition. With the caret on a symbol, **Go to Definition**
+(Alt+G) does the same; its button also works by touch. **Back** (Alt+Left while editing)
+returns to the previous location, with at most 32 entries per window. Ordinary copy/paste,
+browser shortcuts and debugger gutter actions keep their meanings.
+
+The **Static** strip follows the caret or pointer and names parameter/local/global/function
+origins and their file and line. Expand **Symbols** for signatures, source locations and
+uncertainty explanations. This is source information, distinct from the debugger's paused
+runtime values. **Complete** (Ctrl+Space in the textarea) offers matching visible variables
+after `$`/`${`, and functions with their parameter signatures or real msh builtins at command
+positions. Choose a suggestion by button (keyboard focus or touch); completion never runs it.
+Command completion replaces the parsed literal word, including from inside or just after its
+quotes. It preserves surrounding quotes and arguments, and normalizes mixed/escaped command
+spellings to a quoted literal so they still suppress aliases. Variable completion replaces only
+the referenced name; dynamic command expressions are never replaced with a literal command suggestion.
+Backslash-newline continuations use the lexer's normalization: continuations alone do not
+suppress aliases, while genuine quotes or escapes still do after completion.
+Parameters/locals shadow global suggestions, and another function's locals are not offered.
+
+Indexing uses the shared msh parser, including named parameters, assignments, local/export
+commands and literal `source`/`.` statements. It does not execute shell, `eval`, substitutions
+or arbitrary network requests. Open buffers, including unsaved sourced files, take precedence.
+Closed local/browser files are read through the existing permission-checked file API. Remote
+sources must already be open in this window: automatic symbol discovery does not download
+Seafile files. A literal relative source is resolved from the project/launch working directory,
+not from the source file's directory. Sources outside the project, dynamic paths, or relative
+sources after a possible `cd` are reported as unknown rather than guessed.
+This includes possible directory changes in nested, conditional or repeated sourced files;
+an unavailable source also makes subsequent relative source paths unknown. The index does
+not execute `cd` to discover the new directory. Literal quoted or escaped command names
+have their normal shell meaning, including `"source"`, `'cd'`, `\eval` and quoted local/export
+commands; dynamic command names remain uncertain.
+Functions that shadow declaration/source builtins, including imported functions, also weaken
+those static facts to candidates.
+
+msh has dynamic scope, not lexical closures. A free variable in a function may come from a
+caller local: the index shows known assignment candidates and says so. Conditional declarations,
+multiple function definitions, dynamic sources and `eval` prevent a definitive jump; choose an
+explicit candidate instead. Parameters and unconditional local declarations with unambiguous
+command identity in the current function have reliable origins. This is intentionally not a
+full LSP or data-flow proof:
+command/arithmetic substitution internals, heredoc expansions, `read`/`getopts`-generated
+bindings and external commands are not resolved. A syntax-invalid file keeps its parser
+Problems but has no symbol index until it parses again. No React/TypeScript intelligence is
+implied.
+
+Each window attempts at most 16 source file reads (including unavailable files), 8 source edges
+deep and 512 KB total, with at most 4096 symbol facts per file and 40 completion suggestions.
+Indexing is debounced, cancelled on
+file/buffer/root changes or window close, and discards stale asynchronous results. Before a
+jump into a closed source, its text is checked again; a changed file is reindexed instead of
+navigating to an outdated location. Account
+changes clear navigation/index state and disable intelligence in that old window; reopen Xed
+under the current account. No symbol index or navigation history is persisted.
+
+**Running and debugging.** The editor bar of every open file has the debugger toolbar: Run
+(or Continue while paused), Pause, Stop, Step Over, Step Into and Step Out, followed by the
+session state (not running, running, paused with its reason and location, completed or failed
+with the exit status, or stopped). The keys are the familiar ones:
+
+| Key | Action |
+| --- | --- |
+| F5 | Run the active script, or continue when paused |
+| Shift+F5 | Stop |
+| F6 | Pause at the next command |
+| F9 | Toggle a breakpoint on the caret's line |
+| F10 | Step over (when nothing runs: start and stop at the first command) |
+| F11 | Step into (likewise) |
+| Shift+F11 | Step out |
+
+Xed takes these keys only while its window is focused (the window manager's focused window),
+whether or not the caret is in the text; another app's text field keeps them. They are caught
+before anything inside the Xed window sees them, so a program in Xed's terminal panel (nano,
+say) does not take F5 from the debugger; every other key still reaches it. In a focused Xed
+window F5 and Shift+F5 are always Xed's, so a page reload cannot throw away unsaved edits;
+there F5 on a file that cannot run says why in the status bar. Outside Xed, F5 is left to the
+browser. F6, F9, F10 and F11 are taken only in an msh file or while a session is selected.
+A browser may keep some function keys for itself (F11 for full screen in some browsers): the
+toolbar buttons do the same, and their tooltips and `aria-keyshortcuts` name the keys. Alt+1…9
+are not used.
+
+Run launches `msh 'path'` through the normal command table, file reads and permission checks,
+in the project folder. It runs the saved file: when the editor has unsaved changes the button
+reads **Save & Run** and saves first, and if saving fails nothing runs. While the save is on
+its way (Seafile and browser-kept files take a moment) the state reads "Saving before the run"
+and Stop cancels the run. The run does not start if the window closed in the meantime, another
+file was brought to the front, or the text was edited during the save (it would run the older
+saved copy): the status bar says so, and F5 again saves and runs the new text. A second F5
+before the run has started is ignored, so one press is one run. Run stops only at
+breakpoints; Step Over or Step Into while nothing runs starts the script and stops at its first
+command. Only msh scripts run (`.msh`, `.sh`, or an msh shebang); there is no way to run other
+files, and arguments cannot be passed yet.
+
+**Stepping** is per command: simple commands, `(( ))`, and the heads of `for` and `case`.
+Lists, pipelines, groups and `if`/`while` are made of commands that stop on their own, so one
+place is never stopped at twice. The session keeps a call stack of scripts (the launched file,
+`source`, `msh file`, `./script`), function calls and `$(…)` substitutions, which crosses the
+interpreter's child shells. Step Into stops at the next command anywhere, Step Over at the next
+command in the same frame or one it returns to, and Step Out at the first command after the
+current function, sourced file or substitution returns. `$(…)` text has no file of its own, so
+stepping passes over it into what it calls (a function stepped into from `$(f)` shows in its
+own file). Pause stops at the next command; a long-running external command pauses when it
+returns.
+
+**Breakpoints** are set by clicking the gutter left of a line number (tapping on touch screens)
+or with F9. They belong to canonical absolute paths, are shared by every Xed window in the page
+and are not saved. The Breakpoints list shows them all with a checkbox to disable or enable
+each, a link to the line, and a remove button. A breakpoint on a line without a command (a
+comment, `done`, a blank line) is drawn hollow and flagged as never stopping. Editing a file
+moves its breakpoints with their text and removes those on deleted lines; renaming or deleting
+a file in the project panel takes its breakpoints along. A breakpoint fires on a line event,
+as in Python's debugger: when execution reaches another line, or jumps back to an earlier
+point on a line (a loop), so `a=1; b=2` stops once and a loop line stops on every iteration.
+Sessions Xed starts use these breakpoints; another session only does after it is attached.
+
+**While paused** the current line gets a highlight and a gutter arrow, separate from the
+breakpoint dot, and a pause in another file opens that file's tab and scrolls to it without
+moving the caret or selection of the file you are in. Each file keeps its selection when the
+debugger moves to another file and back (stepping into a function in another file and out
+again leaves the caller's selection where it was), and the editor keeps the keyboard focus if it
+had it. The panel under the editor (resizable
+from its top edge, shown and hidden with the bug button in the status bar) has **Output**,
+**Variables** (positional arguments, named **Parameters**, ordinary **Locals**, inherited **Caller scope** and **Globals**),
+**Watch**, **Breakpoints**, **Call stack** (click a frame to inspect its bindings and see its line) and **Problems**
+(syntax diagnostics, also marked in the gutter). Hovering a variable in the editor shows its
+value at the pause (the value is read from the current pause when drawn; a step or choosing
+another session hides it until the pointer moves); with a keyboard or on a touch screen, putting the caret on a variable shows
+it in the panel. Values are only shown while paused, from the pause's snapshot: when the
+session resumes or ends they are cleared rather than shown as if current, and a hover on a
+file that is not in the paused call stack says so.
+
+Every invocation has a stable, distinct frame identity, including recursive calls of the same
+function. Selecting a caller reconstructs its shadowed bindings and positional arguments;
+Watches and runtime hover use that selected frame. A hover in a different file asks you to
+select its frame rather than displaying the executing function's value under another name.
+Dynamic caller locals are labelled as inherited scope. Parameters are visible before the
+first body command. `(unset)` and `(empty)` are distinct, and omitted/cut values are labelled.
+Inside `( ... )`, the current frame shows the executing subshell's copied bindings and
+positionals, including parameters in a function with a subshell body. Caller frames retain
+their own bindings; leaving the subshell restores the enclosing view without adding a frame
+or comparing copied bindings as changes to their originals. A shared capture limit can cut
+even a short value to zero characters: Variables, Watch and hover label that truncation,
+never as an empty string.
+The Variables view highlights changes as previous → current only for the same session,
+invocation and binding. Comparisons use complete captured values only; previous display text
+is limited to 120 characters. Switching sessions resets comparisons. Ending a session or
+changing account clears its captured current and previous values.
+
+**Watches** are read from the snapshot and never evaluated as shell: a name, `$name`,
+`${name}`, `${#name}`, `$1`…`$9`, `${10}` and higher, `$#`, `$@` and `$?`, with plain text around them.
+As in msh, `$10` means `$1` followed by `0`; use `${10}` for the tenth argument. Command and
+arithmetic substitution, backticks and `${x:-…}`-style operators are refused, so a watch
+cannot run anything or change a variable. At most 20 watches of 200 characters; values are
+built up to 4096 characters and shown up to 1000. Snapshots are bounded (below), but keep what
+the bounds left out: `${#x}` and `$#` give the script's real length and count, a cut value is
+marked as cut with its real length, and an argument or variable past the bound reads as "not
+captured" rather than "not set". The Variables view says the same.
+
+**Unsaved and changed source.** A session remembers a hash of each file it parsed. When the
+editor's text of a file differs from what the session is running (edited while paused, or
+changed on disk), the panel says so and the paused line is drawn as stale; stop and run again
+to use the new text.
+
+**Sessions.** The session picker lists only explicitly opted-in sessions in this page. It does
+not inspect ordinary terminals, agents, other browser tabs or server processes. Choosing a
+session Xed did not start attaches to it: Xed shows its pauses and it starts stopping at the
+editor's breakpoints, but its output stays with whoever started it, and Xed does not take over
+its lifetime. Xed cancels its own sessions when its window closes. With several Xed windows,
+each has its own session and panel; the keys go to the focused one.
+
+The registry holds at most 16 sessions (evicting completed ones), each with at most 256
+breakpoints. One pause shares 256 variables, 64 arguments and 65,536 characters across the
+executing frame and its callers (at most 128 frames), with each value capped at 4096 characters; the
+editor keeps at most 256 breakpoints. The previous pause uses the same bound; snapshot work
+and retained change text also charge the shared execution budget. Output retains the last 32 KB. Debug launches also bound
+interpreter capture and screen chunks to 32768 UTF-16 code units, streaming partial lines when
+needed; ordinary `runLine` output remains unlimited unless its optional `captureLimit` is
+supplied. The toolbar and panel use the active theme, wrap to phone widths and have 36 px touch
+targets on touch screens.
+
+Xed debug launches use the shared execution budget (60 seconds including pauses,
+100,000 steps and the normal intermediate/total-output limits by default). Stop
+or deadline expiry releases a paused checkpoint; continuing cannot bypass file
+policy or resume mutations after exhaustion. Rich jq remains interactive-only outside bounded
+debug runs; use `jq-safe` while debugging. `check:msh-debug` covers cancellation,
+paused deadlines, policy and shared JSON accounting.
+
+There is one interpreter. `parse.ts` adds token offsets and command `span` metadata;
+`interp.ts` awaits optional `Base.debug.checkpoint` hooks before each command and reports
+frames with `enter`. `debug.ts` owns session state, frames, step modes, the editor breakpoints
+and subscriptions; `watch.ts` evaluates watches and finds the variable under a hover.
+`launchDebug(line, base, label?, { start?, editorBreakpoints? })` returns `{ session, done }`
+and follows normal `runLine` execution; callers must supply their existing permission context.
+`start` is `'first'` (the default: stop before the first command, the launch line), `'run'`
+(breakpoints only) or `{ entry: path }` (the first command of that file).
+`runCapturedStreams(source, base, filename?)` returns distinct `{ stdout, stderr, status }`;
+`runCaptured` retains its existing combined-output API. `set -x` trace goes to stderr.
+
+File-backed debugger locations use absolute, normalized source paths for navigation
+and breakpoints. This applies to `source`, nested `msh file`, and executable scripts,
+including relative paths after `cd`. Session display labels and script `$0` retain
+their existing spelling; normalizing source identity does not rewrite invocation
+arguments, and error messages keep their file, line, column and expression. Inline commands,
+substitutions and alias expansions keep their `-c` coordinates.
+
+The debug panel does not supply interactive stdin or a full terminal for fullscreen commands;
+use Xed's terminal panel for those. Variable snapshots can contain script secrets, just as
+Terminal output can; they stay in this page and are not persisted. Watches and breakpoints are
+not persisted either.
+
+Checks: `pnpm check:msh-debug` runs real interpreter/command regressions with separated streams,
+including step into/over/out across functions, sourced files and substitutions, line events,
+editor breakpoints and watches. `pnpm check:xed-debug-ui` drives the actual editor through the
+repository's muted Chromium harness against a caller-started scratch dev server
+(`XED_TEST_PORT`, default 5276): gutter clicks and taps, the Breakpoints list, F5/F6/F9/F10/F11
+with focus inside and outside the text, two Xed windows, the paused marker and source reveal,
+watches and hover (also across a session switch), stale-source warnings, save before run
+(closing the window, Stop, edits and a double F5 while the save is pending), the caller's
+selection after stepping out of another file, F5 with nano focused in the terminal panel,
+attach, stop and window close, named parameters and recursive caller-frame inspection, static
+modified-click/keyboard/touch navigation, unsaved source precedence and symbol completion,
+a phone-sized touch screen, and that F5 outside Xed is not
+taken. The save-before-run checks use a file in /tmp, whose save is quick; they act within the
+same task so the save's await is still pending, which is the same gap a slower Seafile or
+browser save has. Headless Chromium has no reload
+accelerator, so that last check proves the key is not cancelled rather than that the page
+reloads.
+
 ### The shell, agents and skills
 
 The shell is msh 2.0 ([`src/terminal/msh/`](src/terminal/msh)): a POSIX-ish parser and
@@ -617,6 +1235,44 @@ and `./script.sh` with a `#!/bin/msh` (or sh/bash) shebang run scripts (`./scrip
 `chmod +x`, see Permissions above). `man msh` shows the
 reference ([`src/data/mshReference.ts`](src/data/mshReference.ts)), which the agents read as the
 built-in `msh` skill.
+
+**Named function parameters.** Optional comma-separated names replace manual
+`local parcel="$1"; local cost="$2"` bindings:
+
+```sh
+deliver(parcel, cost) {
+    printf 'Delivering %s for %s fuel\n' "$parcel" "$cost"
+}
+deliver "Space Potato" 3
+```
+
+`function deliver(parcel, cost) { …; }` works too. Whitespace, newlines and comments
+between parameters are allowed. Names must be unique plain shell identifiers
+(`[A-Za-z_][A-Za-z0-9_]*`); `RANDOM` is computed by msh and cannot be a parameter.
+There are no defaults, rest parameters, destructuring, type annotations or expression-style
+calls such as `deliver("Space Potato", 3)`. Commas in ordinary command words stay literal.
+Existing `name()`, `function name()` and `function name` declarations keep their argument handling.
+
+A **nonempty** parameter list requires exactly that many arguments. Empty strings count as
+arguments. A wrong count fails with status 1 and a diagnostic naming the function, parameter
+names, received count and call site, before the body (including its redirects) runs. Normal
+argument expansion and call-site redirection still follow shell evaluation order. `set -e`
+handles this failure like any other command failure. `msh -n` checks declarations without
+running them; it cannot predict a call's expanded argument count.
+
+Bindings receive the already expanded strings, never reparse/evaluate them, and are local to
+each invocation, including recursion. `$1`, `$2`, `$#` and `"$@"` remain available; `shift` and
+`set --` change only those positional arguments, not the named snapshots. Named assignments
+can be changed or unset like other locals. Local shadowing and restoration use the same path
+as `local`, on return, error, exit, cancellation and budget exhaustion. Nested calls follow
+msh's dynamic scope: they can read a caller's locals until they shadow them. Arrays and
+read-only variables are not implemented by msh; declarations pretending to use them are
+syntax errors. Ordinary names such as `IFS` retain their existing local-variable effects.
+Missing arguments are rejected with or without `set -u`; for legacy functions, msh still
+expands a missing positional argument to the empty string even under `set -u`.
+
+`help --json` / `terminal_capabilities` advertise named-parameter syntax in `shell.syntax`.
+The shell version remains 2.0; this is a language feature, not an OS release.
 
 **Aliases and `~/.mvshrc`.** `alias ll='ls -l'` gives a command another name; `alias` lists them,
 `alias ll` shows one, `unalias ll` (or `unalias -a`) removes them. An alias replaces the first word
@@ -638,19 +1294,141 @@ account or files do not answer within 4 s, and the first command typed waits for
 sources itself (`source`, `.` or `msh ~/.mvshrc`) is refused with "already running, skipped".
 There is no file until you make one (`nano ~/.mvshrc`, `echo "alias ll='ls -l'" >> ~/.mvshrc`);
 `help` and the Terminal settings mention it. Where it lives follows home: in the browser's files
-or Seafile once signed in (a normal file there, so Zed, Files and the terminal all edit it); signed
+or Seafile once signed in (a normal file there, so Xed, Files and the terminal all edit it); signed
 out, where home is read-only, `~/.mvshrc` is still a file the terminal can create, read and remove
 (`nano`, `>`, `>>`, `rm`), but its text is kept in this browser
 ([`src/terminal/rcfile.ts`](src/terminal/rcfile.ts), a `synced()` value, so local without an
 account). On the CV page home stays read-only and has none. The agents' `terminal` tool does not
-run it. `pnpm check:msh-rc` tests all of this.
+run it (it starts a fresh shell, see below). `pnpm check:msh-rc` tests all of this.
+
+**The agents' terminal tool.** The Agents app and the `agents` command both run an agent's `terminal`
+calls, with no terminal window needed: the window that follows the thread claims the call
+(`POST /api/agents/threads/<id>/claim`, so two windows never run it twice), runs it
+([`src/terminal/agents/exec.ts`](src/terminal/agents/exec.ts), the same function in both) and posts
+the answer back. Turning the *Terminal* tool group on in the app is enough. It runs in the browser
+because the Seafile mounts, the browser's files and their modes only exist there; the interpreter is
+the same one the terminal uses (`startAgent` in [`msh/interp.ts`](src/terminal/msh/interp.ts)), no
+host shell is involved.
+- *Fresh shell per call.* Every call starts a new msh in the work folder (or `cwd`, a folder inside
+  it): files it writes stay, variables, functions, aliases, `cd` and `export` do not carry over to
+  the next call, and `~/.mvshrc` is not run. `read` with no input sees the end of it.
+- *Arguments and answer.* `command`, `description`, `cwd` and `timeout_seconds` (default 60, at
+  most 180). The answer is JSON: `exit_code`, `stdout` and `stderr` apart, `duration_ms`, `truncated`
+  (characters dropped from each stream) and `terminated` (`null`, or `timeout`, `cancelled`, `steps`,
+  `output` or `memory`), plus the folder it ran in. A stopped run exits 124 (time), 130 (cancelled)
+  or 125 (another limit). Curl verbose output, warnings and file progress, and wget progress,
+  go to stderr; response bodies stay on stdout (or their requested file). Command output respects
+  `2>`, `2>&1`, pipes, per-stream truncation and the shared budget. Streaming status output from
+  ordinary commands remains stdout. The interactive terminal still displays both streams.
+- *Limits* ([`src/terminal/limits.ts`](src/terminal/limits.ts)), one budget shared by everything a
+  call starts (pipeline stages, `$(…)`, subshells, sourced files, nested `msh`): 100,000 interpreter
+  steps, the time, 60,000 characters kept per stream (more is dropped and counted), 4 MiB per
+  intermediate buffer (a pipe stage, a `$(…)`, a file being redirected into), 32 MiB written in all,
+  1 MiB per variable, and `printf` padding capped. Formatting and expansion charge allocations
+  incrementally, before padding or concatenation. Heredoc literals, escapes, substitutions and
+  positional-argument arrays use the same budget; arrays are appended without an uncharged join.
+  Command/script source is capped at 64,000
+  characters; field splitting is incremental and capped at 10,000 fields (IFS at 256 characters);
+  agent shell patterns allow at most 256 characters and one `*`, and pattern
+  substitutions operate on values of at most 4096 characters. Stop, a timeout or a spent limit ends the run at
+  the next step (a sleep is cut at once) and nothing is written after it, redirect files included.
+  Cancellation returns the partial result promptly; suspended preparation cannot resume a write.
+  These are cooperative limits, with the constraints described below.
+- *Permissions, where they happen.* The server decides whether a call runs, waits or is refused
+  (`decideTerminal` in [`server/agents.ts`](server/agents.ts)) and sends a grant with it
+  (`terminalGrant` in [`server/workdir.ts`](server/workdir.ts)); the terminal then enforces it on what
+  the shell *resolves*, never on the text of the line
+  ([`src/terminal/policy.ts`](src/terminal/policy.ts)): every command after expansion (so variables,
+  globs, `eval`, `source`, nested `msh`, functions and scripts are all seen as the commands they
+  become). Before preparation, dispatch or help, executable paths and aliases resolve to their
+  registered command identity and are authorized again; unknown executable handlers fail closed.
+  Checks also cover every redirect target, every script read, every directory a glob lists, `cd`, and, in
+  [`fs.ts`](src/terminal/fs.ts), every file written, moved, removed or `chmod`ed.
+  - Reads and writes stay inside both the work folder's terminal path and its authorized backing
+    repository/path. Foreign nested mounts and bind mounts outside that backing path are refused;
+    a work folder containing one currently fails closed for filesystem operations. A thread with no folder reads supported Seafile and `/tmp` text
+    and writes nothing; `/dev/null` and the byte devices are fine.
+  - A call writes only if its mode lets it: a line that only looks (a fixed allowlist, plus `msh -n
+    file`) runs in every mode, Plan too, with a read-only grant; **Edits allowed** runs any other
+    line that does not name `rm`/`rmdir`, a network command or `sudo`, writing in the work folder;
+    **Bypass** runs everything but a line naming a steering file; **Ask first/Auto** ask, and an
+    approved line may write in the folder.
+  - Deleting needs an approved (or Bypass) call whose text names `rm` or `rmdir`, and the network
+    needs one that names the network command: `msh x.sh` does not give `x.sh` the right to `rm` or
+    `curl`, running them directly does. `AGENTS.md`, `CLAUDE.md`, `.agents/` and `.claude/` can be
+    written only when the approved line names them ([`src/data/steering.ts`](src/data/steering.ts)),
+    even in Bypass; a name built from a variable is refused. Steering permission requires a fresh
+    explicit approval of this call; remembered command approvals never grant it. Both the visible
+    path and the resolved backing path are checked, so bind aliases cannot hide steering files.
+    `git` is a network command too, including when reached from scripts. `calc`, `units`
+    and `bc` remain usable for offline arithmetic and unit conversions. Their rate-cache misses
+    require network authority at every actual rate request; cached rates need no network. The
+    server uses the same calculator parser to ask before literal currency expressions (also when
+    rates might already be cached), and such approvals are not remembered by command name.
+    Dynamic expressions or stdin cannot obtain network authority from merely naming `calc`: run
+    the currency expression directly or use Bypass. Rate requests carry cancellation, never borrow
+    an unguarded in-flight request, and do not start fallbacks or cache late results after abort.
+  - A command with no entry in the policy table's `EFFECTS` does not run (apps, `sudo`, editors,
+    `watch`, `mount`, `kill`, `theme`, …; `find -exec/-delete/-fprint` and `fd -x`), and the check
+    script fails when a new command is neither listed nor on its list of ones an agent never runs.
+    A command refusal is `msh: …` on stderr with status 126 and says which rule. Archive commands
+    (`tar`, `unzip`), directory transfers/removal, and writes to browser storage are unavailable to
+    agents until their complete operation/descendant checks are supported. Seafile file reads,
+    writes, creation, mkdir and individual file removal remain available. `cp`, `mv` and `chmod`
+    currently work only on local `/tmp` files; `mv` also needs delete authority and refuses before
+    writing its destination without it. To avoid uninterruptible regex/query workloads, agents use
+    literal `grep` (`-F` for metacharacters). Recursive modes, `find`, `fd`, `tree`, `du`, `figlet`,
+    `pepper`, `changelog`, `releases`, `df`, `findmnt`, `lsblk` and rich `jq` are unavailable.
+    Browser-backed and generated site-file content reads are unavailable; use a Seafile work folder
+    or `/tmp`. Patterns are not treated as
+    file operands during preparation or authorization. Grep execution, preparation and policy
+    share one argument parser, including dash-prefixed patterns, letter clusters and `--`. Agent
+    grep patterns are limited to 4096 characters.
+- *Cancellation.* Each executor registers the call before claiming it, snapshots its thread/work
+  folder, and aborts on Stop, unmount, thread changes or `clientDone`. A late claim cannot start
+  execution. Preparation and mutation boundaries recheck cancellation and the budget; uploads
+  recheck after link lookup and receive the abort signal. Pending read requests can still settle,
+  but cannot start a later mutation. Every completed call aborts its call-owned signal, including
+  success, ordinary failure and early budget exhaustion, so concurrent sibling requests cannot
+  outlive it. Deadline timers and abort listeners are removed; cleanup preserves the captured
+  result and termination reason. Already submitted remote mutations cannot be rolled back.
+  Execution is cooperative on the browser thread, not a worker/process hard deadline: checks
+  bound known expensive formatting, expansion and pattern workloads, but cannot preempt arbitrary
+  synchronous JavaScript inside a command.
+- *Writing and checking a script*: the agent writes `potato-flight-check.sh` with `write_file`, checks
+  it with `msh -n potato-flight-check.sh` (parse only, so it never asks), runs `msh
+  potato-flight-check.sh`, reads the real stderr and exit code, fixes it and runs it again. Both
+  syntax-only file checks and execution report parser errors as canonical absolute
+  `filename:line:column: [expression]` diagnostics. With
+  *Edits allowed* that needs no one at the keyboard.
+
+**`help --json` and `terminal_capabilities`.** What the terminal can do, as data, for programs and
+agents: `help --json` in any terminal, or the `terminal_capabilities` tool (the overview in compact
+form; with `command` one command's usage, options and manual). It is built from the same registry
+`help`, `man` and Tab read ([`src/terminal/capabilities.ts`](src/terminal/capabilities.ts)): the
+human `help` listing uses the same groups (anything no group names goes under *More*). It reports
+the shell (`msh` and its version, builtins, syntax, redirects, expansions, options, what is not
+supported), every command and builtin with its group, usage and **only the options its usage line
+names** (`optionsComplete: false` for every usage-derived list, which can omit supported flags; nothing is borrowed
+from Linux), the mounts with their writability, the integrations (Seafile, the browser's files, the
+network, apps) and the session. In an agent's call it describes that call: `session.kind: "agent"`,
+the `limits` it runs under, its `permissions` (this call's grant), separate `sessionRights` describing
+available rights and approval requirements (a read-only capability query does not make Bypass read-only), where it may read and write (`filesystem.agent`),
+and per command whether it may run (`available`, `restriction`, `bounds`); in the user's terminal `limits` and
+`permissions` are `null`. Piped, or inside an agent call, the JSON is one compact line.
+`pnpm check:agents-terminal-exec` tests all of this (running, limits, isolation, script milestone,
+nested bypass attempts, capabilities, delayed-request cancellation and the shared executor);
+`check:agents-executor-lifecycle` mounts the Agents executor hook in React StrictMode and exercises
+Stop, unmount, thread changes and `clientDone` during pending claims and actual shell execution.
+`check:agents-permissions` covers the server's decisions and grants, including remembered steering
+command approval.
 
 `agents` ([`src/terminal/agents/`](src/terminal/agents)) is the Agents app as a coding-agent CLI.
 In a folder on Seafile, that folder becomes the thread's work folder:
 - File tools ([`server/workdir.ts`](server/workdir.ts)) let the agent read, write, edit, list,
   glob, grep, move and delete inside the folder, and it follows the folder's `AGENTS.md` or
   `CLAUDE.md`.
-- A `terminal` tool runs msh command lines in the user's own terminal.
+- A `terminal` tool runs msh command lines in a fresh msh in the work folder (see *The agents' terminal tool* above), and `terminal_capabilities` says what that terminal can do.
 - Changes wait for approval, which can carry a note for the agent. Shift+Tab cycles between
   asking first, accepting edits, and plan mode (read only until a plan is approved).
 - `/threads <words>` searches earlier conversations across projects, including marked archives.
@@ -774,13 +1552,15 @@ descriptions and system prompt are untuned. Known limits:
   - Edits do not check whether the file changed since the agent read it.
   - Files over 2 MB, and binary files, cannot be read.
 - **Terminal tool.**
-  - It needs an attached `agents` session, so turns started in the app do not get it.
-  - Each command gets 60 s and returns at most 60k characters of output.
+  - It runs in a browser window that follows the thread (the Agents app or `agents`); with none
+    open, its calls fail with a message, and background tasks never get it.
+  - Each call gets 60 s by default (180 s at most) and returns at most 60k characters per stream.
   - Interactive programs are refused, and prompts (rm's y/N) are answered no.
+  - Reads are confined to the work folder too, so it cannot look at the rest of the OS.
   - "Don't ask again" for a command lasts until the server restarts.
   - Read-only detection is a fixed allowlist; any `$(…)` asks.
 - **A turn keeps running after `agents` closes.** Its terminal tool calls then fail until
-  `agents -c` reattaches.
+  a window follows the thread again (`agents -c`, or the Agents app).
 - **Skills.**
   - Install only from public GitHub repositories, and the app has no zip upload yet.
   - `allowed-tools` in the front matter is ignored.
@@ -979,8 +1759,10 @@ as someone else (tabs share the browser's storage and its sign-in cookie)
   whose session ran out gets nothing. A page whose account hasn't turned push on in this browser
   (a visitor, or someone else) unsubscribes one still there. Empires only gives a multiplayer seat
   back for a kept token to the same account.
-- **Signing out** clears that account's space. A session that just ran out doesn't: the page
-  starts again as a visitor and the account's unsynced changes come back when it signs in again.
+- **Signing out** clears account data from its space, retaining migration receipts and any
+  unfinished migration intents to prevent retained legacy widget data from being imported again.
+  A session that just ran out doesn't clear it: the page starts again as a visitor and the
+  account's unsynced changes come back when it signs in again.
 - **Moving in.** The first time a space is used, what the release before spaces kept in plain keys
   moves into it, if the old marker says it was that account's; later writes to those keys (by a
   tab still running the old release) are never read. A visitor signing in brings their synced
@@ -1115,7 +1897,7 @@ keeps the dock and Spotlight's favourites pointing at it when the file moves. On
 MvL OS app instead has `Type=Application`, `X-MvL-App=calendar` and, optionally,
 `X-MvL-Props=path=~/Work;`. The desktop and Files show a launcher as itself (its name and icon,
 opened with a double-click), never as `GitHub.desktop`; *Show hidden files* in Files shows the
-file's own name, and its menu has *Edit the file in Zed*. Renaming one changes its `Name=` (and
+file's own name, and its menu has *Edit the file in Xed*. Renaming one changes its `Name=` (and
 drops its translations, `Name[nl]=`, so the new name shows in every language); the file keeps its
 name. The terminal shows them as the files they are: `ls ~/Desktop` lists `GitHub.desktop`, `cat`
 prints it and `open GitHub.desktop` opens what it points at. The format is read without a library
@@ -1245,7 +2027,9 @@ dock icon to remove it, and right-click (or Shift+Enter) an app, launcher or rep
 Spotlight or All apps to pin it. An open app that isn't pinned offers *Keep in dock* on its own
 dock item, or drag it in among the pinned ones to pin it at that spot. Settings → Dock lists what
 was taken off, to add it back, and restores the default dock. Everyone can still drag dock icons
-to reorder them. Dropping a launcher or an app (from All apps) on the dock pins it there, a file
+to reorder them with mouse, pen or touch. The grabbed point follows the pointer at every UI
+scale, stays inside the screen, and releases without opening an app. Escape, a cancelled gesture,
+window blur or a screen/scale change restores the saved order. Dropping a launcher or an app (from All apps) on the dock pins it there, a file
 dropped on an app's icon opens in that app if it opens that kind of file, and anything dropped on
 Trash goes in the trash.
 
@@ -1297,7 +2081,49 @@ Setup:
 
 Without the OAuth settings, sign-in is simply off and everything else works as before.
 
-**Google Calendar** attaches to the GitHub sign-in (system menu or Settings → Integrations → Calendars) for the
+**Sign in with Google** is a second way in, off unless `GOOGLE_SIGNIN=on`
+([`server/googleSignIn.ts`](server/googleSignIn.ts), [`server/oidc.ts`](server/oidc.ts)). It is
+OpenID Connect's authorization code flow with PKCE (S256), asking for `openid email profile` only;
+it keeps no Google token and is separate from connecting Google Calendar (its own consent, scopes,
+callback and cookie). The ID token is verified on the server: RS256 signature against Google's
+published keys, issuer `https://accounts.google.com`, audience equal to the client id, expiry, and
+the nonce this sign-in sent. The round trip's state, PKCE verifier and nonce are sealed into an
+HttpOnly ten-minute cookie and registered once in the server's memory, so a replayed or copied
+callback is refused before any token is requested. It uses `GOOGLE_SIGNIN_CLIENT_ID` and
+`GOOGLE_SIGNIN_CLIENT_SECRET` if set, else the Calendar client (`GOOGLE_CLIENT_ID`/`_SECRET`). Add the
+redirect URI `https://<your site>/api/auth/google/callback` (and
+`http://localhost:5173/api/auth/google/callback` for development) to that client. `openid email
+profile` are not sensitive scopes, so the consent screen needs no verification for sign-in alone.
+
+Accounts are found by the provider's stable id, never by email: GitHub's numeric id, Google's
+`sub` (the `identities` table, one of each per account). A Google account without an account here
+signs up as a new one, within the same registration limits (closed, full) and bans as GitHub. It is
+never an admin: admin rights stay tied to GitHub ids in `ADMIN_GITHUB_IDS`. A Google address that
+matches a GitHub account's, or a connected calendar's, links nothing. Settings → Account → Sign-in
+links the other provider to the signed-in account: a same-origin POST from that account's page
+(`/api/auth/<github|google>/link`) starts the round trip, which only finishes for the same account
+and the same session. A GitHub or Google account that already has an account of its own here is
+refused (accounts are never merged), and the last sign-in of an account can't be removed. Removing
+GitHub revokes its token; on an admin account it also ends the admin rights and signs the account
+out everywhere, so no request already authorised as admin can finish afterwards. Pending sign-in
+round trips are capped per client address (20, oldest of that address first), so one address
+starting many can't push out anyone else's. The client address is the last `X-Forwarded-For`
+entry when the request comes from a trusted proxy: the addresses in `TRUSTED_PROXIES`
+(comma-separated), or any private address when that isn't set. Set it when clients on a private
+network (a LAN, Tailscale) can reach the server directly, not only through the proxy. Accounts made with Google have a
+login like `name_g` (GitHub logins can't contain `_`), no GitHub token, and no GitHub source in
+Spotlight or the Git app until GitHub is linked.
+
+Accounts from before Google sign-in are migrated in place on first start: `users.github_id` loses
+its `NOT NULL` through SQLite's documented table rebuild (foreign keys off for the copy, in one
+transaction, row count and references checked), and every GitHub id is copied into `identities`.
+Account ids, sessions, admin rights and everything stored stay as they were. `pnpm
+check:auth-identities` checks the migration, the token checks, replays, link conflicts, bans and limits
+against stand-ins for GitHub and Google, including the Android app's sign-in through the system
+browser (`/api/auth/app`, see "Android app" above): a server needs this version for the app to
+sign in; older ones are told apart and stay guest-only in the app.
+
+**Google Calendar** attaches to the signed-in account (system menu or Settings → Integrations → Calendars) for the
 Calendar app, the Agenda widget and the clock: your calendars, shared ones included, with Google's
 refresh token stored encrypted next to the Gitea tokens ([`server/google.ts`](server/google.ts)). Each link has a generation that moves on connect, disconnect and account removal: a refresh or consent still waiting on Google when that happens, or when the session that started the consent is signed out, stores nothing and returns no token. A calendar read (one call, or a list of events across calendars) carries the generation it started under and is checked after every answer, including the body, and again before its result is returned: if the link changed, all of it is dropped, never a partial result from the old account. The combined answers of Google and CalDAV (the calendar list and the events, `server/calendars.ts`) do the same: if a Google link was connected when the answer began and it was replaced, disconnected or deleted before the answer went out, the whole answer fails with a 409, CalDAV's part included; a CalDAV-only answer is never failed for it. Whether Google takes part is decided once, before the read's first await: a read that began without a Google link never consults one that is connected while it runs (the next read does), and one that began with a link makes every Google call under exactly that link. Reads made of several lookups (the Agents app's `events_for_note`, finding a linked event) hold one such snapshot for all their lookups and check it before their answer is written. A stored token is only replaced where its refresh token is still the one the refresh began with. It
 needs `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from a Google Cloud OAuth client (type *Web
@@ -1350,6 +2176,34 @@ already, by their UID, are skipped, and the notice says how many (the UID is kep
 a UTF-8 or UTF-16 text (BOM or not, [`src/data/decodeText.ts`](src/data/decodeText.ts)), lowercase names, `VALUE=DATE-TIME`, a
 quoted TZID, `X-WR-TIMEZONE` for times with no zone, and extended ISO dates (`2026-10-15T14:00:00+02:00`).
 When nothing can be imported the notice says why (`1 event found, but its start time couldn't be read (...)`).
+
+**The sidebar** (a month to get around, the calendars, birthdays and task lists to show) follows the window's own width, as
+Mail does, not the screen's. From 720px up it sits beside the calendar and the ☰ button (like the toolbar's other icon buttons, 28px with a mouse and 40px with a finger, as in Mail) grows and shrinks it (the
+choice is kept while the window is narrow, and its content keeps its width so nothing reflows as it moves). Under 720px the
+window shows one thing at a time: the calendar, or the sidebar as a pane of its own that slides over it from the left
+(☰, or `‹ Calendar` at the top of the pane, goes back; so do `Esc`, picking a day or month, Today, the arrows and the view
+tabs). The calendar behind a pane is never unmounted, so its scroll and swipe paging stay as they were, and ticking a
+calendar or task list in the pane doesn't close it. A hidden pane is inert (no focus, no taps, hidden from screen
+readers), the ☰ button says `aria-expanded` and `aria-controls`, and focus goes into the pane when it opens and back to ☰
+when it closes (also when the window crosses 720px with focus in a pane that goes away). Narrowing the window starts on
+the calendar, and widening it again brings back the desktop sidebar as you left it. The slide is off with *reduce
+motion*, and while the window switches between the two layouts or before its first measure, so a phone never shows a
+wide flash. `node scripts/calendar-swipe-check.ts <scratch server>` covers all of this in headless Chromium.
+
+**Swiping between pages.** On a touch screen, swipe sideways to turn the page, in every view: it goes where
+the ‹ › arrows go (`step(shownView, …)`: a day, 3 days, a week, a month or a year; swiping left in 3 days shows
+the next 3 days). The page follows the finger with the real previous and next pages beside it (their events,
+birthdays and due tasks, fetched ahead for the range in view and normally there before the finger is; on a slow
+connection a neighbour's events can still arrive while it slides in), and on letting go it
+slides on to the next page (past 28% of the width, or a quick flick) or back (`src/apps/calendar/SwipePager.tsx`,
+the rules in `swipe.ts`). Up and down still scrolls the hours (the browser's, `touch-action: pan-y`); a tap still
+opens an event or makes one, and a swipe never also taps. Mouse and pen are untouched, so dragging events and
+empty spots with a mouse works as before. A second finger, the browser taking the gesture over, the window
+resizing, or the arrows, Today or another view being used mid-swipe drop the swipe without turning the page.
+With *reduce motion* set the page still follows the finger, but turns without the slide. The hours (or the year)
+stay scrolled where they were. At rest only the page in view is in the DOM. `pnpm check:calendar-swipe` tests the
+rules; given a scratch Vite server it drives a real swipe in headless Chromium with touch
+(`node scripts/calendar-swipe-check.ts http://127.0.0.1:5290`).
 Calendars can be **hidden** in Settings → Apps → Calendar (*Show in MvL OS*, one switch per calendar, grouped by account, with the
 Contacts birthdays and the task lists too; also *Hide everywhere* in the right-click menu of a calendar in the Calendar's sidebar). That is
 stronger than unticking one in the sidebar, which only filters it from the views: a hidden calendar is left out everywhere, so the
@@ -1401,8 +2255,15 @@ seeking; every answer has `nosniff` and a sandboxing CSP). The chip's download b
 menu and *Download all* still download. Other attachments (Office files and the rest) download as
 before. Attachments save to Files too. Keys: `j`/`k` (or the arrows) to move, Enter to open, `e` archive, `#` delete, `!` junk,
 `s` flag, `u` read or unread, `r` reply, `a` reply all, `f` forward, `c` compose, `/` search,
-Ctrl+Enter to send (a setting). In a narrow window or on a phone it shows one pane at a time: mailboxes, list,
-conversation, each with a way back.
+Ctrl+Enter to send (a setting). The dividers between mailboxes, conversations and the reading pane
+drag (mouse, touch or the arrow keys on a focused divider, Shift for bigger steps; a double click
+resets), and the widths are kept per account in this browser. Mail measures its own window, not the
+screen: when the reading pane would get less than 380 px beside the other two, opening a
+conversation shows it alone, with a Back to the conversations (the mailboxes stay beside the list),
+and in a window under 720 px or on a phone it shows one pane at a time: mailboxes, list,
+conversation, each with a way back. Once any conversation is selected (by its checkbox, a long
+press, or Ctrl/Cmd/Shift+click), a plain click on a row takes it in or out of the selection instead
+of opening it, down to the last one; nothing opens until the selection is empty.
 
 Mail draws its icons itself ([`src/apps/mail/icons.tsx`](src/apps/mail/icons.tsx)): thin line
 drawings in the text colour, so they follow the theme. Mailboxes get one by their role (Inbox,
@@ -1633,10 +2494,10 @@ token Seafile hands out, encrypted, which shows up in Seafile's Devices as the s
 ([`server/seafile.ts`](server/seafile.ts)). Every library is under Seafile in Files' sidebar. The
 primary library (My Library unless you pick another) is home unless you switch that off: Places'
 Desktop, Documents, Downloads and so on are its folders, and the desktop shows its Desktop folder.
-Text, code and config open in Zed and save back with Ctrl+S; pictures, video, audio and PDFs open in
+Text, code and config open in Xed and save back with Ctrl+S; pictures, video, audio and PDFs open in
 the Viewer; `.ics` (also `.ical`, `.ifb`) and `.vcf` (`.vcard`) files open in Calendar and Contacts and
 bring up their import dialog (see Calendar and Contacts), from Files, the desktop, Spotlight, the
-terminal's `open` and a Mail attachment's menu; *Open with* has Calendar or Contacts for them too, and Zed for the raw text; the rest downloads. Encrypted libraries ask for their password in the window and lock
+terminal's `open` and a Mail attachment's menu; *Open with* has Calendar or Contacts for them too, and Xed for the raw text; the rest downloads. Encrypted libraries ask for their password in the window and lock
 again after the minutes set in Settings (the password is never stored). Seahub's API sends no CORS
 headers, so it goes through the server; files themselves go straight between the browser and
 Seafile's file server, with links the server hands out. The sidebar's sections and items can be
@@ -1660,10 +2521,10 @@ across the mounts; before a command runs, the Seafile folders and files it names
 **Without Seafile**, signed in, `~` is kept in this browser ([`src/data/browserfs.ts`](src/data/browserfs.ts):
 one IndexedDB database per account, so another account on the same browser never sees it), laid
 over the site's own home so README.md, games/ and the wallpapers stay readable. The terminal,
-Files, Zed, the desktop, Preview, Player, Omamp, the PDF viewer, the Viewer and Archive (ZIPs) read
+Files, Xed, the desktop, Preview, Player, Omamp, the PDF viewer, the Viewer and Archive (ZIPs) read
 and write it, and copying or moving between it and Seafile carries the bytes over
 ([`src/data/fileOps.ts`](src/data/fileOps.ts)). Clearing the site's data deletes it, which is said
-wherever it shows: a strip in Files, *Browser only* in Zed's status bar, the terminal's welcome and
+wherever it shows: a strip in Files, *Browser only* in Xed's status bar, the terminal's welcome and
 `df`, Settings → Account (with a Delete). Once Seafile is home it is mounted on `/mnt/browser`
 instead, and MvL OS offers to copy it into Seafile folder for folder. Unpacking archives and
 OnlyOffice need the file in Seafile.
@@ -1712,7 +2573,7 @@ Files' toolbar has the sidebar button at its left end and the **preview pane** b
 end ([`src/apps/FilesPreview.tsx`](src/apps/FilesPreview.tsx)). The pane, on the right of the list,
 shows the selected file (the one last clicked, with several selected) with the same code the apps
 use: pictures as in Preview, video and audio through Player's addresses (with controls, muted and
-not playing by themselves), Markdown as Zed's preview renders it, code and text with the same
+not playing by themselves), Markdown as Xed's preview renders it, code and text with the same
 highlighter (the first 200 KB or 2,000 lines), a PDF's first page with pdf.js, and the top level of
 a ZIP (or of a tar in Seafile) as the Archive app reads it. Office documents are never opened there,
 since that would mean loading OnlyOffice in the pane: they, and files of any other kind, show their
@@ -2002,7 +2863,7 @@ which words were tried rather than invent a conversation.
 pnpm check:agents-threads   # History search, ownership, attachment reads, bounds, ranking and 20,000-message timing
 ```
 
-The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-compact`, `check:agents-tasks`, `check:agents-subagents`,
+The Agents checks include `check:agents-roles`, `check:agents-permissions`, `check:agents-terminal-exec`, `check:agents-compact`, `check:agents-tasks`, `check:agents-subagents`,
 `check:agents-images`, `check:agents-image-files`, `check:agents-image-studio`, `check:agents-openai-images`, `check:agents-chatgpt-models`, `check:agents-mail`, `check:agents-stats` and `check:agents-threads`.
 
 **Tasks.** A task is an agent that runs in the background, once (now or at a time), on a
@@ -2050,6 +2911,24 @@ does not come along (the terminal, image generation). The editor says whether th
 match its thread's, with **Use thread's tools again**; `update_task` with `use_thread_tools` does the
 same (only in the thread the task was made in), and its card says when that widens what the task may do. Its model is the thread's, unless one
 is named. Tasks made in the Tasks tab with no thread open keep the safe defaults below.
+
+**A web page the reader could not read.** When a `web_fetch` fails, its card says *Reader couldn’t
+retrieve this page* and opens with the whole address (the one-line title cuts a long one with “…”,
+and its tooltip has all of it). The reader's error is kept as it is under *Error from the reader*:
+it cannot tell a site that blocks the reader from a page that does not exist, so the card claims
+neither, and the agent saw only that error. **Open page** opens the address in a new tab (http and
+https only; nothing opens by itself). **Paste page text…** opens a dialog: copy the page's text in
+your browser and paste it there, and it is added to the end of your message box under a line naming
+the page, for you to read and send; it is never sent for you. Text of 5,000 characters or more (or
+that would make the box too long) goes along as a `Page text.txt` file whose first line names the
+page; with 10 attachments already, the dialog keeps your text and says why. What you had typed and
+attached stays. It is not offered while a queued message is being edited, and if you leave the thread
+before the dialog closes nothing is added. The card does not appear for a read you declined, one nobody
+answered or a cancelled run: those keep their own message. The page text is read from what you paste,
+not from the clipboard by the site, and nothing is fetched by the browser for you. Only a client
+change: the server and the reader are untouched, so a blocked page stays blocked for the agent until
+you paste it. Checked by `pnpm check:agents-web-recovery` (and, against a dev server,
+`pnpm check:agents-web-recovery-ui`).
 
 *A model of its own.* The editor picks from your models; `create_task` and `update_task` take
 `model` ("run my morning brief on GLM from now on"), and the card shows the change ("A → B"). A
@@ -2222,6 +3101,7 @@ keeps the budget that message used); a restart marks working
 
 ```sh
 pnpm check:agents-subagents   # the /subagents command, then against a stand-in model: spawning, tools a subset, the stricter mode, agent messages, inherited addresses, cards in the parent, message_agent, results at a round boundary, continuations (merged, retried on 429), the caps, Stop, delete, rewind, a restart, closed chat routes, isolation
+pnpm check:agents-terminal-exec   # the agents' terminal tool: fresh shell per call, stdout/stderr/exit/duration, loops, huge output, cancel, the write-check-run-fix script, nested bypass attempts (redirects, eval, source, msh -c, variables, globs), confinement, delete/network/steering grants, help --json and terminal_capabilities against the registry, both windows
 ```
 
 **Models, makers and thinking effort.** The model pill in the composer opens a picker
@@ -3956,13 +4836,442 @@ right-click menu, and no text selection (except a sticky being edited). Desktop 
 dragged too; Settings → Appearance → Motion turns either off. Several icons dragged at once gather
 in a pile under the pointer with a count badge, like Finder, and fan back out into the arrangement
 they had, moved to where you drop them. Add widgets from the desktop's menu (*Add widget*), All apps → Widgets or Spotlight.
-Today there are six: **Sticky note** (one of your notes, with checklists you can tick),
+Today there are seven built-in kinds, plus **custom widgets** you make yourself (see below): **Sticky note** (one of your notes, with checklists you can tick),
 **Weather** (now, the next hours and three days from [Open-Meteo](https://open-meteo.com), for the
 browser's location or a city you pick; your pick syncs, the browser's location stays on that
 device; double-click or the menu opens the full **Weather** app), **Agenda** (Google Calendar and
 CalDAV, see above), **Code inbox**, **Status** (updown.io) and **Minecraft server** (up or not, the
 address to copy, who is on with their heads, and the in-game day and time when RCON is set up; a
-click opens the Minecraft server window).
+click opens the Minecraft server window) and **Clock** (see below).
+
+**Clock**: a big digital time with the weekday and date under it, drawn straight on the wallpaper
+(manifest appearance `bare`: no card, border, tape or shadow, only a soft text shadow from the
+theme's dark so it reads on any picture). Point at it for the usual frame handle, close button and
+menu (right-click, or long-press on touch); *Source* appears on hover. The time uses the descriptor
+text size `face`, which scales with the widget's width (container query units, one line, so
+longer text such as seconds or AM/PM shrinks to fit), and the date uses the smaller `subface`
+size, so dragging the right edge resizes the clock and a phone gets it full width. Menu: **Hours**
+(follow my language, 24-hour, 12-hour), **Show seconds**, **Date** (weekday and date, short, none)
+and **Accent colour**; the settings sync with the widget's other settings. The host owns one timer,
+the next full minute (or second with seconds on), only while the widget is eligible: nothing runs
+while the notes are put away, a window covers the desktop, the tab is hidden, the widget is minimized
+or the screen is a phone that does not show it. It needs no capabilities and reads no data
+(`input.clock` is already formatted by [`src/widgets/platform/clock.ts`](src/widgets/platform/clock.ts)).
+`pnpm check:widget-clock` covers manifest `phone`/`bare` validation, the clock package in the VM and
+12/24-hour formatting; `pnpm check:widget-clock-ui` runs the desktop (transparent, resize, ticking)
+and phone (390 px, touch) flows.
+
+**Widgets on phones.** A manifest can say `"phone": true` (optional, strict boolean, default false,
+part of the digest). Only then does the host run and show the widget on a phone-sized screen
+(under 720 px); otherwise it stays hidden there exactly as before and nothing runs for it. The
+**active** revision decides: a fork that says false (or nothing) stays hidden on a phone even when
+the built-in it came from says true. The Sticky note, Weather, Agenda, Code inbox, Status, Minecraft
+server and Clock are phone-compatible (checked at 390 px wide: no sideways overflow), and the custom
+widget template says `phone: true`. On a phone they share the scrollable Home grid with icons;
+drag their top strip to choose a snapped x/y position. Their selection and coordinates save
+independently from desktop. *Show notes and widgets
+on the desktop* in Settings still puts them all away. **Add widget** (desktop menu, All apps,
+Spotlight) lists everything on a big screen, and on a phone only the phone-compatible widgets,
+with a note saying so ("Only widgets that work on a phone"). See `phone` in the SDK reference
+(`/usr/share/mvlos/widgets/SDK.md`).
+
+### Folder-based widget packages
+
+All seven built-ins (Weather, Sticky, Agenda, Code inbox, Status, Minecraft and Clock) load executable
+source folders through the same verifier, compiler, bounded QuickJS WASM worker and descriptor
+renderer used for user forks. Files, msh and Xed can read immutable defaults at
+`/usr/share/mvlos/widgets/<kind>`: real `manifest.json`, `src/main.js`, `styles/tokens.json`,
+`assets`, `tests` and `README.md`. `/usr/share/mvlos/widgets/SDK.md` describes the scoped SDK.
+These sources produce the layout and checklist transformations; they are not aliases for
+privileged React widget components. Widgets use the Omarchy theme by default; a Sticky's menu
+can opt into **Paper appearance** without changing its saved colour or tilt.
+
+Open **Source** on any widget, or **Widget Workshop** from All apps/Spotlight. Signed in,
+**Clone & edit in Xed** copies the default to `~/.local/share/mvlos/widgets/<kind>` on the backing
+browser store or writable Seafile home. Edit and save `src/main.js`, return to Workshop, choose
+**Build & mock preview**, review the sample output, opt into this instance's data, then
+**Activate built revision**. Source saves never activate. Activation checks that the source still
+matches the built digest. **Rebuild default & preview** uses the same compiler/verifier/loader;
+**Recover previous revision** restores the prior immutable snapshot, including the default on a
+first install. Recovery does not roll back note contents, settings or placement. Installation
+generations reject a stale activation; imported build.json/dist output is ignored and rebuilt.
+Clone retries keep matching bytes, resume missing files and refuse to overwrite edits.
+Guests keep default widgets and their notes, but do not get writable source folders.
+
+### Custom widgets
+
+Besides the six built-ins, anyone signed in (or an agent working in their folders) can make **new**
+widgets from a package folder. Open **Widget Workshop** (Add widget → *New custom widget…*, All apps or
+Spotlight), pick a folder in your browser files or writable Seafile home (default
+`~/.local/share/mvlos/widgets/daily-tally`) and:
+
+1. **New custom widget template** writes a working starter (a daily tally counter that remembers
+   its total) and opens `src/main.js` in Xed. The same starter is a read-only example at
+   `/usr/share/mvlos/widgets/custom-template` and is printed in `SDK.md`.
+2. **Build & mock preview** validates the package and shows it with sample data.
+3. Tick the opt-in and **Activate as new widget**. This makes a new instance (`custom-xxxxxxxx`, an
+   installation record of kind `custom` with the same generation, previous-revision and
+   recovery rules as the built-ins), places it on the desktop and grants that exact revision for
+   this session. Window title, name and a minimum height come from the package manifest.
+
+Custom widgets run through the same loader, verifier, bounded VM and renderer as the built-ins
+(there is no second renderer) and sync through the same account state. They appear in *Add widget*
+(desktop menu, All apps, Spotlight) as long as their installation exists. Closing one only takes it
+off the desktop; add it again from the menu. **Remove this widget** in its Workshop deletes the
+installation (a synced tombstone, so other devices drop it too) and its saved state, after asking.
+The built-in six cannot be removed. At most 12 widget installations can exist per account; removed
+ones free their slot. Hidden/phone-sized screens run nothing, like every widget. A custom widget whose
+installation is missing, unreadable or removed elsewhere stays on the desktop and says so, with a
+button to the Workshop; it is never deleted or replaced by a default.
+
+A custom package has the single optional capability `custom.state`: a small per-widget JSON state of
+at most 4 KiB, read as `input.custom.state` and replaced only by a button event returning
+`{type:'custom.replace', state, expectedRevision}` (refused if the state changed meanwhile or is too
+large). Every package also sees the clock (`input.custom.now`, `input.custom.today`). There is no
+network, notes, other widget data or DOM. As for any fork, a revision never runs until you grant that
+exact revision for that instance in this session; after a reload the widget asks again
+(*Allow this revision…*) and **Pause access** withdraws it. **Reset saved state** in the Workshop
+clears the state. `pnpm check:widget-custom` covers manifest rules, the starter in the VM, the state
+limit and record merge/limits; `pnpm check:widget-custom-ui` runs the whole create, reload, use and remove
+flow in muted Chromium with scratch data.
+
+**Sticky parity.** A Sticky shows the calendar events its note is linked to as the same chips the
+Notebook shows, under the package's own output: click one to open the event in Calendar, × to
+unlink. The chips, the link and unlink actions and the backlinks are drawn and run by the host, so
+package code gets no calendar access. Web launchers dropped on a Sticky are still added to its
+note as Markdown links.
+
+**When something goes wrong.** A widget or Workshop never falls back silently, deletes data or
+reports a success that did not happen; it shows a small banner with the cause and a button:
+*Installed metadata unavailable* (corrupt or missing record) offers **Rebuild default** (opens
+Workshop with the default previewed; activating is still your click) and **Open Source**; a package
+that cannot be verified, a default that fails to build or a render that fails offer **Retry** and
+**Open Source**. In Workshop, an activation that lost a race with another tab or device (*Installation
+changed*) offers **Reload installation state**, which refreshes what Workshop compares against and
+leaves the decision to you; *not synced yet* offers **Retry after sync**; a storage failure says
+the new revision is not saved, that the earlier saved one is intact and offers **Retry saving**;
+the 12-record limit and the 480 KiB budget explain themselves and change nothing. A sync or
+migration problem that keeps widget data back (original data is retained) shows **Retry sync**;
+nothing is ever chosen for you.
+
+#### Agents making widgets (`widget`)
+
+Agents make widgets through the `terminal` tool they already have: there are no extra server tools.
+The msh command `widget` (also usable by hand in the terminal; `help --json` and `terminal_capabilities`
+list it) works on a package folder in the work folder, while `write_file`/`edit_file` write the files with
+their usual hash and read-before-edit rules:
+
+- `widget docs [full|template]`: the SDK reference an agent needs (workflow, package files, limits,
+  capabilities per widget kind, the `tests/*.json` case format, the descriptor vocabulary and the
+  custom-widget example); `template` prints the starter package's files.
+- `widget list`: installed widgets (id, kind, name, digest, generation) and package folders (a folder with
+  `manifest.json`) up to two levels below the current folder.
+- `widget validate <dir>`: builds the folder exactly as the Workshop does (same `buildPackage`, same
+  limits). Errors name the file and the reason (a file over 32 KiB, more than 48 files, source over 128 KiB,
+  an unsupported file type, bad JSON, an unknown capability) on stderr with exit 1; success prints the manifest
+  summary and the digest.
+- `widget test <dir>`: runs the bounded VM on the mock input, on every button of that view and on every
+  `tests/*.json` case (`{"schema":1,"description","input","event","expect":{"text":[],"absent":[],"mutation":…}}`,
+  `input` merged over the mock input). It prints PASS/FAIL per case, the rendered outline, the runtime error
+  (with the exception's message) or the limit that was hit, and exits 1 on any failure. Cancelling the call
+  stops the VM run.
+- `widget preview <dir>`: `test`, plus a Widget Workshop window on mock data for the user (it refreshes the
+  open one). It never writes installation state.
+- `widget activate <dir> --new | --instance <id> [--generation <n>]`: the only subcommand that changes
+  anything. It always asks the user in the OS's own dialog (package, digest, widget, source folder and the
+  access being granted; Allow or Deny). Deny, Escape, a closed thread or no desktop to ask on: exit 1
+  `activation requires approval` and nothing is written. On Allow the folder and the installation are checked
+  again (changed source or a changed installation is refused as a conflict), then the same
+  `activate` + grant as the Workshop run. `--generation` makes a stale `widget list` a conflict. `--new` takes
+  its instance id from the folder and the digest, so retrying a call whose answer got lost says
+  `already active` and changes nothing (no second widget, no second generation bump, no second dialog);
+  edited source is a new digest, so update an installed widget with `--instance <id>`. Activation needs a
+  signed-in account and is refused in plan mode.
+
+Reads follow the call's policy like `cat` (a folder outside the work folder is refused where it is read;
+browser-stored files are not readable to agents, so agents work in a Seafile folder). Calls run through
+`runAgentCall`, so Stop, closing the thread and `clientDone` cancel them like any terminal call. The server
+treats `widget` as a command that writes no file, so one activation costs one question, the widget dialog.
+`pnpm check:widget-agent` runs the command with synthetic tool calls on an in-memory work folder (every limit
+error, test cases, abort, permissions, denied/approved/retried/conflicting activation);
+`pnpm check:widget-agent-ui` does the whole flow in muted Chromium (template folder, validate, test, preview,
+the approval dialog, the widget on the desktop, retry).
+
+The first SDK accepts JavaScript modules, relative local imports and `@mvlos/widget` descriptors:
+column, row, text, button, native editor, action, link, image, dot, details and card, plus the presentation nodes grid, box, badge, icon, progress, divider and spacer and closed text/layout tokens (size, weight, align, gap, clamp, span). The host maps every token to the Omarchy theme palette; packages never carry CSS or colours, and older packages render unchanged (the additions are additive, so the build identity is unchanged). Styles accept spacing tokens only. No npm packages,
+build hooks, raw HTML/CSS, arbitrary URLs, DOM, fetch, cookies, storage, host objects or generic RPC
+are exposed to packages. Snapshots hash every accepted file, manifest permissions, assets, styles
+and the pinned SDK/QuickJS build identity. Each invocation has 8 MiB heap, 256 KiB stack, a 40 ms
+interrupt deadline, 16 promise jobs and a 3 s worker watchdog; output/render/source limits and
+tab-wide concurrency/rate caps also apply. Saturation waits in a cancellable, round-robin queue
+(8 running, 32 starts/second, at most 256 queued and two queued per instance); it does not
+permanently fail the ninth widget. Invalid input and queue capacity errors are distinct. All VM handles and workers are disposed. The production
+CSP adds `wasm-unsafe-eval` and self-origin workers; JavaScript `unsafe-eval` stays forbidden.
+
+The host owns immediate native note edits, selection, IME, undo, launcher-link drops and list
+continuation. The native editor stays mounted independently of descriptor refresh/failure.
+Package buttons are bound to the exact input revision that produced their displayed labels;
+stale buttons are disabled and stale clicks/results are rejected even before React refreshes.
+Sticky projects at most 64 lines / 8 KiB at a time, with Previous/Next controls and up to 64 task
+buttons. Pages retain complete lines when possible. Oversized lines remain bounded
+and make Unicode-safe progress, including long indentation whose checklist prefix
+would otherwise straddle a byte boundary. All items remain reachable; the editor retains the full note. Packages propose bounded
+`note.edit` ranges (UTF-16 offsets, at most 32 KiB inserted UTF-8), checked against the granted
+window, full source text and revision. Legacy `note.replace` is accepted only for a complete
+small projection. Native notes support 256 KiB UTF-8; existing larger notes remain readable and
+editable without truncation (up to 32 KiB growth per edit). Fork data grants bind account, backing identity, instance and source digest. They are local
+to the live session, never imported from build files or synced approval flags. **Pause access**
+revokes the revision; logout cancels workers and denies stale writes. A reloaded fork needs a fresh local grant. A browser-backed fork arriving on a different browser
+is unavailable until cloned and rebuilt against that browser's own store; its imported UUID is not authority. Weather gets only a forecast projection for a host-selected place:
+search queries come from the trusted user-operated city picker, not package code. Preview uses
+sample data, with no real writes. Domain actions use opaque, presentation-bound handles; packages
+cannot create destinations or send their own strings to clipboard, navigation or provider APIs.
+There is no model forwarding, arbitrary navigation, export or clipboard API.
+
+The four domain packages own their headings, item layout, states, details and summaries in
+`src/main.js`. Trusted brokers project only the granted fields and selected actions:
+
+- **Agenda:** selected/hidden calendars and 1/3/7-day settings; today's due/overdue tasks from
+  visible lists; timed/all-day, live/past and recurring events; meeting links, partial calendar
+  errors and existing linked-note marks. Completion calls the existing task domain, preserving
+  recurrence; opening tasks/events/notes uses their existing app actions. Eight task/event rows
+  per page keep all results reachable without exceeding descriptor budgets.
+- **Code inbox:** reviews, own pull requests and assigned issues, section filters, draft labels,
+  counts and age. Five items per section per page preserve the prior first-page composition and
+  expose later items. Plain click uses the existing Git availability check and provider fallback;
+  modified/middle clicks retain the broker-bound provider destination.
+- **Status:** up/down/paused, uptime, latency, outage details and certificate warnings, with twelve
+  checks per page and fixed check destinations. **Minecraft:** online/offline, server metadata,
+  world clock, twelve player heads/details per page, dimensions/vitals, fixed-address copy feedback
+  and the existing server window. Hover and touch details remain available.
+
+Capabilities distinguish read data from actions (`agenda.act`, `inbox.navigate`,
+`status.navigate`, `minecraft.act`); action capabilities require the matching read capability.
+Resource handles bind account/connection authority, instance, revision and exact displayed input.
+The live installation identity is rechecked synchronously, including equal-generation conflicts.
+The renderer checks current grants and resource type at every interaction. Provider refs,
+credentials and navigation URLs stay outside the VM. Clipboard writes copy only the fixed
+Minecraft address following a user gesture. Shared reads are scoped to account/connection
+identity; visibility/revocation cancels pending reads. Agenda task reads use subscriber-owned
+leases shared with Tasks, Calendar and other live consumers. Hiding/revoking the last owner aborts
+the request and prevents late cache adoption even if a transport ignores abort. Another live app
+keeps its shared request; logout/provider changes cancel old authority and clear its cache.
+Agenda refreshes every five minutes,
+Inbox every two, Status every minute and Minecraft every thirty seconds while eligible.
+Shell visibility owns widget work: putting notes away, covering them with a maximized window,
+minimizing, hiding the document or entering the mobile breakpoint aborts active/queued work and
+pending mutations. Showing them again renders the latest revision. **Use my location** keeps
+coordinates in browser-local memory/storage and syncs only `place: null`; explicit city choices
+still sync. A pending location result after account change cannot write settings or local here.
+Weather refreshes on visibility/resume and every 15 minutes based on forecast age, with one
+cancellable timer/request and no hidden refresh work. Its stable lifecycle identity includes
+the instance, account status/identity, runtime revision and grant epoch: hydration or authority
+changes abort/restart the loop, while ordinary renders do not trigger fetch loops. Results and
+errors are scoped to the same lifecycle.
+
+**Widget look.** The six built-ins share one design: a bold heading, status banners (box), aligned columns for numbers (grid with auto tracks), icons from a closed set (drawn by the host in currentColor) and badges for state. The Refresh, Source, Pause access and Notebook buttons are a small icon toolbar that appears on hover or keyboard focus (always shown on touch); paged widgets show a compact ‹ 1/3 › control, only when there is more than one page. `pnpm check:widget-design` checks the new nodes' validation limits and that every built-in renders the mock input with them.
+
+The SDK build identity is descriptors 1.2. Snapshots from the earlier unreleased 1.0/1.1
+slices need explicit rebuild/preview/activation; they are not silently upgraded or re-granted.
+
+**Canonical state and migration.** `widgets:state:v2` is one versioned envelope containing
+per-config counters/tombstones, desktop placement geometry/tombstones and immutable installation
+revisions/generations. Its presence is the atomic cutover marker. First import waits for successful
+account discovery and complete account-state hydration; failed/offline discovery does not mean
+an empty account. Confirmed guests cut over locally, including servers with sign-in disabled.
+The independent mobile Home set uses `widgets:placed:mobile`, with the same per-entry merge and
+removal rules; it shares widget configs and installations with desktop, and never overwrites
+desktop placement preferences.
+Every accepted canonical edit first enters an account-scoped, per-writer browser journal. Every
+operation has a writer UUID and monotonic sequence. Consumption watermarks commit in the same
+JSON envelope as config/placement/install data and merge by maximum sequence. Every durable canonical
+read/merge/write sequence and receipt cleanup runs inside one origin-wide IndexedDB `readwrite` request
+scope, including server replies, storage-event adoption, startup account transfers and logout
+cleanup. [IndexedDB transaction scheduling](https://w3c.github.io/IndexedDB/#transaction-scheduling)
+excludes overlapping writers even when another tab pauses immediately before native
+`localStorage.setItem`; another pre-write read alone would not provide that guarantee. IndexedDB
+holds no account data here. Its scope supplies mutual exclusion; it does not roll back a
+localStorage write if the transaction later aborts. Receipts precede cleanup, making retry safe.
+Failed writes do not publish their speculative receipts to the in-memory store; journal pruning
+uses only receipts in the stored envelope. Pending operations are included when evaluating each
+new edit, including an edit that returns a field to its earlier value.
+All tabs use this same protocol, with or without Web Locks.
+
+Local UI updates remain optimistic after their journal write succeeds. Explicit installation
+activation requires hydration and waits for its durable canonical result before succeeding.
+Absent/blocked IndexedDB refuses shared canonical writes; durable pending journals remain
+available for recovery. A failed flush gets one retry per caller; background sync retries use
+existing bounded backoff. If localStorage refuses a journal write, the edit is rejected rather
+than acknowledged without recovery. Account guards cancel queued transactions
+on revocation/switch; authorized logout cleanup follows earlier active writers and advances an
+account-space revocation marker so other open tabs cannot recreate cleared state. If storage
+refuses cleanup, authentication is still revoked and the inaccessible copy remains in that
+account's namespace. Ordinary synced stores keep their synchronous persistence behavior.
+Deferred legacy widget transfers bind their intent to the exact source and ownership markers.
+If either changes before the transfer, or an older unbound transfer intent remains, the source
+and intent stay untouched for recovery; they are not attributed to the current account.
+The plain legacy widget envelope and its ownership markers remain in browser storage after a
+successful copy and after logout: older tabs can write them without participating in the gate.
+The account-scoped cutover receipt survives logout and prevents that retained source from being
+imported again. An old `mvlos.owner` marker without an account ID requires an origin-wide,
+durable claim under the storage gate before any legacy account data is imported; the first
+eligible account retains that claim across logout. Conflicting older receipts or an unavailable
+claim store stop the import, and an explicit `mvlos.account` marker takes precedence. Older
+account `moved` flags without an identity-bound intent are ambiguous and prevent automatic
+ownership assignment. Legacy keys come from a marker-checked snapshot and remain in place for
+older tabs. Widget config, placements, installations, desktop/mobile layouts and sticky-note
+content are staged in separate immutable account-scoped keys, never copied over ordinary account
+keys. These snapshots remain account-scoped across logout for recovery, like migration receipts.
+Each snapshot records its source account and ownership markers; an older unbound snapshot blocks
+automatic ownership claims. Its explicit original account can read it when the retained plain
+source still matches; a pending transfer also records a bound snapshot without changing the original.
+Visitor widget and sticky-note dependencies transfer before account cutover, subject to
+account-target precedence.
+Notes use one account-scoped `notes:state:v1` checkpoint for hydration, edits, server
+acknowledgements, storage events and offline reloads. It separates the last server baseline from
+actual unsaved note revisions; an unrelated edit never turns unchanged rows in a stale snapshot
+into dirty notes. Functional edits first read the latest checkpoint and pending records, then
+advance the existing note counters. Every accepted edit writes a unique immutable journal record
+before becoming visible. Only changed notes enter that record. Checkpoint read/merge/write and
+receipt cleanup run under the same IndexedDB gate as widgets; there is no first-edit handoff to
+an ordinary key. A newer server baseline replaces clean old rows, while real dirty edits retain
+the existing per-field merge and final-purge rules. Server acknowledgements consume only revisions
+they actually contain, so an edit made while a request was in flight remains dirty.
+Pending revisions are themselves domain-merged notes for only the already-dirty IDs. Observing
+a terminal server purge converts any surviving pending revision of that note to a tombstone;
+later pruning of the server baseline cannot expose a hidden live component. Unrelated dirty
+notes remain intact. Once acknowledged, a pending tombstone is discharged, and a newer server
+snapshot can remove the clean baseline entry. No separate permanent tombstone ledger is kept.
+
+Every note read collects checkpoint, input fence and immutable journal records, then validates
+their checkpoint revision and key membership again before exposing a projection or applying an
+edit. Startup, storage events, visitor transfer and checkpoint writes use this same read boundary.
+A journal consumed between enumeration and reading causes a bounded retry when its checkpoint or
+receipt proves cleanup. Eight moving snapshots reject the attempt without latching a permanent
+data error; an actual storage exception or unexplained missing record still fails closed. This is
+snapshot validation, not an atomic localStorage read/check/write claim. New checkpoint writes carry
+unique revisions, so a state that changes and changes back cannot evade validation.
+
+Persistence normalization never expires tombstones by wall-clock age. In particular, a purge
+waiting more than 90 days offline still hides its old live server row and remains uploadable.
+An acknowledged tombstone leaves the checkpoint when a newer server snapshot prunes it; aging
+alone cannot invalidate a checkpoint or discard pending deletion evidence.
+
+Before the first note checkpoint, ordinary account notes take precedence over the earlier
+`widget-cache:v2:notes` cache and immutable staged inputs. That first commit waits for migration
+inputs to be resolved; a pending startup transfer resumes when account discovery settles, even
+when an existing account target means no reload was needed. After cutover, those old keys remain
+untouched as recovery inputs, but later old-client writes cannot shadow committed note state.
+An unreadable checkpoint, source or journal fails closed. A rejected journal write rejects the
+edit; a failed checkpoint leaves the admitted journal recoverable across reloads. Admission
+stops at 256 visible pending records (1 MiB per edit). Concurrent admissions can exceed that soft
+count limit and are still replayed and drained. The checkpoint has a 2 MiB limit; receipts cover
+only extant records, not every tab ever opened. Receipt cleanup follows the successful checkpoint
+write, and failed cleanup can retry without replay.
+
+A verified note checkpoint also writes an account-bound `notes:inputs-consumed:v1` fence. It
+closes the old input channel across logout, so an acknowledged, purged and server-pruned note
+cannot return from retained migration sources. The fence keeps a continuation of only the
+initial imported notes still awaiting acknowledgement, using their full merged current values:
+confirmed text, local links, trash/restore clocks and terminal deletion state. It never restores
+the raw component that originally made a note dirty.
+Those unfinished imports remain retryable across logout, even when other imported notes have
+already been acknowledged and pruned. Later ordinary edits are not migration continuations.
+The checkpoint records which notes still belong to this migration; for pre-field checkpoints,
+their unsaved revisions are conservatively treated as unfinished imports on upgrade.
+
+Note checkpoints and journals carry the account-space revocation generation. Logout advances it
+under the gate, repairs the input fence from the verified checkpoint, then clears checkpoint and
+journals while retaining the fence. If the fence write fails, the revoked checkpoint remains as
+consumption proof and a continuation of unfinished imports for the next generation; the old
+source channel stays closed. A failed first checkpoint creates no fence and its authorized
+source can still retry. A non-gated admission paused before its
+native write may leave an old-generation physical record after cleanup, but it cannot replay in
+the new generation or another account. If cleanup itself fails, the retained data stays in that
+account's namespace. Visitor transfer reads the current checkpoint plus admitted journals, so an
+edit survives sign-in even if its visitor tab closed before checkpointing. Ownership checks inspect
+stage evidence even when an older global claim exists; a claim cannot override a later explicit
+owner.
+At canonical cutover the ordinary account value takes precedence over its staged input;
+the canonical write re-reads these inputs inside the storage gate. Conflicting snapshots or
+ambiguous prepared copies stay unresolved. Startup does not save a default window layout while
+migration is unresolved. Other legacy stores retain their existing copy behavior and provenance
+checks; their ordinary writes do not participate in this widget transaction protocol. Separate
+account-scoped copy receipts (up to 256 entries and 1 MiB per source snapshot, retained across
+logout) preserve later local edits and server metadata on retries for those other stores. An older
+partial copy without a receipt can recover when its synced value matches despite changed metadata.
+An unresolved widget transfer
+or startup migration blocks canonical cutover rather than replacing its source with an empty
+envelope, including failures before an intent could be written. Visitor transfers record their
+source and the account target observed at admission; a copied value or preexisting target is
+verified before clearing the intent. An older unbound visitor intent can retry only if no account
+target exists; an existing target stays unresolved for explicit recovery. After a transient storage
+failure, reloading retries the retained source and intent. A successful
+older-marker import reloads the page once so every store reads the claimed account space. A visitor
+cannot import a source marked as belonging to an account.
+Canonical and journal reads distinguish inaccessible storage from absent keys. Legacy inputs
+are read again at hydration, so a transient read failure cannot become an empty cutover. Failed
+hydration reads retry with bounded backoff while preserving the existing data and journals. The
+actual serialized merge read is strict as well; a failed read cannot be treated as an absent state.
+
+Writers store patches rather than stale whole views and never erase another writer's log.
+A late tab or reload cannot reapply an already consumed edit or resurrect a consumed addition.
+A pending addition remapped around a remote tombstone stores a writer-local original-to-target
+identity in the envelope. Later moves/removals use that same target across replay passes and
+reloads; remapped removals beat stale geometry. Original gesture stamps prevent delayed replay
+from gaining a new wall-clock time. Ordinary per-config ordering remains unchanged.
+The log admits at most 1,024 pending operations and replay processes at most 1,024 per pass;
+canonical receipts retain up to 256 writers and 1,024 placement identity mappings.
+Receipts/mappings are never evicted to admit another operation: capacity or conflicting identity
+errors preserve durable data and pending operations for recovery.
+The one-time import preserves IDs, note identities, counters, geometry, overlap, stacking and
+removals from legacy config/placements/installations and desktop/mobile layouts. Legacy records
+remain intact for older clients; later legacy writes cannot overwrite canonical state or resurrect
+removed widgets. Browser source authority still requires this device's store UUID.
+
+Malformed installation metadata stays unavailable until an explicit verified activation repairs it;
+it never selects a default, including records with missing, zero, negative or nonnumeric
+generations. Invalid generations rank below a verified repair; ties merge deterministically.
+Unknown records remain in the envelope and its byte budget.
+Hidden/mobile/minimized, unavailable source/runtime and unknown newer widget kinds never imply
+removal. Only an explicit close records a placement tombstone. Width/content-height sizing,
+regular-window two-axis sizing and the under-720-pixel hide rule stay unchanged. Previous revision
+recovery checks the current generation and active source/digest identity, rejecting conflicting
+newer installations; it never restores older config, placement or note contents. Same-revision
+activation retries reconcile idempotently. Config counters continue past known remote counters,
+and installation activation budgets the complete envelope rather than just package bytes
+(480 KiB, at most twelve new installation records; existing records remain editable).
+
+**Staged gaps.** Calendar link/unlink and backlinks remain in the trusted menu/Notebook. Inline
+Sticky calendar chips and a narrow package calendar operation are still staged. TypeScript/TSX,
+source-defined test execution, broader catalog, executable iframe comparison, conflict UI and
+ClientCalls-based agent source authoring remain the next milestone. Agent browser writes have
+not been broadened. This milestone completes six built-in packages and canonical cutover; it is
+not the final platform release.
+
+`pnpm check:widget-packages` checks verifier/digest/VM attacks and native transaction rules.
+`pnpm check:widget-packages-ui` uses scratch data, synthetic accounts and muted Chromium to prove
+clone/Xed edit/build/mock/activate/recover, native input/IME/undo, stale writes, revocation, weather
+place selection and mobile preservation. `pnpm check:widget-lifecycle` uses fake clocks for
+scheduler fairness/rate limiting/cancellation and forecast age/refresh, plus note paging/edit
+bounds and stale revision fixtures. `pnpm check:widget-review-ui` exercises the seven review
+regressions with synthetic accounts and muted Chromium. Existing widget sync/layout tests cover canonical and legacy fixtures.
+`pnpm check:widget-builtins` executes all six sources and resource-descriptor attack fixtures.
+`pnpm check:widget-builtins-ui` exercises synthetic six-package behavior, source editing in Xed,
+build/mock/activate/recover, action grants, private projections, paging, hidden read cancellation,
+unavailable sources, mobile preservation and explicit removals. `pnpm check:widget-review1-ui` adds real two-tab consumed-journal/reload checks,
+missing-generation repair and shared task-owner hide/close/revocation/logout regressions.
+`pnpm check:widget-review2-ui` pauses native writes in three real tabs, then checks journal
+consumption, later edits, server acknowledgements, remote adoption/storage events, overlapping
+push ownership, remap move/removal/reload, missing Web Locks, denied IndexedDB/localStorage,
+retry/deferred account transfer, cookie account switch and queued logout cleanup.
+`pnpm check:widget-canonical` checks old/new clients, complete/missing/failed hydration, offline edits, CAS conflicts, deterministic
+merges, config counters, placement tombstones, guests and storage denial. `pnpm check:widget-weather-lifecycle` delays `/api/me` and forecast replies to
+check hydration, same-identity renders, runtime changes, grant revocation/re-grant and account
+authority loss/recovery, including stale cancellation. Lifecycle VM tests also exercise checklist
+prefixes at byte boundaries, oversized single lines and exact original edit offsets. Live Seafile and non-Chromium browsers remain
+unverified. Storage denial above is synthetic, including browser API denial before app boot.
+None of the staged migration/platform gaps above are marked complete.
 
 ### Weather
 
@@ -4053,7 +5362,7 @@ made (`create`). List it in [`registry.tsx`](src/widgets/registry.tsx) and it ge
 dragging, the menus and an *Add widget* entry everywhere. Per-widget settings go through
 [`config.ts`](src/widgets/config.ts) (`useWidgetConfig` / `setWidgetConfig`), which syncs like
 notes. Which widgets are on the desktop, and where, is a set of its own
-([`src/os/widgetPlaces.ts`](src/os/widgetPlaces.ts), synced as `widgets:placed`), not part of the
+([`src/os/widgetPlaces.ts`](src/os/widgetPlaces.ts), the placements projection of `widgets:state:v2`), not part of the
 window layout: signed in, another browser or device shows the same widgets (same ids, so their
 settings apply too), and adding, moving, minimizing or removing one shows up elsewhere on the next
 pull (a refresh, or coming back to the tab). The set merges by widget id, the latest change to
@@ -4063,32 +5372,48 @@ wins with a later change. Taking one off is final: its entry's key goes into a l
 keys, kept for good, so a browser or an old saved layout that still has the widget can't bring it
 back (a key is about 9 bytes, so 20,000 removals are under 200 KB). Putting a sticky back after
 taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync` checks
-these rules in memory. `PORT=5273 node scripts/widgets-sync-e2e.ts` checks migration,
+these rules in memory. `pnpm check:widgets-sync-ui` checks migration,
 cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
 accounts and data; it starts and stops its own server.
 A big screen puts a widget where it was put, moved along when its own screen is another size (a
 widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
-added on a phone gets the usual spot for a new widget there. Phones and big screens share the
-set; a phone only changes a widget's place in its column.
+added on a phone gets the usual spot for a new widget there. Phones initially inherit the existing widgets. Their first addition, removal, minimization or
+move saves an independent mobile set (`widgets:placed:mobile`). If account hydration is still
+pending, edits remain optimistic and the first snapshot waits for canonical hydration, then
+applies those edits to the complete inherited set. Desktop selection and positions
+stay intact. An intentionally empty mobile set stays empty. Both sets follow the account and
+merge entries independently. Until that first edit, desktop changes still appear on mobile.
 
-Settings → Appearance → **Keep widgets from overlapping** is on by default, per browser. It
-nudges desktop widgets and notes into nearby available space when a smaller viewport or larger
-UI scale crowds them together. The display layout accounts for measured content sizes, tape and
-resting note slants. It never saves these automatic offsets: returning to a larger screen restores
-its layout, and other devices keep their canonical placements. Dragging or resizing saves only
-the widget you changed, not its nudged neighbours. This browser remembers which item was moved
-last, separately for each account, so the same item keeps priority after a reload. That priority
-never syncs, and a removed widget's priority does not transfer to a new placement. If browser
-storage is blocked, priority lasts for the current page only. Phones keep their existing column layout.
-Placement is deterministic and bounded; if no space fits, an item keeps its fitted position and
-can still overlap. Turn the option off to keep intentional overlaps.
-`pnpm check:ui-scale` checks scale geometry, overlay bounds, sidebar dragging, high-scale
-placement persistence, and local collision handling without sync writes in muted Chromium.
+Settings → Appearance → **Keep widgets from overlapping** is on by default, per browser.
+Desktop widgets reserve their measured content, tape and slanted corners on a shared 20 px desktop
+lattice. They reflow when the screen shrinks; when they cannot fit, the desktop scrolls vertically
+instead of piling them on top of one another. Icons use 100 × 120 px cells on the same lattice,
+avoid visible widgets, and also overflow downwards. Names show up to three lines within each
+cell; the full name remains in the tooltip and accessible name. Shift+Arrow moves a selected icon.
+Explicit icon and widget moves retain their row in the scrollable overflow area. Marquee selection
+uses the same content coordinates, so enclosing visible icons works after scrolling.
+On desktop, turning avoidance off preserves manual widget overlaps; icons still avoid their rectangles.
+Automatic fitting never overwrites synced preferred widget positions. The last manually moved
+widget retains local priority, separately for each account, including after reload.
+
+Mobile home has **Home** and **Icons** views, with labelled page controls above the dock.
+Home places widgets and icons together on the same grid. Swipe left on empty home space for
+Icons, right for Home; vertical movement on empty space still scrolls. Drag icons to move them (dropping on another swaps cells); taps open them.
+Mobile icon positions save separately in the account's desktop state and initially inherit
+existing positions. Drag a widget by its grip to move it in both axes, snapped every 20 px; its mobile x/y coordinates
+save independently. Move up/down/top menu controls move it spatially on this grid. Readable
+widgets can span most or all phone columns; crowded homes scroll vertically. Old mobile column
+layouts migrate in their saved order to grid rows without saving automatic positions or changing
+the desktop. The first manual mobile edit freezes those initial rows in the independent mobile set, so later
+removals cannot change untouched widgets' starting coordinates on reload.
+`pnpm check:desktop-layout` covers crowded placement, resize overflow, independent mobile grid
+coordinates, reload/migration, touch widget/icon movement, native swipes in both directions, and
+app control reachability while the home content scrolls.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
-layout by an earlier release move into the set when that layout is loaded or arrives from the
-server or another tab (before a merge of the layouts could drop it) (unless the set already
-has newer entries, or had them and they were removed since). Migrated coordinates have an
+layout by an earlier release move into the canonical set during the one-time, complete account
+hydration import (unless placements have newer entries or removal tombstones). After cutover,
+later legacy window-layout writes are never imported again. Migrated coordinates have an
 unknown-screen marker: they are shown as stored and clamped to fit, without scaling or assigning
 a default spot. Equal change counters prefer a desktop-width source (at least 720 px), then the
 larger width, then a deterministic tie-break. The width of the importing browser is only a
@@ -4117,21 +5442,17 @@ flags, held game buttons and game canvases. Anything else can opt out with `data
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
 does not select its labels or show the browser's callout (see *Selecting text* above).
 
-On phones the notes and widgets go one under the other down a desktop that scrolls. Hold one by
-its top strip until it lifts (a swipe there just scrolls), then drag it up or down that column (the
-desktop scrolls along near the top bar and the dock); let go without moving, or long-press it, for
-*Move up*, *Move down* and *Move to top*. The order is part of the
-phone's window layout (`stack` in [`src/os/wm.tsx`](src/os/wm.tsx)), and for widgets part of their
-synced set; on a big screen notes stay wherever they were put.
+On phones, notes, phone-compatible widgets and icons share a scrollable grid. Drag a note or widget by its top strip
+in either axis; long-press for *Move up*, *Move down* and *Move to top*. Widget selection and grid
+coordinates belong to the independent synced mobile set; desktop placement stays intact.
 
 The MvL OS menu (top left) opens the About app (*About this system*), Settings, and the Changelog
 (*Release notes*), and reboots or shuts down. Putting the notes and widgets away to see the desktop
 itself is Settings → Windows → *Notes and widgets* under *Right now* (per browser; adding a note
-brings them back). On a phone, where the icons otherwise sit behind the notes, the desktop's icons
-then show as a grid of tiles: tap one to open it, long-press for its menu.
+brings them back). On a phone, this switches the shared Home grid to the Icons view: tap one to open it, long-press for its menu.
 
-Dragging works with a finger too: hold a desktop icon (in the phone's grid) or a row in Files still
-for a moment and it lifts with a buzz; move the finger then and it drags, to
+Dragging works with a finger too: drag a desktop icon directly, or hold a row in Files still
+until it lifts with a buzz, then move it, to
 the same places a mouse drags to. Holding on without moving opens its menu as before, and moving
 after that closes the menu and drags.
 
@@ -5971,3 +7292,57 @@ nobody else sees the panel), takes one command per request (no newlines, at most
 player names checked), allows 30 commands a minute per admin and logs each one with the admin's
 login to the server's console. Commands that are hard to undo (`stop`, `ban`, `op`,
 `whitelist off`, `kill @a` and the like) ask first.
+
+### Structured account data in msh
+
+`mvl notes`, `mvl calendar 2026-10-01 2026-11-01`, and `mvl tasks` print JSON
+objects with `notes`, `events` (and partial-provider `errors`), or `tasks` arrays.
+Pipe these to `jq-safe`, for example `mvl notes | jq-safe '.notes[] | .text'`. Calendar
+ranges are explicit UTC dates or ISO timestamps, end exclusive, at most 366 days.
+Notes come from authenticated server state, excluding trash and purged notes;
+unsynced browser-only edits are not included. Tasks are background agent task
+status (including active-run counts), not the Tasks app's to-do items. No command
+creates, edits, runs, or deletes anything. Invalid arguments fail before requests;
+network and authorization failures produce a nonzero status. Cancellation aborts
+the GET and suppresses responses arriving after cancellation.
+
+These commands use the existing account-bound API client and server authorization:
+`GET /api/state`, `GET /api/calendar/events`, and `GET /api/agents/tasks`. Only the
+notes portion of state and a limited task-status projection are printed. They are
+private network reads, **not pure commands**. `APP_DATA_POLICY` in
+`src/terminal/appData.ts` declares the deny-by-default agent integration contract.
+The authenticated server issues an explicit `appDataRead` resource list on each
+terminal and capability call. Notes and Calendar are granted only when the
+corresponding read tool is offered to that thread; switching a tool group off
+also removes its terminal access. Background-task status follows the existing
+account-bound task-list read permission. These reads work in Plan mode too.
+Resource grants authorize only the fixed read-only endpoints: they do not imply
+ordinary file-read permission or general network permission. A broad `network`
+grant alone cannot authorize `mvl`, and tool arguments cannot supply grants.
+Both resolved-command dispatch and the command adapter enforce resource access;
+existing server authentication and account checks apply to every request.
+
+Responses are limited to 65,536 bytes before JSON parsing, with bounded nodes,
+depth, allocation and elapsed work. Large account state may exceed this limit;
+no partial result is returned. Notes currently fetch `/api/state` before projecting
+notes, so unrelated state can also make that request exceed the limit. Calendar
+provider errors are returned alongside events. No account mutation is exposed.
+
+`pnpm check:app-data` covers projection, dates, literal markup, errors and
+cancellation. Combined agent tests cover resource grants, disabled groups,
+forged tool arguments, shared limits and actual UI/CLI execution lifecycles.
+
+
+Both `mvl` and `jq-safe` bypass filesystem preparation because none of their
+arguments are filenames. When combining with the security branch, keep its actor
+cancellation check before this early return and return no file operands for both.
+`mvl` still performs its own explicit resource check and authenticated GET; this
+preparation exception does not authorize either command in the agent policy.
+
+App-data reads are bounded before parsing: the authenticated API decoder streams
+at most 65,536 response bytes (including error bodies), cancels excess bodies,
+and checks cancellation during reads. Responses must fit the same depth, node,
+work, allocation, and serialized-value ceilings as `jq-safe`; projection and
+serialization are preflighted and share the agent budget. Processing yields for
+cancellation. Large account-state responses fail instead of returning partial
+notes; there is no pagination promise. Agent contexts without a budget fail.

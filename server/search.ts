@@ -297,6 +297,8 @@ export async function githubOrgAccess(user: User, src: Source, fresh = false): P
 export async function orgAccess(user: User, fresh: boolean): Promise<OrgsResponse> {
   // Repositories found missing before (say, before an organisation let the site in) may heal again.
   if (fresh) for (const map of [healedAt, stillMissing] as Map<string, unknown>[]) for (const k of map.keys()) if (k.startsWith(`${user.id}|`)) map.delete(k)
+  // An account that signs in with Google only has no GitHub token to look with.
+  if (user.githubId === null || !user.githubToken) return { clientId: process.env.GITHUB_CLIENT_ID ?? null, canListOrgs: false, orgs: [], error: 'Link GitHub in Settings → Account first.' }
   return githubOrgAccess(user, githubSource(user), fresh)
 }
 

@@ -1,5 +1,7 @@
 import type { AppId, WinState } from '../os/wm'
 import type { TermPort } from './vt/session'
+import type { Budget } from './limits'
+import type { Policy } from './policy'
 
 /** A failure the shell prints as-is (in red, unless `raw` says the message is already formatted). */
 export class CmdError extends Error {
@@ -39,8 +41,11 @@ export type Ctx = {
   /** Opens this terminal's settings sheet (not on the text console). */
   openSettings?: () => void
   setAccent: (name: string) => boolean
-  /** Writes a line to the screen right away (for commands that stream, like ping). */
+  /** Streams a stdout line through the shell (including pipes, redirects and budgets). */
   print: (text: string) => void
+  /** Streams a stderr line: warnings, progress and verbose diagnostics. The shell supplies
+   * this; direct command callers may omit it, in which case commands fall back to print. */
+  stderr?: (text: string) => void
   /** True when output goes to the screen rather than into a pipe or redirect. */
   tty: boolean
   /**
@@ -50,6 +55,10 @@ export type Ctx = {
   raw?: (text: string) => void
   /** Running as root (sudo, for the signed-in user): may write /etc/fstab and mount */
   root?: boolean
+  /** An agent's terminal call: what it may do (src/terminal/policy.ts), checked where it happens. Absent in the user's own terminal. */
+  policy?: Policy
+  /** An agent's terminal call: what bounds it (src/terminal/limits.ts), shared by everything the call starts. */
+  budget?: Budget
   /** Redraws one block of output in place (htop, watch, cmatrix); null removes it again. */
   /** `alt`: the alternate screen, like nano's: only this block shows while it is up */
   /** `hideInput`: the program draws its own prompt in the block, so the shell's stays out of sight */

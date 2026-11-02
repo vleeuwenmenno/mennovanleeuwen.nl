@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { clientIp } from './egress.ts'
 import { appSetting, database, decrypt, encrypt, nextUserId, sha256 } from './db.ts'
-import { cookies, guardBodies, HttpError, json, publicOrigin, redirect, setCookie } from './http.ts'
+import { cookies, guardBodies, HttpError, json, publicOrigin, redirect, SECURITY, setCookie } from './http.ts'
 import { endSession, sessionStored, track, type SessionBinding } from './liveSessions.ts'
 
 // "Sign in with GitHub" (OAuth web flow). Any GitHub account may sign up while registration is
@@ -12,9 +13,15 @@ import { endSession, sessionStored, track, type SessionBinding } from './liveSes
 // ADMIN_USERS (logins) is retired and grants nothing.
 //
 // Needs GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET from a GitHub OAuth app whose callback URL is
-// <site>/api/auth/github/callback. Without them, login is off and /api/me says so.
+// <site>/api/auth/github/callback. "Sign in with Google" (server/googleSignIn.ts) is the other way
+// in, when GOOGLE_SIGNIN is on. With neither, login is off and /api/me says so.
+//
+// An account can have one sign-in of each kind (the identities table, server/db.ts), keyed by the
+// provider's stable id. A second one is only ever added from Settings → Account by the signed-in
+// account itself (`link`); accounts are never joined because their email addresses match.
 
 const SESSION_COOKIE = 'mvlos_sid'
+/** The sealed GitHub round trip (`beginFlow`). */
 const STATE_COOKIE = 'mvlos_oauth'
 /**
  * One-time choice of GitHub scopes, set by the signed-in account from Settings (POST
@@ -40,10 +47,36 @@ const REPO_SCOPES = process.env.GITHUB_SCOPES ?? 'read:user repo read:org'
 /** last_seen_at is written at most this often per user. */
 const SEEN_EVERY = 5 * 60_000
 
-export const authEnabled = () => !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET)
+// Where GitHub is: GITHUB_WEB_URL and GITHUB_API_URL point them at a stand-in for the checks
+// (scripts/auth-identities-check.ts); nothing else sets them.
+const GITHUB_WEB = process.env.GITHUB_WEB_URL || 'https://github.com'
+const GITHUB_API = process.env.GITHUB_API_URL || 'https://api.github.com'
+
+export const githubEnabled = () => !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET)
+/** Google sign-in (not Google Calendar): GOOGLE_SIGNIN=on, with an OAuth client (GOOGLE_SIGNIN_CLIENT_ID/SECRET, else GOOGLE_CLIENT_ID/SECRET). */
+export const googleSignInClient = (): { id: string; secret: string } | null => {
+  if (!/^(1|on|true|yes)$/i.test(process.env.GOOGLE_SIGNIN ?? '')) return null
+  const id = process.env.GOOGLE_SIGNIN_CLIENT_ID || process.env.GOOGLE_CLIENT_ID
+  const secret = process.env.GOOGLE_SIGNIN_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET
+  return id && secret ? { id, secret } : null
+}
+/** Whether anyone can sign in here: GitHub or Google sign-in is set up. */
+export const authEnabled = () => githubEnabled() || !!googleSignInClient()
+/** Which sign-ins this server offers, for the sign-in buttons. */
+export const signInProviders = () => ({ github: githubEnabled(), google: !!googleSignInClient() })
 const admins = () => (process.env.ADMIN_GITHUB_IDS ?? '46482143').split(',').map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).map(Number)
-/** Admin by GitHub's immutable numeric id (users.github_id), never by login. */
-export const isAdmin = (githubId: number) => admins().includes(githubId)
+/** Admin by GitHub's immutable numeric id (users.github_id), never by login, and never by Google: an account without GitHub is not an admin. */
+export const isAdmin = (githubId: number | null) => githubId !== null && admins().includes(githubId)
+
+/** A stored GitHub token, opened; empty for an account without GitHub, or one sealed with another SESSION_SECRET. */
+export function githubTokenOf(sealed: string | null): string {
+  if (!sealed) return ''
+  try {
+    return decrypt(sealed)
+  } catch {
+    return ''
+  }
+}
 
 /** How many accounts may exist: the admin's choice, else MAX_USERS, else 100. */
 export const maxUsers = () => Math.max(0, Math.floor(Number(appSetting('max_users') ?? process.env.MAX_USERS ?? 100))) || 0
@@ -61,9 +94,10 @@ const signInHandlers: ((userId: number) => void)[] = []
 /** Runs after every sign-in, with its new token (maybe with other scopes, or let into more organisations): server/search.ts forgets that user's cached lists. */
 export const onSignIn = (fn: (userId: number) => void) => void signInHandlers.push(fn)
 
-export type User = { id: number; githubId: number; login: string; name: string | null; avatar: string | null; githubToken: string; githubScopes: string[]; admin: boolean }
+/** `githubId` null (and `githubToken` empty): an account that signs in with Google only. */
+export type User = { id: number; githubId: number | null; login: string; name: string | null; avatar: string | null; githubToken: string; githubScopes: string[]; admin: boolean }
 
-type UserRow = { id: number; github_id: number; login: string; name: string | null; avatar: string | null; github_token: string; github_scopes: string | null; last_seen_at: number | null; banned_at: number | null }
+type UserRow = { id: number; github_id: number | null; login: string; name: string | null; avatar: string | null; github_token: string; github_scopes: string | null; last_seen_at: number | null; banned_at: number | null }
 
 /** The stored key of this request's session (what sessions.id holds), or null without one. */
 export function sessionKey(req: IncomingMessage): string | null {
@@ -158,7 +192,7 @@ export function currentUser(req: IncomingMessage): User | null {
     login: row.login,
     name: row.name,
     avatar: row.avatar,
-    githubToken: decrypt(row.github_token),
+    githubToken: githubTokenOf(row.github_token),
     githubScopes: (row.github_scopes ?? '').split(/[\s,]+/).filter(Boolean),
     admin: isAdmin(row.github_id),
   }
@@ -168,13 +202,7 @@ export function currentUser(req: IncomingMessage): User | null {
 export function accounts(): User[] {
   const rows = database().prepare('SELECT id, github_id, login, name, avatar, github_token, github_scopes FROM users WHERE banned_at IS NULL').all() as UserRow[]
   return rows.map((r) => {
-    let githubToken = ''
-    try {
-      githubToken = decrypt(r.github_token)
-    } catch {
-      /* sealed with another SESSION_SECRET */
-    }
-    return { id: r.id, githubId: r.github_id, login: r.login, name: r.name, avatar: r.avatar, githubToken, githubScopes: (r.github_scopes ?? '').split(/[\s,]+/).filter(Boolean), admin: isAdmin(r.github_id) }
+    return { id: r.id, githubId: r.github_id, login: r.login, name: r.name, avatar: r.avatar, githubToken: githubTokenOf(r.github_token), githubScopes: (r.github_scopes ?? '').split(/[\s,]+/).filter(Boolean), admin: isAdmin(r.github_id) }
   })
 }
 
@@ -195,7 +223,7 @@ export function requireAdmin(req: IncomingMessage): User {
 }
 
 /** The pages sign-in may come back to: the desktop, the CV page, and a game by its direct link (/play/<game>). Nothing else, so the link can't send anyone elsewhere. */
-const backTo = (path: string | null) => (path === '/cv' || (path && /^\/play(\/[a-z0-9-]{1,40})?$/.test(path)) ? path : '/')
+export const backTo = (path: string | null) => (path === '/cv' || (path && /^\/play(\/[a-z0-9-]{1,40})?$/.test(path)) ? path : '/')
 
 /**
  * The scope choice made by this request's signed-in account, if any and still valid. The cookie is
@@ -221,36 +249,263 @@ export function chooseRepoScope(req: IncomingMessage, res: ServerResponse, body:
   json(res, 200, { ok: true }, { 'Set-Cookie': [setCookie(req, SCOPE_COOKIE, sealed, { maxAge: SCOPE_MINUTES * 60, path: '/api/auth' })] })
 }
 
-/** Off to GitHub. Asks for `read:user` only, unless the signed-in account just chose private repositories (chooseRepoScope); that choice is used once. */
-export function startLogin(req: IncomingMessage, res: ServerResponse, url: URL) {
-  if (!authEnabled()) return redirect(res, '/?auth=off')
-  const repo = chosenRepoScope(req)
+// ---- Sign-in flows (GitHub here, Google in server/googleSignIn.ts) ----
+//
+// Every sign-in or link round trip carries a random `state`, sealed (AES-GCM) into an HttpOnly
+// cookie with what it is for: signing in, or linking another sign-in to the account and session
+// that asked (linking never happens by matching email addresses). A state is registered in memory
+// and taken out at the callback before anything else, so it works once; a restart forgets them
+// (the person starts again). PKCE and the OpenID nonce for Google ride in the same sealed cookie.
+
+/** How long the provider's page may take before the state is refused. */
+const FLOW_TTL = Number(process.env.AUTH_STATE_TTL_MS) || 10 * 60_000
+/**
+ * At most this many round trips wait at once (one process), and at most PER_CLIENT from one
+ * address (server/egress.ts clientIp): a client starting more gives up its own oldest, never
+ * someone else's. Once every slot holds a live round trip, new starts are refused until some lapse.
+ */
+const MAX_FLOWS = 10_000
+const PER_CLIENT = Number(process.env.AUTH_FLOWS_PER_CLIENT) || 20
+const flows = new Map<string, { until: number; client: string }>()
+
+export type FlowMode = 'signin' | 'link' | 'app'
+/**
+ * A sealed round trip. `u`/`s`: the account and stored session that asked to link. `c`/`a`: for a
+ * sign-in from the Android app (server/appLogin.ts), the app's PKCE challenge and its own state.
+ */
+export type Flow = { p: 'github' | 'google'; n: string; m: FlowMode; b: string; e: number; u?: number; s?: string; v?: string; o?: string; repo?: boolean; c?: string; a?: string }
+
+/** Registers a new round trip for this request's address and returns its sealed cookie value. */
+export function beginFlow(req: IncomingMessage, flow: Omit<Flow, 'e'>): string {
+  const now = Date.now()
+  const client = clientIp(req)
+  const mine: string[] = []
+  for (const [k, f] of flows) {
+    if (f.until <= now) flows.delete(k)
+    else if (f.client === client) mine.push(k)
+  }
+  // Oldest first (a Map keeps insertion order).
+  while (mine.length >= PER_CLIENT) flows.delete(mine.shift()!)
+  if (flows.size >= MAX_FLOWS) throw new HttpError(503, 'Too many sign-ins at once. Try again in a few minutes.')
+  flows.set(flow.n, { until: now + FLOW_TTL, client })
+  return encrypt(JSON.stringify({ ...flow, e: now + FLOW_TTL }))
+}
+
+/**
+ * The round trip this callback finishes, or null. The state is used up whatever the outcome. A
+ * link is only honoured for the same account and the same stored session that started it, still
+ * signed in; anything else (another account signed in meanwhile, signed out, another device) is refused.
+ */
+export function finishFlow(req: IncomingMessage, provider: Flow['p'], sealed: string | undefined, state: string | null): Flow | null {
+  if (!state) return null
+  const until = flows.get(state)?.until
+  flows.delete(state)
+  if (until === undefined || until <= Date.now() || !sealed) return null
+  let flow: Flow
+  try {
+    flow = JSON.parse(decrypt(sealed)) as Flow
+  } catch {
+    return null
+  }
+  if (flow.p !== provider || flow.n !== state || typeof flow.e !== 'number' || flow.e <= Date.now()) return null
+  if (flow.m === 'link') {
+    const user = currentUser(req)
+    if (!user || user.id !== flow.u || sessionKey(req) !== flow.s) return null
+  } else if (flow.m === 'app') {
+    if (!APP_CHALLENGE.test(flow.c ?? '') || !APP_STATE.test(flow.a ?? '')) return null
+  } else if (flow.m !== 'signin') return null
+  return flow
+}
+
+// ---- Sign-in from the Android app (server/appLogin.ts) ----
+//
+// The app's cloud desktop is a WebView that must not do OAuth itself (RFC 8252: no embedded
+// user-agents), so the provider round trip runs in the system browser and ends here with a
+// one-time code instead of a browser session. The code goes back to the app on its fixed
+// private-use redirect, and is only worth something together with the PKCE verifier the app kept
+// (server/appLogin.ts redeems it into a session in the app's WebView).
+
+/** The app's redirect, fixed: never taken from a request, so nothing can send the code elsewhere. */
+export const APP_REDIRECT = 'nl.mvlos.experiment:/oauth'
+export const APP_CHALLENGE = /^[A-Za-z0-9_-]{43}$/
+export const APP_STATE = /^[A-Za-z0-9_-]{16,128}$/
+const APP_CODE_TTL = Number(process.env.AUTH_APP_CODE_TTL_MS) || 2 * 60_000
+const APP_CODES_PER_CLIENT = 10
+const MAX_APP_CODES = 5000
+/**
+ * Codes waiting to be redeemed, by sha256(code), with the account and the sign-in (provider and
+ * its subject) that made them. One process, in memory: a restart forgets them. Signing the account
+ * out everywhere, a ban, deleting it or removing a sign-in forgets its codes too (forgetAppCodes).
+ */
+type AppGrant = { userId: number; challenge: string; provider: string; subject: string; until: number; client: string }
+const appCodes = new Map<string, AppGrant>()
+
+/** Every code waiting for this account goes: called wherever its sessions all end or a sign-in is removed. */
+export function forgetAppCodes(userId: number) {
+  for (const [k, c] of appCodes) if (c.userId === userId) appCodes.delete(k)
+  revocations++
+  for (const fn of revocationHandlers) fn()
+}
+
+/**
+ * Moves on whenever an account's sessions all end or a sign-in is removed (forgetAppCodes). A
+ * sign-in that has to wait for something (verifying a token) checks it did not move meanwhile.
+ */
+let revocations = 0
+export const revocationGeneration = () => revocations
+const revocationHandlers: (() => void)[] = []
+/** Runs on every revocation: server/appLogin.ts drops the native sign-in challenges waiting (they belong to no account yet). */
+export const onRevocation = (fn: () => void) => void revocationHandlers.push(fn)
+
+/** A fresh one-time code for this account, the sign-in that made it and the app's challenge. */
+function mintAppCode(req: IncomingMessage, userId: number, challenge: string, identity: { provider: string; subject: string }): string {
+  const now = Date.now()
+  const client = clientIp(req)
+  const mine: string[] = []
+  for (const [k, c] of appCodes) {
+    if (c.until <= now) appCodes.delete(k)
+    else if (c.client === client) mine.push(k)
+  }
+  while (mine.length >= APP_CODES_PER_CLIENT) appCodes.delete(mine.shift()!)
+  if (appCodes.size >= MAX_APP_CODES) throw new HttpError(503, 'Too many sign-ins at once. Try again in a few minutes.')
+  const code = randomBytes(32).toString('base64url')
+  appCodes.set(sha256(code), { userId, challenge, provider: identity.provider, subject: identity.subject, until: now + APP_CODE_TTL, client })
+  return code
+}
+
+/** Takes a code out (it works once, whatever happens next); what it grants if it was live. */
+export function takeAppCode(code: string): Pick<AppGrant, 'userId' | 'challenge' | 'provider' | 'subject'> | null {
+  const key = sha256(code)
+  const entry = appCodes.get(key)
+  appCodes.delete(key)
+  return entry && entry.until > Date.now() ? { userId: entry.userId, challenge: entry.challenge, provider: entry.provider, subject: entry.subject } : null
+}
+
+/** Back to the app's fixed redirect with these parameters (its state always included). */
+export const appRedirect = (state: string, params: Record<string, string>) => `${APP_REDIRECT}?${new URLSearchParams({ ...params, state })}`
+
+/** A refused sign-in: back to the page it came from, or to the app with the reason. */
+export function failSignIn(res: ServerResponse, flow: Flow | null, back: string, reason: string, set: string[], banReason?: string | null) {
+  if (flow?.m === 'app') return redirect(res, appRedirect(flow.a!, { error: reason, ...(banReason ? { reason: banReason.slice(0, 200) } : {}) }), { 'Set-Cookie': set })
+  if (reason === 'banned') return bannedRedirect(res, back, banReason ?? null, set)
+  redirect(res, backWith(back, reason), { 'Set-Cookie': set })
+}
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+
+/**
+ * The end of a successful sign-in: a session in this browser, or, for the app, a one-time code.
+ * No session is made in the system browser then. The code isn't handed over silently: a page
+ * names the account and the server, and the person taps to open the app (an app that started a
+ * sign-in of its own can't take one over unseen). No scripts; nothing kept, nothing referred on.
+ */
+export function completeSignIn(req: IncomingMessage, res: ServerResponse, flow: Flow, id: number, set: string[], identity: { provider: string; subject: string }) {
+  if (flow.m !== 'app') return issueSession(req, res, id, backWith(flow.b, 'ok'), set)
+  const login = (database().prepare('SELECT login FROM users WHERE id = ?').get(id) as { login: string }).login
+  const to = appRedirect(flow.a!, { code: mintAppCode(req, id, flow.c!, identity) })
+  const server = publicOrigin(req)
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Open the MvL OS app</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:28rem;margin:3rem auto;padding:0 1.25rem}a.b{display:block;text-align:center;padding:.8rem 1rem;border:2px solid currentColor;border-radius:.4rem;text-decoration:none;font-weight:600;margin:1.5rem 0}</style></head>
+<body><h1>Open the MvL OS app</h1><p>You signed in as <strong>@${escapeHtml(login)}</strong> on <strong>${escapeHtml(server)}</strong>. Continue to sign in the MvL OS app on this phone.</p>
+<a class="b" href="${escapeHtml(to)}">Open the app</a><p>Didn't start this from the MvL OS app? Close this page: nothing is signed in until the app opens. The link works once, for two minutes.</p></body></html>`
+  res.writeHead(200, {
+    ...SECURITY,
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
+    'Set-Cookie': set,
+  }).end(html)
+}
+
+/** Where a round trip goes back to (a path from `backTo`), with ?auth=<result>. */
+export const backWith = (back: string, result: string) => `${backTo(back)}?auth=${result}`
+
+/** Whether a new account may be made now: registration open and room left. Admins are let in regardless (GitHub only). */
+export function admission(): 'ok' | 'closed' | 'full' {
+  if (!registrationOpen()) return 'closed'
+  if (userCount() >= maxUsers()) return 'full'
+  return 'ok'
+}
+
+/** The redirect for a banned account trying to sign in. */
+export function bannedRedirect(res: ServerResponse, back: string, reason: string | null, set: string[]) {
+  redirect(res, `${backWith(back, 'banned')}${reason ? `&reason=${encodeURIComponent(reason.slice(0, 200))}` : ''}`, { 'Set-Cookie': set })
+}
+
+/** A new session for `id` (never an old one reused): its Set-Cookie headers, the HttpOnly session and the readable login and id. */
+export function sessionCookies(req: IncomingMessage, id: number): string[] {
+  const row = database().prepare('SELECT login FROM users WHERE id = ?').get(id) as { login: string }
+  for (const fn of signInHandlers) fn(id)
+  const now = Date.now()
+  const sid = randomBytes(32).toString('base64url')
+  database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sid), id, now, now + SESSION_DAYS * 864e5)
+  return [setCookie(req, SESSION_COOKIE, sid, { maxAge: SESSION_DAYS * 86400 }), setCookie(req, LOGIN_COOKIE, row.login, { maxAge: SESSION_DAYS * 86400, readable: true }), setCookie(req, UID_COOKIE, String(id), { maxAge: SESSION_DAYS * 86400, readable: true })]
+}
+
+/** Signs this browser in as `id` and sends it to `location`. */
+export function issueSession(req: IncomingMessage, res: ServerResponse, id: number, location: string, set: string[]) {
+  redirect(res, location, { 'Set-Cookie': [...set, ...sessionCookies(req, id)] })
+}
+
+/** The account a provider's identity signs in as, if any. */
+export function identityOwner(provider: string, subject: string): { id: number; banned_at: number | null; ban_reason: string | null } | undefined {
+  return database().prepare('SELECT u.id, u.banned_at, u.ban_reason FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = ? AND i.subject = ?').get(provider, subject) as { id: number; banned_at: number | null; ban_reason: string | null } | undefined
+}
+
+export type Identity = { provider: 'github' | 'google'; label: string; linkedAt: number }
+
+/** The sign-ins linked to an account, for Settings → Account. Email addresses only for display. */
+export function identitiesOf(user: Pick<User, 'id' | 'login' | 'githubId'>): Identity[] {
+  const rows = database().prepare('SELECT provider, email, created_at FROM identities WHERE user_id = ? ORDER BY created_at').all(user.id) as { provider: string; email: string | null; created_at: number }[]
+  return rows
+    .filter((r) => r.provider === 'github' || r.provider === 'google')
+    .map((r) => ({ provider: r.provider as Identity['provider'], label: r.provider === 'github' ? `@${user.login}` : (r.email ?? 'Google account'), linkedAt: r.created_at }))
+}
+
+/** Asks GitHub to sign in, or (`link`) to link GitHub to the signed-in account. Asks for `read:user` only, unless the signed-in account just chose private repositories (chooseRepoScope); that choice is used once. */
+export function githubRedirect(req: IncomingMessage, flow: Omit<Flow, 'e' | 'n' | 'p'>): { url: string; set: string[] } {
   const state = randomBytes(16).toString('base64url')
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID!,
     redirect_uri: `${publicOrigin(req)}/api/auth/github/callback`,
-    scope: repo ? REPO_SCOPES : BASIC_SCOPES,
+    scope: flow.repo ? REPO_SCOPES : BASIC_SCOPES,
     state,
     allow_signup: 'false',
   })
-  // Where to come back to: the CV page or a game's direct link when signing in from there, else the desktop.
-  const back = backTo(url.searchParams.get('back'))
-  const set = [setCookie(req, STATE_COOKIE, `${state} ${back}`, { maxAge: 600, path: '/api/auth' }), setCookie(req, SCOPE_COOKIE, '', { maxAge: 0, path: '/api/auth' })]
+  const set = [setCookie(req, STATE_COOKIE, beginFlow(req, { ...flow, p: 'github', n: state }), { maxAge: FLOW_TTL / 1000, path: '/api/auth' }), setCookie(req, SCOPE_COOKIE, '', { maxAge: 0, path: '/api/auth' })]
   if (cookies(req)[LEGACY_REPO_COOKIE] !== undefined) set.push(setCookie(req, LEGACY_REPO_COOKIE, '', { maxAge: 0, path: '/api/auth' }))
-  redirect(res, `https://github.com/login/oauth/authorize?${params}`, { 'Set-Cookie': set })
+  return { url: `${GITHUB_WEB}/login/oauth/authorize?${params}`, set }
+}
+
+/** Off to GitHub to sign in. */
+export function startLogin(req: IncomingMessage, res: ServerResponse, url: URL) {
+  if (!githubEnabled()) return redirect(res, '/?auth=off')
+  // Where to come back to: the CV page or a game's direct link when signing in from there, else the desktop.
+  const { url: to, set } = githubRedirect(req, { m: 'signin', b: backTo(url.searchParams.get('back')), repo: chosenRepoScope(req) })
+  redirect(res, to, { 'Set-Cookie': set })
+}
+
+/** Settings → Account: link GitHub to the signed-in account. A POST from the page (same-origin, its account), answered with where to go. */
+export function startGithubLink(req: IncomingMessage, res: ServerResponse) {
+  const user = requireUser(req)
+  if (!githubEnabled()) throw new HttpError(400, 'GitHub sign-in is not set up on this server')
+  if (user.githubId !== null) throw new HttpError(409, 'GitHub is already linked to this account')
+  const { url, set } = githubRedirect(req, { m: 'link', b: '/', u: user.id, s: sessionKey(req)! })
+  json(res, 200, { url }, { 'Set-Cookie': set })
 }
 
 export async function finishLogin(req: IncomingMessage, res: ServerResponse, url: URL) {
   const clearState = setCookie(req, STATE_COOKIE, '', { maxAge: 0, path: '/api/auth' })
-  const [expected, back = '/'] = (cookies(req)[STATE_COOKIE] ?? '').split(' ')
-  const home = backTo(back)
-  const fail = (reason: string) => redirect(res, `${home}?auth=${reason}`, { 'Set-Cookie': clearState })
-  if (!authEnabled()) return fail('off')
+  const flow = finishFlow(req, 'github', cookies(req)[STATE_COOKIE], url.searchParams.get('state'))
+  const home = flow?.b ?? '/'
+  const fail = (reason: string) => failSignIn(res, flow, home, reason, [clearState])
+  if (!githubEnabled()) return fail('off')
   const code = url.searchParams.get('code')
-  const state = url.searchParams.get('state')
-  if (!code || !state || state !== expected) return fail('error')
+  if (!flow) return fail('error')
+  if (!code) return fail(flow.m === 'link' ? 'link-error' : 'error')
 
-  const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+  const tokenRes = await fetch(`${GITHUB_WEB}/login/oauth/access_token`, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -263,42 +518,66 @@ export async function finishLogin(req: IncomingMessage, res: ServerResponse, url
   }).catch(() => null)
   const granted = tokenRes?.ok ? ((await tokenRes.json()) as { access_token?: string; scope?: string }) : {}
   const token = granted.access_token
-  if (!token) return fail('error')
+  if (!token) return fail(flow.m === 'link' ? 'link-error' : 'error')
 
-  const meRes = await fetch('https://api.github.com/user', {
+  const meRes = await fetch(`${GITHUB_API}/user`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'mvlos' },
     signal: AbortSignal.timeout(10_000),
   }).catch(() => null)
-  if (!meRes?.ok) return fail('error')
+  if (!meRes?.ok) return fail(flow.m === 'link' ? 'link-error' : 'error')
   const me = (await meRes.json()) as { id: number; login: string; name: string | null; avatar_url: string | null }
+  if (!Number.isSafeInteger(me.id) || me.id <= 0 || typeof me.login !== 'string') return fail('error')
+
+  const db = database()
+  const now = Date.now()
+  const owner = identityOwner('github', String(me.id))
+
+  if (flow.m === 'link') {
+    // Linking GitHub to the account that asked, still signed in with the same session. A GitHub
+    // account with an account of its own here stays separate: accounts are never merged.
+    const user = currentUser(req)
+    if (!user || user.id !== flow.u) return fail('link-error')
+    if (owner && owner.id !== user.id) return fail('link-taken')
+    if (user.githubId !== null && user.githubId !== me.id) return fail('link-exists')
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.prepare('UPDATE users SET github_id = ?, login = ?, name = COALESCE(name, ?), avatar = COALESCE(avatar, ?), github_token = ?, github_scopes = ?, updated_at = ? WHERE id = ?').run(me.id, me.login, me.name, me.avatar_url, encrypt(token), granted.scope ?? '', now, user.id)
+      db.prepare('INSERT OR IGNORE INTO identities (provider, subject, user_id, created_at, last_used_at) VALUES (?, ?, ?, ?, ?)').run('github', String(me.id), user.id, now, now)
+      db.exec('COMMIT')
+    } catch {
+      db.exec('ROLLBACK')
+      return fail('link-error')
+    }
+    for (const fn of signInHandlers) fn(user.id)
+    return redirect(res, backWith('/', 'linked-github'), { 'Set-Cookie': [clearState, setCookie(req, LOGIN_COOKIE, me.login, { maxAge: SESSION_DAYS * 86400, readable: true })] })
+  }
 
   // Who gets in: existing accounts unless banned, admins always, newcomers while registration is
   // open and there is room. Banned accounts keep their row (and their spot), so they stay out.
-  const db = database()
-  const known = db.prepare('SELECT id, banned_at, ban_reason FROM users WHERE github_id = ?').get(me.id) as { id: number; banned_at: number | null; ban_reason: string | null } | undefined
-  if (known?.banned_at) return redirect(res, `${home}?auth=banned${known.ban_reason ? `&reason=${encodeURIComponent(known.ban_reason.slice(0, 200))}` : ''}`, { 'Set-Cookie': clearState })
-  if (!known && !isAdmin(me.id)) {
-    if (!registrationOpen()) return fail('closed')
-    if (userCount() >= maxUsers()) return fail('full')
+  if (owner?.banned_at) return failSignIn(res, flow, home, 'banned', [clearState], owner.ban_reason)
+  if (!owner && !isAdmin(me.id)) {
+    const admit = admission()
+    if (admit !== 'ok') return fail(admit)
   }
 
-  const now = Date.now()
   let id: number
-  if (known) {
-    id = known.id
+  if (owner) {
+    id = owner.id
     db.prepare('UPDATE users SET login = ?, name = ?, avatar = ?, github_token = ?, github_scopes = ?, updated_at = ?, last_seen_at = ? WHERE id = ?').run(me.login, me.name, me.avatar_url, encrypt(token), granted.scope ?? '', now, now, id)
+    db.prepare("UPDATE identities SET last_used_at = ? WHERE provider = 'github' AND subject = ?").run(now, String(me.id))
   } else {
     id = nextUserId()
-    db.prepare('INSERT INTO users (id, github_id, login, name, avatar, github_token, github_scopes, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, me.id, me.login, me.name, me.avatar_url, encrypt(token), granted.scope ?? '', now, now, now)
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.prepare('INSERT INTO users (id, github_id, login, name, avatar, github_token, github_scopes, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, me.id, me.login, me.name, me.avatar_url, encrypt(token), granted.scope ?? '', now, now, now)
+      db.prepare('INSERT INTO identities (provider, subject, user_id, created_at, last_used_at) VALUES (?, ?, ?, ?, ?)').run('github', String(me.id), id, now, now)
+      db.exec('COMMIT')
+    } catch {
+      db.exec('ROLLBACK')
+      return fail('error')
+    }
   }
-
-  for (const fn of signInHandlers) fn(id)
-
-  const sid = randomBytes(32).toString('base64url')
-  db.prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(sid), id, now, now + SESSION_DAYS * 864e5)
-  redirect(res, `${home}?auth=ok`, {
-    'Set-Cookie': [clearState, setCookie(req, SESSION_COOKIE, sid, { maxAge: SESSION_DAYS * 86400 }), setCookie(req, LOGIN_COOKIE, me.login, { maxAge: SESSION_DAYS * 86400, readable: true }), setCookie(req, UID_COOKIE, String(id), { maxAge: SESSION_DAYS * 86400, readable: true })],
-  })
+  completeSignIn(req, res, flow, id, [clearState], { provider: 'github', subject: String(me.id) })
 }
 
 export function logout(req: IncomingMessage, res: ServerResponse) {

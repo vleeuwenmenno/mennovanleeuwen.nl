@@ -12,8 +12,11 @@ export type Redirect = {
   heredoc?: { body: string; quoted: boolean }
 }
 
-export type Node =
-  | { t: 'simple'; assigns: [string, string][]; words: string[]; redirs: Redirect[] }
+export type SourceSpan = { start: number; end: number; line: number; column: number; filename: string; expression: string }
+export type Parameter = { name: string; start: number; end: number }
+
+export type Node = { span?: SourceSpan } & (
+  | { t: 'simple'; assigns: [string, string][]; words: string[]; redirs: Redirect[]; wordsAt?: { start: number; end: number }[]; assignsAt?: { start: number; end: number }[] }
   | { t: 'pipeline'; cmds: Node[]; bang: boolean }
   | { t: 'andor'; first: Node; rest: ['&&' | '||', Node][] }
   | { t: 'list'; items: { node: Node; bg: boolean }[] }
@@ -23,24 +26,29 @@ export type Node =
   | { t: 'for'; name: string; items: string[] | null; body: Node; redirs: Redirect[] }
   | { t: 'while'; until: boolean; cond: Node; body: Node; redirs: Redirect[] }
   | { t: 'case'; word: string; arms: { patterns: string[]; body: Node | null }[]; redirs: Redirect[] }
-  | { t: 'func'; name: string; body: Node }
+  | { t: 'func'; name: string; params: Parameter[]; body: Node }
   /** (( expression )): true when the arithmetic is not 0 (bash) */
   | { t: 'arith'; expr: string; redirs: Redirect[] }
+)
 
 /** The input stops halfway (an open quote, `if` without `fi`, a trailing `|`): more lines would finish it. */
 export class Incomplete extends Error {
-  constructor(what = 'unexpected end of file') {
+  readonly offset: number
+  constructor(what = 'unexpected end of file', offset = 0) {
     super(`syntax error: ${what}`)
+    this.offset = offset
   }
 }
 
 export class SyntaxError extends Error {
-  constructor(message: string) {
+  readonly offset: number
+  constructor(message: string, offset = 0) {
     super(`syntax error ${message}`)
+    this.offset = offset
   }
 }
 
-type Token = { k: 'word'; v: string; heredoc?: { body: string; quoted: boolean } } | { k: 'op'; v: string } | { k: 'io'; v: string } | { k: 'arith'; v: string } | { k: 'nl' } | { k: 'eof' }
+export type Token = { start: number; end: number } & ({ k: 'word'; v: string; heredoc?: { body: string; quoted: boolean } } | { k: 'op'; v: string } | { k: 'io'; v: string } | { k: 'arith'; v: string } | { k: 'nl' } | { k: 'eof' })
 
 const OPS = ['&&', '||', ';;', '<<-', '<<', '>>', '>&', '<&', '>|', '&>', '|', '&', ';', '(', ')', '<', '>']
 const META = /[|&;()<>\s]/
@@ -60,7 +68,7 @@ function skipNested(src: string, i: number): number {
       if (src[j] === '(') depth++
       else if (src[j] === ')' && --depth === 0) return j + 1
     }
-    throw new Incomplete('unterminated $((')
+    throw new Incomplete('unterminated $((', i)
   }
   if (src.startsWith('$(', i)) return skipParens(src, i + 2)
   if (src.startsWith('${', i)) {
@@ -74,14 +82,14 @@ function skipNested(src: string, i: number): number {
       else if (ch === '{') depth++
       else if (ch === '}' && --depth === 0) return j + 1
     }
-    throw new Incomplete('unterminated ${')
+    throw new Incomplete('unterminated ${', i)
   }
   if (src[i] === '`') {
     for (let j = i + 1; j < src.length; j++) {
       if (src[j] === '\\') j++
       else if (src[j] === '`') return j + 1
     }
-    throw new Incomplete('unterminated `')
+    throw new Incomplete('unterminated `', i)
   }
   return i + 1
 }
@@ -99,7 +107,7 @@ function skipParens(src: string, i: number): number {
     else if (ch === '(') depth++
     else if (ch === ')' && --depth === 0) return j + 1
   }
-  throw new Incomplete('unterminated $(')
+  throw new Incomplete('unterminated $(', Math.max(0, i - 2))
 }
 
 /** The end of `(( … ))` starting at `i` (after the `))`), or -1 when it is really nested subshells. */
@@ -119,7 +127,7 @@ function arithEnd(src: string, i: number): number {
 /** The index of the closing `'` for the one at `i`. */
 function skipSingle(src: string, i: number): number {
   const j = src.indexOf("'", i + 1)
-  if (j < 0) throw new Incomplete("unterminated '")
+  if (j < 0) throw new Incomplete("unterminated '", i)
   return j
 }
 
@@ -131,7 +139,7 @@ function skipDouble(src: string, i: number): number {
     else if (ch === '"') return j + 1
     else if (ch === '`' || (ch === '$' && (src[j + 1] === '(' || src[j + 1] === '{'))) j = skipNested(src, j) - 1
   }
-  throw new Incomplete('unterminated "')
+  throw new Incomplete('unterminated "', i)
 }
 
 /** Removes quotes from a heredoc delimiter: 'EOF', "EOF" and \EOF all mean EOF, quoted. */
@@ -151,6 +159,13 @@ function unquoteDelimiter(raw: string): { word: string; quoted: boolean } {
     } else word += ch
   }
   return { word, quoted }
+}
+
+/** The lexer removes continuations from word spellings, leaving source offsets intact.
+ * An editor caret inside a removed pair has the same prefix as just before that pair. */
+export function stripContinuations(word: string, end = word.length): string {
+  if (word[end - 1] === '\\' && word[end] === '\n') end--
+  return word.slice(0, end).replace(/\\\n/g, '')
 }
 
 export function lex(src: string): Token[] {
@@ -174,7 +189,7 @@ export function lex(src: string): Token[] {
         }
         lines.push(line)
       }
-      if (!found) throw new Incomplete(`here-document delimited by end of file (wanted '${word}')`)
+      if (!found) throw new Incomplete(`here-document delimited by end of file (wanted '${word}')`, src.length)
       h.tok.heredoc = { body: lines.length ? `${lines.join('\n')}\n` : '', quoted }
     }
   }
@@ -185,7 +200,7 @@ export function lex(src: string): Token[] {
       continue
     }
     if (ch === '\n') {
-      out.push({ k: 'nl' })
+      out.push({ k: 'nl', start: i, end: i + 1 })
       i++
       if (heredocs.length) readHeredocs()
       continue
@@ -202,14 +217,14 @@ export function lex(src: string): Token[] {
     if (src.startsWith('((', i)) {
       const end = arithEnd(src, i)
       if (end > 0) {
-        out.push({ k: 'arith', v: src.slice(i + 2, end - 2) })
+        out.push({ k: 'arith', v: src.slice(i + 2, end - 2), start: i, end })
         i = end
         continue
       }
     }
     const op = OPS.find((o) => src.startsWith(o, i))
     if (op) {
-      out.push({ k: 'op', v: op })
+      out.push({ k: 'op', v: op, start: i, end: i + op.length })
       i += op.length
       continue
     }
@@ -218,28 +233,28 @@ export function lex(src: string): Token[] {
     while (i < src.length && !META.test(src[i])) {
       const c = src[i]
       if (c === '\\') {
-        if (i + 1 >= src.length) break
+        if (i + 1 >= src.length) throw new Incomplete('trailing backslash', i)
         i += 2
       } else if (c === "'") i = skipSingle(src, i) + 1
       else if (c === '"') i = skipDouble(src, i)
       else if (c === '`' || (c === '$' && (src[i + 1] === '(' || src[i + 1] === '{'))) i = skipNested(src, i)
       else i++
     }
-    const v = src.slice(start, i).replace(/\\\n/g, '')
+    const v = stripContinuations(src.slice(start, i))
     // `2>file`: digits right before a redirect are its file descriptor.
-    if (/^\d$/.test(v) && (src[i] === '<' || src[i] === '>')) out.push({ k: 'io', v })
+    if (/^\d$/.test(v) && (src[i] === '<' || src[i] === '>')) out.push({ k: 'io', v, start, end: i })
     else {
-      const tok: Token & { k: 'word' } = { k: 'word', v }
+      const tok: Token & { k: 'word' } = { k: 'word', v, start, end: i }
       const prev = out[out.length - 1]
       if (prev?.k === 'op' && (prev.v === '<<' || prev.v === '<<-')) heredocs.push({ tok, strip: prev.v === '<<-' })
       out.push(tok)
     }
   }
   if (heredocs.length) {
-    out.push({ k: 'nl' })
+    out.push({ k: 'nl', start: i, end: i + 1 })
     readHeredocs()
   }
-  out.push({ k: 'eof' })
+  out.push({ k: 'eof', start: src.length, end: src.length })
   return out
 }
 
@@ -252,7 +267,13 @@ const ENDERS = new Set(['then', 'else', 'elif', 'fi', 'do', 'done', 'esac', '}']
 class Parser {
   private i = 0
   private toks: Token[]
-  constructor(toks: Token[]) {
+  private src: string
+  private filename: string
+  private lineStarts: number[] = [0]
+  constructor(toks: Token[], src: string, filename: string) {
+    this.src = src
+    for (let i = 0; i < src.length; i++) if (src[i] === '\n') this.lineStarts.push(i + 1)
+    this.filename = filename
     this.toks = toks
   }
 
@@ -275,8 +296,8 @@ class Parser {
     return t.k === 'eof' ? 'end of file' : t.k === 'nl' ? 'newline' : `\`${t.v}'`
   }
   private fail(t = this.peek()): never {
-    if (t.k === 'eof') throw new Incomplete()
-    throw new SyntaxError(`near unexpected token ${this.describe(t)}`)
+    if (t.k === 'eof') throw new Incomplete(undefined, t.start)
+    throw new SyntaxError(`near unexpected token ${this.describe(t)}`, t.start)
   }
   private expectWord(v: string) {
     this.skipNl()
@@ -335,6 +356,20 @@ class Parser {
   }
 
   private command(): Node {
+    const start = this.peek().start
+    const node = this.commandBody()
+    const end = this.toks[this.i - 1]?.end ?? start
+    let low = 0, high = this.lineStarts.length
+    while (low + 1 < high) {
+      const mid = (low + high) >>> 1
+      if (this.lineStarts[mid] <= start) low = mid
+      else high = mid
+    }
+    node.span = { start, end, line: low + 1, column: start - this.lineStarts[low] + 1, filename: this.filename, expression: this.src.slice(start, end) }
+    return node
+  }
+
+  private commandBody(): Node {
     const t = this.peek()
     if (t.k === 'arith') {
       this.i++
@@ -354,16 +389,11 @@ class Parser {
       if (t.v === 'function' && this.toks[this.i + 1]?.k === 'word') {
         this.i++
         const name = (this.next() as { v: string }).v
-        if (this.isOp('(')) {
-          this.i++
-          if (!this.isOp(')')) this.fail()
-          this.i++
-        }
-        return this.funcBody(name)
+        return this.funcBody(name, this.isOp('(') ? this.parameters() : [])
       }
-      if (NAME.test(t.v) && this.isOp('(', this.toks[this.i + 1]) && this.isOp(')', this.toks[this.i + 2])) {
-        this.i += 3
-        return this.funcBody(t.v)
+      if (NAME.test(t.v) && this.isOp('(', this.toks[this.i + 1])) {
+        this.i++
+        return this.funcBody(t.v, this.parameters())
       }
       if (ENDERS.has(t.v)) this.fail()
     }
@@ -378,11 +408,49 @@ class Parser {
     return this.simple()
   }
 
-  private funcBody(name: string): Node {
+  /** Commas are syntax only here: ordinary command words such as a,b stay intact. */
+  private parameters(): Parameter[] {
+    this.i++ // (
+    const params: Parameter[] = []
+    const names = new Set<string>()
+    let wantName = true
+    for (;;) {
+      this.skipNl()
+      const t = this.peek()
+      if (t.k === 'eof') throw new Incomplete('expected function parameter or closing )', t.start)
+      if (this.isOp(')')) {
+        if (wantName && params.length) throw new SyntaxError('expected parameter after comma', t.start)
+        this.i++
+        return params
+      }
+      if (t.k !== 'word') throw new SyntaxError('expected parameter name or closing )', t.start)
+      // Use original text for offsets (the lexer removes backslash-newline continuations).
+      for (const part of this.src.slice(t.start, t.end).matchAll(/[^,]+|,/g)) {
+        const raw = part[0], start = t.start + part.index
+        if (raw === ',') {
+          if (wantName) throw new SyntaxError('expected parameter name before comma', start)
+          wantName = true
+          continue
+        }
+        const name = raw.replace(/\\\n/g, '')
+        if (!name) continue
+        if (!wantName) throw new SyntaxError('expected comma between function parameters', start)
+        if (!NAME.test(name)) throw new SyntaxError(`invalid function parameter '${name}': expected a plain variable name`, start)
+        if (name === 'RANDOM') throw new SyntaxError('RANDOM is computed by the shell and cannot be a parameter', start)
+        if (names.has(name)) throw new SyntaxError(`duplicate function parameter '${name}'`, start)
+        names.add(name)
+        params.push({ name, start, end: start + raw.length })
+        wantName = false
+      }
+      this.i++
+    }
+  }
+
+  private funcBody(name: string, params: Parameter[]): Node {
     this.skipNl()
     const body = this.command()
-    if (body.t === 'simple') throw new SyntaxError(`in function ${name}: the body must be { … } or ( … )`)
-    return { t: 'func', name, body }
+    if (body.t === 'simple') throw new SyntaxError(`in function ${name}: the body must be { … } or ( … )`, body.span?.start)
+    return { t: 'func', name, params, body }
   }
 
   private withRedirs<T extends { redirs: Redirect[] }>(node: T): T {
@@ -408,14 +476,15 @@ class Parser {
   }
 
   private simple(): Node {
-    const node: Node & { t: 'simple' } = { t: 'simple', assigns: [], words: [], redirs: [] }
+    const node: Node & { t: 'simple' } = { t: 'simple', assigns: [], words: [], redirs: [], wordsAt: [], assignsAt: [] }
     for (;;) {
       if (this.atRedirect()) node.redirs.push(this.redirect())
       else if (this.peek().k === 'word') {
-        const v = (this.next() as { v: string }).v
+        const token = this.next() as Token & { k: 'word' }
+        const v = token.v
         const eq = v.indexOf('=')
-        if (!node.words.length && eq > 0 && NAME.test(v.slice(0, eq))) node.assigns.push([v.slice(0, eq), v.slice(eq + 1)])
-        else node.words.push(v)
+        if (!node.words.length && eq > 0 && NAME.test(v.slice(0, eq))) { node.assigns.push([v.slice(0, eq), v.slice(eq + 1)]); node.assignsAt!.push(token) }
+        else { node.words.push(v); node.wordsAt!.push(token) }
       } else break
     }
     if (!node.words.length && !node.assigns.length && !node.redirs.length) this.fail()
@@ -505,8 +574,22 @@ class Parser {
 }
 
 /** Parses a script or a command line. Throws Incomplete when more input would finish it. */
-export function parse(src: string): Node {
-  return new Parser(lex(src)).program()
+export function parse(src: string, filename = '-c'): Node {
+  return new Parser(lex(src), src, filename).program()
+}
+
+/** Shared AST traversal for editor analysis. It does not expand or execute words. */
+export function childrenOf(n: Node): Node[] {
+  switch (n.t) {
+    case 'list': return n.items.map(i => i.node)
+    case 'andor': return [n.first, ...n.rest.map(([, node]) => node)]
+    case 'pipeline': return n.cmds
+    case 'func': case 'group': case 'subshell': case 'for': return [n.body]
+    case 'while': return [n.cond, n.body]
+    case 'if': return [...n.clauses.flat(), ...(n.else ? [n.else] : [])]
+    case 'case': return n.arms.flatMap(a => a.body ? [a.body] : [])
+    default: return []
+  }
 }
 
 /** The command names a line runs (first words of each simple command), for permission checks. */

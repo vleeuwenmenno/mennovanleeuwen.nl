@@ -60,7 +60,7 @@ export function database(): DatabaseSync {
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY,
-      github_id INTEGER NOT NULL UNIQUE,
+      github_id INTEGER UNIQUE,
       login TEXT NOT NULL,
       name TEXT,
       avatar TEXT,
@@ -650,6 +650,7 @@ export function database(): DatabaseSync {
     created_at INTEGER NOT NULL
   )`)
   db.exec('CREATE INDEX IF NOT EXISTS agent_videos_user ON agent_videos (user_id, created_at)')
+  migrateIdentities(db)
   key =Buffer.from(hkdfSync('sha256', secret(), 'mvlos', 'token-encryption', 32))
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now())
   const prepare = db.prepare.bind(db), exec = db.exec.bind(db)
@@ -661,6 +662,70 @@ export function database(): DatabaseSync {
   }) as typeof prepare
   db.exec = ((sql: string) => { if (!rollbackOnly(sql)) checkWrite(); return exec(sql) }) as typeof exec
   return db
+}
+
+/**
+ * Sign-in identities (server/auth.ts): which GitHub or Google account signs in as which account
+ * here, by the provider's stable subject (GitHub's numeric id, Google's `sub`), never by an email
+ * address. One per provider per account. Accounts from before Google sign-in all came from GitHub:
+ * `users.github_id` stays (it is what admin rights hang on) and is copied in here.
+ *
+ * `users.github_id` used to be NOT NULL; an account made with Google has none, so the table is
+ * rebuilt once without that constraint, the way SQLite documents it (foreign keys off for the copy,
+ * so nothing that refers to users is cascaded away; ids, rows and columns stay as they were).
+ */
+function migrateIdentities(db: DatabaseSync) {
+  const needed = () => !!(db.prepare('PRAGMA table_info(users)').all() as { name: string; notnull: number }[]).find((c) => c.name === 'github_id')?.notnull
+  if (needed()) {
+    // Another process starting at the same time (it shouldn't: one instance) waits rather than fails.
+    db.exec('PRAGMA busy_timeout = 10000')
+    db.exec('PRAGMA foreign_keys = OFF')
+    try {
+      // The write lock first, then everything is read and checked again inside it.
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        if (needed()) {
+          const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get() as { sql: string }
+          const relaxed = sql.replace(/github_id\s+INTEGER\s+NOT\s+NULL\s+UNIQUE/i, 'github_id INTEGER UNIQUE')
+          const renamed = relaxed.replace(/^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?users["`]?/i, 'CREATE TABLE users_rebuilt')
+          if (relaxed === sql || renamed === relaxed) {
+            console.error('users table: unexpected schema, accounts without GitHub stay unavailable')
+          } else {
+            const before = (db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n
+            // References to users that were already broken (none are expected) don't stop the rebuild; new ones do.
+            const orphans = () => (db.prepare('PRAGMA foreign_key_check').all() as { parent: string }[]).filter((r) => r.parent === 'users').length
+            const orphansBefore = orphans()
+            db.exec('DROP TABLE IF EXISTS users_rebuilt')
+            db.exec(renamed)
+            db.exec('INSERT INTO users_rebuilt SELECT * FROM users')
+            const copied = (db.prepare('SELECT COUNT(*) AS n FROM users_rebuilt').get() as { n: number }).n
+            if (copied !== before) throw new Error(`users rebuild copied ${copied} of ${before} rows`)
+            db.exec('DROP TABLE users')
+            db.exec('ALTER TABLE users_rebuilt RENAME TO users')
+            const broken = orphans()
+            if (broken > orphansBefore) throw new Error(`users rebuild left ${broken - orphansBefore} broken references`)
+          }
+        }
+        db.exec('COMMIT')
+      } catch (e) {
+        db.exec('ROLLBACK')
+        throw e
+      }
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON')
+    }
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS identities (
+    provider TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    PRIMARY KEY (provider, subject),
+    UNIQUE (user_id, provider)
+  )`)
+  db.exec("INSERT OR IGNORE INTO identities (provider, subject, user_id, created_at) SELECT 'github', CAST(github_id AS TEXT), id, created_at FROM users WHERE github_id IS NOT NULL")
 }
 
 export function encrypt(plain: string): string {

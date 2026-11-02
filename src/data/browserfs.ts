@@ -24,6 +24,9 @@ const FOLDERS = ['/Desktop', '/Documents', '/Downloads', '/Music', '/Pictures', 
 
 let db: IDBDatabase | null = null
 let owner: number | null = null
+let storeUUID: string | null = null
+/** Backing identity; never inferred from the mount label or a home path. */
+export const browserStoreIdentity = () => state === 'ready' && owner !== null && storeUUID ? { account: owner, storeUUID } : null
 let state: 'off' | 'loading' | 'ready' | 'error' = 'off'
 /** Settles once the account is known and its store (or none) is open: until then nobody can tell. */
 let settleFirst: () => void = () => {}
@@ -124,6 +127,15 @@ async function load(userId: number) {
   const opened = await openDb(userId)
   if (owner !== userId) return opened.close()
   db = opened
+  const identityTx = opened.transaction(BLOBS, 'readwrite')
+  const identityStore = identityTx.objectStore(BLOBS)
+  const identityKey = '\0mvlos-store-uuid'
+  const previous = await result(identityStore.get(identityKey))
+  const uuid = typeof previous === 'string' ? previous : crypto.randomUUID()
+  if (!previous) identityStore.put(uuid, identityKey)
+  await done(identityTx)
+  if (owner !== userId) return
+  storeUUID = uuid
   nodes.clear()
   children.clear()
   texts.clear()
@@ -146,6 +158,7 @@ function openFor(userId: number | null) {
   owner = userId
   db?.close()
   db = null
+  storeUUID = null
   nodes.clear()
   children.clear()
   texts.clear()
@@ -186,13 +199,24 @@ export function startBrowserFiles() {
   subscribeAccount(follow)
 }
 
+export type BrowserGuard = { check: () => void; signal?: AbortSignal }
+/** Guarded transactions abort with their executor and never publish into a different account's cache. */
+async function guardedDone(tx: IDBTransaction, guard?: BrowserGuard) {
+  const original = db
+  const abort = () => { try { tx.abort() } catch { /* already committed */ } }
+  guard?.signal?.addEventListener('abort', abort, { once: true })
+  try { guard?.check(); await done(tx); guard?.check(); if (db !== original) throw new BrowserFsError('The browser account changed') }
+  catch (e) { abort(); throw e }
+  finally { guard?.signal?.removeEventListener('abort', abort) }
+}
 /** Writes one entry (and its bytes) to IndexedDB, then to memory. */
-async function put(e: BrowserEntry, blob?: Blob) {
+async function put(e: BrowserEntry, blob?: Blob, guard?: BrowserGuard) {
+  guard?.check()
   if (!db) throw new BrowserFsError('Files in this browser are not available (sign in first)')
   const tx = db.transaction([NODES, BLOBS], 'readwrite')
   tx.objectStore(NODES).put(e)
   if (blob) tx.objectStore(BLOBS).put(blob, e.path)
-  await done(tx).catch((err) => {
+  await guardedDone(tx, guard).catch((err) => {
     throw writeError(err)
   })
   index(e)
@@ -262,7 +286,9 @@ function needFolder(dir: string) {
 }
 
 /** Writes a file, replacing one of that name. Its folder must exist (see mkdirBrowser). */
-export async function writeBrowserFile(path: string, data: Blob | string) {
+export async function writeBrowserFile(path: string, data: Blob | string, guard?: BrowserGuard) {
+  guard?.check()
+  if (guard && virtual?.isPlace(path)) throw new BrowserFsError('Agent writes to launcher folders are unavailable')
   needFolder(parentOf(path))
   if (nodes.get(path)?.dir) throw new BrowserFsError(`${path}: is a folder`)
   // A launcher in one of the launcher folders goes to the synced list (a plain file of that name goes).
@@ -273,8 +299,10 @@ export async function writeBrowserFile(path: string, data: Blob | string) {
   const blob = typeof data === 'string' ? new Blob([data], { type: 'text/plain' }) : data
   persist()
   const mode = nodes.get(path)?.mode
-  await put({ path, dir: false, size: blob.size, mtime: Date.now(), type: blob.type, ...(mode === undefined ? {} : { mode }) }, blob)
-  if (blob.size <= TEXT_IN_MEMORY && isTextName(nameOf(path))) texts.set(path, typeof data === 'string' ? data : await blob.text())
+  await put({ path, dir: false, size: blob.size, mtime: Date.now(), type: blob.type, ...(mode === undefined ? {} : { mode }) }, blob, guard)
+  const text = blob.size <= TEXT_IN_MEMORY && isTextName(nameOf(path)) ? (typeof data === 'string' ? data : await blob.text()) : null
+  guard?.check()
+  if (text !== null) texts.set(path, text)
   else texts.delete(path)
   emit()
 }
@@ -290,7 +318,8 @@ export async function setBrowserMode(path: string, mode: number | null) {
 }
 
 /** Makes a folder; with `parents`, the folders above it too (and an existing folder is fine). */
-export async function mkdirBrowser(path: string, parents = false) {
+export async function mkdirBrowser(path: string, parents = false, guard?: BrowserGuard) {
+  guard?.check()
   const existing = nodes.get(path)
   if (existing) {
     if (parents && existing.dir) return
@@ -299,11 +328,11 @@ export async function mkdirBrowser(path: string, parents = false) {
   const parent = parentOf(path)
   if (!nodes.has(parent)) {
     if (!parents) throw new BrowserFsError(`${parent}: no such folder`)
-    await mkdirBrowser(parent, true)
+    await mkdirBrowser(parent, true, guard)
   }
   needFolder(parent)
   persist()
-  await put({ path, dir: true, size: 0, mtime: Date.now(), type: '' })
+  await put({ path, dir: true, size: 0, mtime: Date.now(), type: '' }, undefined, guard)
   emit()
 }
 
@@ -311,7 +340,9 @@ export async function mkdirBrowser(path: string, parents = false) {
 const subtree = (path: string) => [...nodes.keys()].filter((p) => p === path || p.startsWith(`${path}/`)).sort((a, b) => a.length - b.length)
 
 /** Deletes a file, or a folder with everything in it. For good: there is no trash here. */
-export async function removeBrowser(path: string) {
+export async function removeBrowser(path: string, guard?: BrowserGuard) {
+  guard?.check()
+  if (guard && (isVirtual(path) || nodes.get(path)?.dir)) throw new BrowserFsError('Agent bulk/virtual deletion is unavailable')
   if (isVirtual(path)) {
     virtual!.remove(path)
     return emit()
@@ -324,7 +355,7 @@ export async function removeBrowser(path: string) {
     tx.objectStore(NODES).delete(p)
     tx.objectStore(BLOBS).delete(p)
   }
-  await done(tx)
+  await guardedDone(tx, guard)
   for (const p of all.reverse()) unindex(p)
   emit()
 }

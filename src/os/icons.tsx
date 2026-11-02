@@ -3,6 +3,7 @@ import type { AppId } from './wm'
 
 // Dock icons: a tinted tile with a simple line glyph, drawn at 48x48.
 const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
+  widgetworkshop: { bg: 'var(--panel)', fg: 'var(--accent)', glyph: <path d="M12 12h24v24H12zM24 12v24M12 24h24" /> },
   terminal: {
     bg: 'linear-gradient(160deg,#2a2f3d,#11141b)',
     fg: '#9ece6a',
@@ -399,6 +400,7 @@ const tiles: Record<AppId, { bg: string; fg: string; glyph: ReactElement }> = {
 
 // The dock's Omarchy look: the same glyphs, flat and square, in the active theme's own palette.
 const HUES: Record<AppId, string> = {
+  widgetworkshop: 'var(--accent)',
   terminal: 'var(--green)',
   notes: 'var(--yellow)',
   keys: 'var(--blue)',

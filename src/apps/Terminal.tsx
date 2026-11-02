@@ -1860,7 +1860,7 @@ function TerminalTabs({ win }: { win: WinState }) {
 
   // Closing the window with more than one tab asks once.
   useEffect(() => {
-    setCloseGuard(win.pid, () => {
+    return setCloseGuard(win.pid, () => {
       const list = tabsRef.current
       if (list.length < 2) return true
       const busy = list.filter((t) => t.command).length
@@ -1871,7 +1871,6 @@ function TerminalTabs({ win }: { win: WinState }) {
         danger: true,
       })
     })
-    return () => setCloseGuard(win.pid, null)
   }, [win.pid])
 
   // The keys, while this window is in front: ahead of the shell and of programs, as in other

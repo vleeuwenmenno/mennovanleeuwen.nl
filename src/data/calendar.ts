@@ -76,17 +76,17 @@ export const useCalendarVersion = () =>
   )
 
 /** Events from `from` up to `to`, from the given calendars (default: those shown in Google Calendar). */
-export function fetchEvents(from: Date, to: Date, calendars: string[] | null = null, fresh = false): Promise<CalendarEvents> {
+export function fetchEvents(from: Date, to: Date, calendars: string[] | null = null, fresh = false, signal?: AbortSignal): Promise<CalendarEvents> {
   // Every calendar switched off: nothing to ask for (an empty list would mean "the defaults").
   if (calendars && calendars.length === 0) return Promise.resolve({ events: [], errors: [] })
   const params = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })
   if (calendars) params.set('calendars', calendars.join(','))
-  if (Date.now() < freshUntil) params.set('fresh', '1')
+  if (fresh || Date.now() < freshUntil) params.set('fresh', '1')
   const key = params.toString()
   const hit = cache.get(key)
-  if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value
-  const value = api<CalendarEvents>(`/api/calendar/events?${key}`)
-  cache.set(key, { at: Date.now(), value })
+  if (!signal && !fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value
+  const value = api<CalendarEvents>(`/api/calendar/events?${key}`, { signal })
+  if (!signal) cache.set(key, { at: Date.now(), value })
   value.then((r) => fetchListeners.forEach((l) => l(r.events)), () => cache.delete(key))
   return value
 }
@@ -308,6 +308,6 @@ export function registerEventMark(mark: (e: CalendarEvent) => EventMark | null):
 }
 /** The mark function, following its changes. */
 export function useEventMarks(): (e: CalendarEvent) => EventMark | null {
-  useHooks()
-  return (e) => markOf?.(e) ?? null
+  const version = useHooks()
+  return useMemo(() => (e: CalendarEvent) => markOf?.(e) ?? null, [version])
 }

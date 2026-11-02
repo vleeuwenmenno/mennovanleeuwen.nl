@@ -1,3 +1,5 @@
+import { browserStoreIdentity } from '../data/browserfs'
+import { useClientCalls } from '../terminal/agents/useClientCalls'
 import { toUi } from '../os/uiScale'
 import { Icon, NEW_TITLE, regenerateHint, RenameBox, Scramble, titlePending } from './agentsSidebar/bits'
 import { AgentsSidebar, Rail, reportBulk, runBulk, sideKeys, useThreadSelection, type Bulk, type SideCtx } from './agentsSidebar'
@@ -56,6 +58,8 @@ import {
   listMemories,
   listThreads,
   followThread,
+  claimClientCall,
+  sendClientResult,
   sendMessage,
   agentSettings,
   setAgentSettings,
@@ -133,9 +137,13 @@ import { AlwaysChips, showProjectSkills } from './AgentsSkillRules'
 import { openShareDialog } from './AgentsShare'
 import { AttachedFiles, memoryPicture, sentPicture, ImageCard, Thumbnails } from './AgentsImages'
 import { ACTION, ActionRow, MoreButton, tidy } from './AgentsActions'
+import { WebFetchRecovery, READ_FAILED, askPageText, type PastePage } from './AgentsWebRecovery'
+import { failedWebRead, appendToDraft, pageTextParts } from '../data/agentWebRecovery'
 import { ObservationLine, ObservationsDialog } from './AgentsObservations'
 import { readObservation } from '../data/imageObservations'
-import { MarkdownPreview } from './Zed'
+import { MarkdownPreview } from '../data/markdown/MarkdownPreview'
+import { xedThreads } from '../data/xedThreads'
+import { seafileAt } from '../data/agentPlaces'
 import { currenciesIn } from '../data/money'
 import { MoneyThread } from '../os/MoneyAmount'
 import { TaskEditDialog, TasksView, type TasksFocus } from './AgentsTasks'
@@ -277,7 +285,7 @@ function AgentsApp({ win }: { win: WinState }) {
   // Closing while threads are answering: stop them, or let them go on on the server (they are
   // announced when done, and found again here later).
   useEffect(() => {
-    setCloseGuard(win.pid, async () => {
+    return setCloseGuard(win.pid, async () => {
       const busy = (await listThreads(false).catch(() => [] as Thread[])).filter((t) => t.running)
       if (!busy.length) return true
       const choice = await choose({
@@ -298,7 +306,6 @@ function AgentsApp({ win }: { win: WinState }) {
       void allowNotifications()
       return true
     })
-    return () => setCloseGuard(win.pid, null)
   }, [win.pid])
 
   const refresh = useCallback(() => {
@@ -1064,7 +1071,15 @@ function QueueList({ queue, answering, editing, onEdit, onSend, onRemove }: { qu
   )
 }
 
+export type EmbeddedConversation = {
+  folder: { path: string; label: string; browser: ReturnType<typeof browserStoreIdentity> }
+  workdir: Workdir | null
+  attachment?: { id: number; file: Attachment }
+  onCallDone: () => void
+  onState: (thread: Thread | null, answering: boolean) => void
+}
 type ConversationProps = {
+  embedded?: EmbeddedConversation
   id: string | null
   /** The project a new thread goes into */
   draftProject: number | null
@@ -1085,7 +1100,7 @@ type ConversationProps = {
   onOpenThread: (id: string) => void
 }
 
-function Conversation({ id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete, onOpenRun, onOpenThread }: ConversationProps) {
+export function Conversation({ embedded, id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete, onOpenRun, onOpenThread }: ConversationProps) {
   const [thread, setThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([])
   // The currencies the answers mention, offered when you open an amount in one (src/os/MoneyAmount.tsx).
@@ -1095,7 +1110,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [approvals, setApprovals] = useState<PendingApproval[]>([])
   // The message box starts from what was left there last time (src/data/agentDrafts.ts).
   const [photoPicker, setPhotoPicker] = useState(false)
-  const [files, setFiles] = useState<Attachment[]>(() => getDraft(id ?? 'new')?.files ?? [])
+  const [files, setFiles] = useState<Attachment[]>(() => getDraft(id ?? 'new')?.files ?? (embedded ? [textAttachment(`Xed work folder: ${embedded.folder.label}. Terminal calls are confined to this folder. Use terminal and terminal_capabilities for browser-kept files.`, 'Xed work folder.txt')] : []))
   const latestFiles = useRef(files)
   latestFiles.current = files
   const [reading, setReading] = useState(0)
@@ -1110,7 +1125,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const [picking, setPicking] = useState(false)
   const modelPill = useRef<HTMLButtonElement>(null)
   const boxBar = useRef<HTMLDivElement>(null)
-  const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(null)
+  const [draftWorkdir, setDraftWorkdir] = useState<Workdir | null>(embedded?.workdir ?? null)
   // New threads start in Auto: like Ask first, but web addresses it builds are checked for you.
   const [draftPermission, setDraftPermission] = useState<Permission>('auto')
   // Always-on skills switched off with their chips before the thread exists.
@@ -1146,6 +1161,17 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   const pinned = useRef(true)
   const input = useRef<HTMLTextAreaElement>(null)
   const emoji = useEmojiTyping(input, text)
+  const attachedRequest = useRef<number | null>(null)
+  useEffect(() => {
+    const a = embedded?.attachment
+    if (!a || attachedRequest.current === a.id) return
+    attachedRequest.current = a.id
+    setFiles(current => {
+      if (current.length >= 10) { setError('Remove an attachment first (10 maximum).'); return current }
+      return [...current, a.file]
+    })
+    input.current?.focus()
+  }, [embedded?.attachment])
 
   // A thread created by the first message keeps streaming into this view: don't reload it then.
   const streamed = useRef<string | null>(null)
@@ -1192,8 +1218,41 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     if (c.type === 'approval') setApprovals((a) => (a.some((x) => x.callId === c.callId) ? a : [...a, { callId: c.callId, messageId: c.messageId, index: c.index, kind: 'approval', call: c.call, summary: c.summary, check: c.check, child: e.child }]))
     else if (c.type === 'approved') setApprovals((a) => a.filter((x) => x.callId !== c.callId))
   }
+  // This window runs the terminal tool for the threads it follows or sends to: no terminal window is needed.
+  // The thread as the last event said it (the work folder is read from it) and the calls under way, to stop them.
+  const execThread = useRef<Thread | null>(null)
+  const execCalls = useClientCalls(id, streamed.current)
+  const runClientCall = async (e: Extract<TurnEvent, { type: 'client' }>) => {
+    const snapshot = execThread.current
+    if (!snapshot) return
+    const { id, workdir } = snapshot
+    const calls = execCalls
+    calls.select(id)
+    await calls.run(e.callId, () => claimClientCall(id, e.callId), async (signal) => {
+      try {
+        const { runAgentCall, runInFolder } = await import('../terminal/agents/exec')
+        const { HOME } = await import('../terminal/vfs')
+        signal.throwIfAborted()
+        const binding = xedThreads.get().find(x => x.id === id && x.account === account.user?.id)
+        const folder = embedded?.folder ?? (binding ? { path: binding.root, label: binding.root, browser: binding.browser ?? null } : null)
+        if (folder) {
+          const at = seafileAt(folder.path)
+          const expected = embedded ? (embedded.workdir ? JSON.stringify({ repo: embedded.workdir.repo, path: embedded.workdir.path }) : null) : binding!.backing
+          if (at === undefined || (at ? JSON.stringify(at) : null) !== expected || (workdir ? JSON.stringify({ repo: workdir.repo, path: workdir.path }) : null) !== expected) throw new Error('The project work folder changed. Reopen this project before running tools.')
+          if (!workdir && JSON.stringify(folder.browser) !== JSON.stringify(browserStoreIdentity())) throw new Error('The browser project store changed. Reopen this project before running tools.')
+          if (!workdir) return await runInFolder({ name: e.call.name, arguments: e.call.arguments ?? {}, folder: { ...folder, browser: folder.browser ?? undefined }, fallbackDir: folder.path, grant: e.grant, signal })
+        }
+        return await runAgentCall({ name: e.call.name, arguments: e.call.arguments ?? {}, workdir, fallbackDir: HOME, grant: e.grant, signal })
+      } catch (err) { return { output: `msh: ${(err as Error).message}`, status: 1 } }
+    }, async (a) => { try { await sendClientResult(id, e.callId, a.output, a.status, { result: 'result' in a ? a.result : undefined, capabilities: 'capabilities' in a ? a.capabilities : undefined }) } finally { embedded?.onCallDone() } }).catch(() => {})
+  }
   // What a turn streams, whether this window started it or joined it later.
   const onEvent = (e: TurnEvent) => {
+    if (e.type === 'snapshot' || e.type === 'thread') execThread.current = e.thread
+    if (e.type === 'snapshot') for (const p of e.pending) if (p.kind === 'client' && p.call) void runClientCall({ type: 'client', callId: p.callId, messageId: p.messageId, index: p.index, call: p.call, grant: p.grant })
+    if (e.type === 'client') void runClientCall(e)
+    if (e.type === 'clientDone') { execCalls.done(e.callId); embedded?.onCallDone() }
+    if (e.type === 'message' && e.message.role === 'tool') embedded?.onCallDone()
     if (e.type === 'snapshot') {
       setThread(e.thread)
       setMessages(e.messages)
@@ -1262,7 +1321,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   useEffect(() => {
     if (!id || busy || !(thread?.running || lostAt.current !== null)) return
     const ctl = new AbortController()
-    followThread(id, onEvent, ctl.signal)
+    followThread(id, onEvent, ctl.signal, { exec: true })
       .catch(() => {})
       .finally(() => {
         if (ctl.signal.aborted) return
@@ -1415,6 +1474,47 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     const change = await askText({ title: 'Edit picture', body: <>What should change in “{name}”?</>, label: 'What should change?', placeholder: 'Make the sky orange and the title bigger', confirm: 'Redraw', validate: (t) => (t.trim() ? null : 'Say what should change') })
     if (change?.trim()) void send(`Change the picture “${name}” (${ref}): ${change.trim()}`)
   }
+  // Page text pasted for a web read that failed goes into the box, for the user to read and send; it is
+  // never sent from here. It is added only if this same thread is still open and no queued message is
+  // being edited when the dialog closes.
+  const mounted = useRef(true)
+  useEffect(() => ((mounted.current = true), () => void (mounted.current = false)), [])
+  const openThread = useRef<string | undefined>(undefined)
+  openThread.current = thread?.id
+  const latestText = useRef(text)
+  latestText.current = text
+  const editingQNow = useRef(false)
+  editingQNow.current = !!editingQ
+  const pastePage = async (origin: string, url: string) => {
+    let pasted: string | null = ''
+    let problem: string | null = null
+    for (;;) {
+      pasted = await askPageText(url, pasted ?? '', problem)
+      if (pasted === null) return
+      if (!mounted.current || openThread.current !== origin || editingQNow.current) return void tell({ title: 'Page text not added', body: 'That thread was closed, or a queued message was being edited, before the text was added. Nothing was added: open the thread and try again.' })
+      const parts = pageTextParts(url, pasted, PASTE_AS_FILE, latestText.current.length, MAX_MESSAGE)
+      let file: Attachment | undefined
+      if (parts.file) {
+        if (latestFiles.current.length >= 10) {
+          problem = 'This text is too long for the message box, so it would be an attachment, and there are 10 already. Remove an attachment, then press Add to message again.'
+          continue
+        }
+        try {
+          const n = latestFiles.current.filter((f) => f.name.startsWith('Page text')).length
+          file = textAttachment(parts.file, n ? `Page text ${n + 1}.txt` : 'Page text.txt')
+        } catch (e) {
+          problem = (e as Error).message
+          continue
+        }
+      }
+      setText((t) => appendToDraft(t, parts.message))
+      if (file) setFiles((f) => (f.length >= 10 ? f : [...f, file]))
+      setError(null)
+      input.current?.focus()
+      return
+    }
+  }
+  const pasteHere: PastePage | undefined = thread ? { run: (url) => void pastePage(thread.id, url), blocked: editingQ ? 'Finish editing the queued message first' : undefined } : undefined
   const send = async (asked?: string) => {
     const typed = (asked ?? text).trim()
     let attached = asked === undefined ? files : []
@@ -1477,7 +1577,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       abort.current = ctl
       let accepted = false
       try {
-        await sendMessage(target.id, message, attached, (e) => ((accepted ||= (e.type === 'message' && e.message.role === 'user') || e.type === 'compact'), onEvent(e)), ctl.signal)
+        await sendMessage(target.id, message, attached, (e) => ((accepted ||= (e.type === 'message' && e.message.role === 'user') || e.type === 'compact'), onEvent(e)), ctl.signal, { exec: true })
       } catch (e) {
         // Dropped on the way, not refused: the turn may well go on (or the server is restarting).
         if (!isDropped(e) || ctl.signal.aborted) throw e
@@ -1562,7 +1662,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
     const ctl = new AbortController()
     abort.current = ctl
     try {
-      await retryTurn(thread.id, onEvent, ctl.signal)
+      await retryTurn(thread.id, onEvent, ctl.signal, { exec: true })
     } catch (e) {
       if (isDropped(e) && !ctl.signal.aborted) lose()
       else if ((e as Error).name !== 'AbortError') {
@@ -1686,6 +1786,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }
 
   const stop = () => {
+    execCalls.stop()
     abort.current?.abort()
     if (thread) stopThread(thread.id).catch(() => {})
   }
@@ -1914,6 +2015,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
   }, [text])
 
   const answering = busy || !!thread?.running
+  useEffect(() => { embedded?.onState(thread, answering) }, [thread, answering])
   // Messages left in the queue after a stop: another window (or the terminal) may send, edit or
   // drop them, and nothing streams while the thread is at rest, so look now and then.
   useEffect(() => {
@@ -1993,7 +2095,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           shortcut: `${enabled}/${groups.length}`,
           submenu: groups.map((g) => {
             const on = tools.includes(g.id)
-            const blocked = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir) || g.id === 'terminal'
+            const blocked = (g.seafile && !account.seafile) || (g.calendar && !hasCalendar(account)) || (g.mail && !mailAccounts?.length) || (g.id === 'files' && !workdir)
             const { hint, muted } = toolState(g, on, !!blocked)
             // Greyed but clickable while it is on, so it can be switched off; off and blocked it cannot be switched on.
             return { label: g.name, checked: on, muted: muted && on, disabled: muted && !on, hint, onSelect: () => toggleTool(g.id) }
@@ -2141,7 +2243,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
       }} />}
       <div className="agt-bar">
       <div className="nb-toolbar agt-toolbar" onContextMenu={(e) => thread && !e.shiftKey && !isField(e.target as Element) && openContextMenu(e, tidyMenu(threadItems()))}>
-        <button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
+        {!embedded && <><button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
           ‹
         </button>
         {projectName && <span className="agt-crumb" title={`In the project ${projectName}`}>{projectName}</span>}
@@ -2152,15 +2254,15 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             {thread ? <Scramble text={thread.title} pending={titlePending(thread) || (busy && thread.title === NEW_TITLE)} /> : 'New thread'}
           </button>
         )}
-        <span className="nb-spacer" />
+        </>}<span className="nb-spacer" />
         <div className="agt-bar-chips">
-        {(account.seafile || workdir) && (
+        {!embedded && (account.seafile || workdir) && (
           <button className={`agt-chip ${workdir ? 'is-on' : ''}`} onClick={folderMenu} disabled={answering} title={workdir ? `Work folder: ${workdir.label}` : 'Give it a folder to work in'}>
             <Icon name="folder" size={13} /> <span className="agt-chip-label">{workdir ? workdir.label : 'No folder'}</span>
           </button>
         )}
-        <button type="button" className="agt-chip" disabled={answering || openingImages} onClick={() => void sessionImages()} title="Image models and generation defaults for this session">Images</button>
-        {thread && <MailReadsChip thread={thread} onChange={setThread} onError={setError} />}
+        {!embedded && <button type="button" className="agt-chip" disabled={answering || openingImages} onClick={() => void sessionImages()} title="Image models and generation defaults for this session">Images</button>}
+        {!embedded && thread && <MailReadsChip thread={thread} onChange={setThread} onError={setError} />}
         <button className={`agt-chip is-${permission}`} onClick={permissionMenu} title={PERMISSION_HELP[permission]}>
           {PERMISSION_LABEL[permission]}
         </button>
@@ -2215,7 +2317,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
             setFiles((current) => [...current.filter((f) => f.source !== 'Image-to-image source'), { name: `${name} (image source)`, source: 'Image-to-image source', kind: 'text', mime: 'text/plain', size: reference.length, text: reference }])
             setText((t) => t.startsWith('Edit this image: ') ? t : `Edit this image: ${t}`)
             input.current?.focus()
-          }} onMaskSaved={(saved) => {
+          }} paste={pasteHere} onMaskSaved={(saved) => {
             // The hand-off back: the saved mask rides along with the next message, which the user sends when ready.
             if (files.filter((f) => f.source !== 'Edited mask').length >= 10) { setError('Remove an attachment before handing back the mask (10 attachments maximum).'); return }
             const what = saved.from.target ? ` for “${saved.from.target}”` : ''
@@ -2317,6 +2419,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
           )}
           <textarea
             ref={input}
+            data-xed-composer={embedded ? '' : undefined}
             value={text}
             onChange={(e) => emoji.change(e, (v, c) => { setText(v); setCaret(c) })}
             onSelect={(e) => { setCaret(e.currentTarget.selectionStart); emoji.select(e.currentTarget) }}
@@ -2470,7 +2573,7 @@ function Conversation({ id, draftProject, projects, listThread, ask, onAsked, on
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
-function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onEditPicture, onMaskSaved, onOpenRun }: { /** Opens a task's run (a task that continues this thread landed here) */ onOpenRun: (task: string, run: string) => void; onEditImage: (name: string, sourceId: string) => void; /** Edit on a gpt_image picture (its name and id), when GPT images is on in this thread */ onEditPicture?: (name: string, ref: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
+function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer, onRewind, onShare, mailAlways, actions, onAgain, onUpscale, onRefine, onInpaint, imagesOn, retry, onEditImage, onEditPicture, onMaskSaved, onOpenRun, paste }: { /** Where pasted page text goes (a failed web read's card) */ paste?: PastePage; /** Opens a task's run (a task that continues this thread landed here) */ onOpenRun: (task: string, run: string) => void; onEditImage: (name: string, sourceId: string) => void; /** Edit on a gpt_image picture (its name and id), when GPT images is on in this thread */ onEditPicture?: (name: string, ref: string) => void; /** A mask fixed by hand in the editor, handed back to the agent through the message box */ onMaskSaved: (saved: SavedMask) => void; /** Retry the last turn, offered in the row of message `at` (its last answer or image) */ retry?: { at: number; onRetry: () => void }; actions: (m: AgentMessage, inRow?: boolean) => MenuItem[]; onAgain: (imageId: string) => void; onUpscale: (input: UpscaleImageInput) => void; onInpaint: (input: MaskedEditInput) => void; onRefine: (input: RefineImageInput) => void; imagesOn: boolean; /** Mail reads are always allowed already: their cards don't offer it again */ mailAlways?: boolean; /** For the pictures you sent, which load from the thread */ threadId: string | null; messages: AgentMessage[]; answering: boolean; approvals: PendingApproval[]; onDecide: (callId: string, allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; onAnswer: (callId: string, answers: Record<string, unknown> | null) => void; /** Rewind to one of your messages; `edit`: then edit it (the box takes focus) */ onRewind: (m: AgentMessage, edit: boolean) => void; /** Share one answer (the dialog) */ onShare: (m: AgentMessage) => void }) {
   const [maskSource, setMaskSource] = useState<InpaintSource | null>(null)
   // Every message and card ends in the same action row (AgentsActions.tsx): its own buttons, then More.
   const row = (m: AgentMessage, label: string, own: MenuItem[] = [], buttons: ReactNode[] = []) => (
@@ -2582,7 +2685,7 @@ function Messages({ threadId, messages, answering, approvals, onDecide, onAnswer
           )
           // Masks the agent made or listed show as tinted pictures, each with Edit mask.
           const masks = (c.name === 'make_image_mask' || c.name === 'list_image_masks') && results[j] ? agentMasks(results[j].content) : []
-          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{c.name === 'gpt_image' && !results[j] && wait?.gpt && threadId && wait.width && wait.height && <GptImageDrawing threadId={threadId} callId={wait.callId} width={wait.width} height={wait.height} drawing={wait.gpt} infographic={c.arguments?.mode === 'infographic'} />}{(c.name === 'plan_video' || c.name === 'render_video') && results[j] && <VideoStudioLink result={results[j].content} />}{c.name === 'gpt_image' && results[j] && <GptImageResult threadId={threadId} result={results[j]} onEdit={onEditPicture && !answering ? onEditPicture : undefined} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
+          return <div key={j} className="agt-act-host" data-tool={`${m.id}:${j}`}><ToolCard tag={`${m.id}:${j}`} call={c} result={results[j]?.content} checked={results[j]?.checked} pending={!results[j] && answering} inTerminal={wait?.kind === 'client'} summary={wait?.summary} check={wait?.check} mailAlways={mailAlways} paste={paste} approval={wait?.kind === 'approval' ? (allow, extra) => onDecide(wait.callId, allow, extra) : undefined} />{masks.length > 0 && <MaskCards masks={masks} threadId={imagesOn ? threadId : null} disabled={answering} onSaved={onMaskSaved} />}{c.name === 'gpt_image' && !results[j] && wait?.gpt && threadId && wait.width && wait.height && <GptImageDrawing threadId={threadId} callId={wait.callId} width={wait.width} height={wait.height} drawing={wait.gpt} infographic={c.arguments?.mode === 'infographic'} />}{(c.name === 'plan_video' || c.name === 'render_video') && results[j] && <VideoStudioLink result={results[j].content} />}{c.name === 'gpt_image' && results[j] && <GptImageResult threadId={threadId} result={results[j]} onEdit={onEditPicture && !answering ? onEditPicture : undefined} />}{results[j] && row(results[j], 'Tool', [{ label: 'Copy the result', onSelect: () => copy(results[j].content) }])}</div>
         })}
       </Fragment>,
     )
@@ -2707,7 +2810,7 @@ type CalendarHit = { id?: string; title: string; when: string; calendar: string 
 type MailHit = { message_id?: string; subject: string; from: string; date: string }
 
 /** One tool call: what it did in a line, and when opened, what it was given and what came back. */
-function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, summary, check, mailAlways }: { /** Mail reads are always allowed already */ mailAlways?: boolean; tag: string; call: ToolCall; result?: string; /** Why it ran without asking (a checked web read) */ checked?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary; /** What Auto's check said about a web read it would not clear */ check?: string }) {
+function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, summary, check, mailAlways, paste }: { /** Where pasted page text goes, for a web read that failed */ paste?: PastePage; /** Mail reads are always allowed already */ mailAlways?: boolean; tag: string; call: ToolCall; result?: string; /** Why it ran without asking (a checked web read) */ checked?: string; pending: boolean; approval?: (allow: boolean, extra?: Parameters<typeof answerApproval>[3]) => void; inTerminal?: boolean; summary?: CallSummary; /** What Auto's check said about a web read it would not clear */ check?: string }) {
   let parsed: unknown = null
   try {
     parsed = result ? JSON.parse(result) : null
@@ -2715,6 +2818,7 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
     parsed = result
   }
   const failed = !!parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'error' in parsed
+  const readFailed = !!failedWebRead(call, result)
   const hits = call.name === 'web_search' && Array.isArray(parsed) ? (parsed as SearchHit[]) : null
   const events = call.name === 'calendar_list_events' && parsed && typeof parsed === 'object' && Array.isArray((parsed as { events?: unknown }).events) ? (parsed as { events: CalendarHit[]; more?: number }) : null
   // find_image's pictures, kept on this server (server/findImage.ts): only ids of that shape are shown.
@@ -2760,13 +2864,13 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
       </div>
     )
   return (
-    <details className={`agt-tool ${failed ? 'is-failed' : ''}`} data-tool={tag}>
+    <details className={`agt-tool ${failed ? 'is-failed' : ''}`} data-tool={tag} open={readFailed || undefined}>
       <summary>
         <span className="agt-tool-icon" aria-hidden>
           {pending ? '◌' : failed ? '✕' : '✓'}
         </span>
-        <span className="agt-tool-label">{toolLabel(call, result)}</span>
-        {inTerminal && <span className="muted"> · running in your terminal…</span>}
+        <span className="agt-tool-label" title={call.name === 'web_fetch' && typeof call.arguments?.url === 'string' ? call.arguments.url : undefined}>{toolLabel(call, result)}</span>
+        {inTerminal && <span className="muted"> · running…</span>}
         {checked && (
           <span className="muted agt-tool-checked" title={checked}>
             {' '}
@@ -2787,9 +2891,11 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
             · {mails.length} {mails.length === 1 ? 'conversation' : 'conversations'}
           </span>
         )}
-        {failed && <span className="t-red"> · {String((parsed as { error: unknown }).error)}</span>}
+        {failed && <span className="t-red"> · {readFailed ? READ_FAILED : String((parsed as { error: unknown }).error)}</span>}
       </summary>
-      {hits ? (
+      {readFailed ? (
+        <WebFetchRecovery call={call} result={result} paste={paste} />
+      ) : hits ? (
         <ul className="agt-hits">
           {hits.map((h) => (
             <li key={h.url}>
@@ -2846,10 +2952,32 @@ function ToolCard({ tag, call, result, checked, pending, approval, inTerminal, s
           ))}
           {!!events.more && <li className="muted">and {events.more} more</li>}
         </ul>
+      ) : call.name === 'terminal' && parsed && typeof parsed === 'object' && typeof (parsed as { stdout?: unknown }).stdout === 'string' ? (
+        <TerminalResult call={call} r={parsed as TerminalAnswer} />
       ) : (
         <pre className="agt-tool-body">{[`${call.name}(${JSON.stringify(call.arguments)})`, result ? (typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2)).slice(0, 6000) : pending ? 'Running…' : 'No result (the turn stopped).'].join('\n\n')}</pre>
       )}
     </details>
+  )
+}
+
+type TerminalAnswer = { exit_code: number; stdout: string; stderr: string; duration_ms?: number; truncated?: { stdout: number; stderr: number }; terminated?: string | null }
+const STOPPED: Record<string, string> = { timeout: 'stopped: out of time', cancelled: 'stopped: cancelled', steps: 'stopped: too many steps', output: 'stopped: too much output', memory: 'stopped: too much memory' }
+
+/** What a terminal call answered: the command, stdout and stderr apart, how it ended. */
+function TerminalResult({ call, r }: { call: ToolCall; r: TerminalAnswer }) {
+  const cut = (r.truncated?.stdout ?? 0) + (r.truncated?.stderr ?? 0)
+  return (
+    <>
+      <pre className="agt-tool-body">{`$ ${String(call.arguments?.command ?? '').slice(0, 2000)}${r.stdout ? `\n${r.stdout.slice(0, 6000)}` : ''}`}</pre>
+      {r.stderr && <pre className="agt-tool-body t-red">{r.stderr.slice(0, 4000)}</pre>}
+      <p className="muted agt-ask-why">
+        exit {r.exit_code}
+        {r.duration_ms !== undefined && ` · ${r.duration_ms < 1000 ? `${r.duration_ms} ms` : `${(r.duration_ms / 1000).toFixed(1)} s`}`}
+        {r.terminated && ` · ${STOPPED[r.terminated] ?? r.terminated}`}
+        {cut > 0 && ` · ${cut} characters cut`}
+      </p>
+    </>
   )
 }
 
@@ -2873,7 +3001,7 @@ const PERMISSION_LABEL: Record<Permission, string> = { default: 'Ask first', aut
 const PERMISSION_HELP: Record<Permission, string> = {
   default: 'Each change, and each web address it made up, waits for you to allow it',
   auto: 'Web addresses it made up are checked for you (rules, then the safety check model); changes still ask',
-  acceptEdits: 'File edits in the work folder go through and web reads are checked like Auto; deleting and commands still ask',
+  acceptEdits: 'File edits in the work folder go through, and so do terminal commands that only write there; deleting, the network and web reads (checked like Auto) still ask',
   plan: 'Read only: it looks around, then shows you a plan to approve',
   bypass: 'Nothing asks: edits, deletes, commands and web reads all run. Calendar changes, mail, and AGENTS.md, CLAUDE.md, .agents/ and .claude/ still ask',
 }

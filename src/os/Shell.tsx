@@ -1,3 +1,4 @@
+import { WidgetVisibility } from '../widgets/platform/visibility'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { getLaunchers, launch as launchLink, launcherImage, launchersAreFiles, useLaunchers, writeLauncherFile } from '../data/launchers'
 import { dropInTrash, trashOp } from '../data/fileDrop'
@@ -7,6 +8,7 @@ import { filesFor, openWith } from './appDrops'
 import { HOME } from '../terminal/vfs'
 import { whereIs } from '../data/mounts'
 import { widgetDef } from '../widgets/registry'
+import { openWidget } from '../widgets/windows'
 import type { WidgetDef } from '../widgets/types'
 import { APP_META } from './apps'
 import { Launchpad } from './Launchpad'
@@ -195,8 +197,14 @@ function Dock() {
   const canCustomize = useCanCustomizeDock()
   const launchers = useLaunchers()
   const [order, setOrder] = useState<DockId[]>(dockItems)
-  const [dragging, setDragging] = useState<{ app: DockId; dx: number } | null>(null)
-  const drag = useRef<{ app: DockId; startX: number; moved: boolean; running: boolean } | null>(null)
+  const [dragging, setDragging] = useState<{ app: DockId } | null>(null)
+  const drag = useRef<{ app: DockId; pointerId: number; startX: number; startY: number; x: number; y: number; grabX: number; grabY: number; moved: boolean; running: boolean } | null>(null)
+  const endDrag = useRef<((commit: boolean) => void) | null>(null)
+  const animations = useRef(new Map<DockId, Animation>())
+  useEffect(() => () => {
+    endDrag.current?.(false)
+    for (const animation of animations.current.values()) animation.cancel()
+  }, [])
   const dockItemsRef = useRef(dockItems)
   dockItemsRef.current = dockItems
   // Follow pins, removals and other devices, except in the middle of a drag.
@@ -275,88 +283,132 @@ function Dock() {
     if (!overflow.length) setMoreOpen(false)
   }, [overflow.length])
 
-  // FLIP: icons that changed slot slide from where they were instead of jumping.
+  // Layout slots never include hover, FLIP or drag transforms. All calculations stay in screen
+  // pixels until the single conversion used to draw a transform under CSS UI zoom.
+  const slot = (el: HTMLElement) => {
+    const nav = navRef.current!
+    const r = nav.getBoundingClientRect()
+    const scale = uiScale()
+    return { left: r.left + (nav.clientLeft + el.offsetLeft) * scale, top: r.top + (nav.clientTop + el.offsetTop) * scale, width: el.offsetWidth * scale, height: el.offsetHeight * scale }
+  }
+  const positionDrag = () => {
+    const d = drag.current
+    const el = d && items.current.get(d.app)
+    if (!d?.moved || !el) return
+    const r = slot(el)
+    const left = Math.max(0, Math.min(window.innerWidth - r.width, d.x - d.grabX))
+    const top = Math.max(0, Math.min(window.innerHeight - r.height, d.y - d.grabY))
+    el.style.transform = `translate(${toUi(left - r.left)}px, ${toUi(top - r.top)}px)`
+  }
+
+  // FLIP belongs only to siblings. Cancel an earlier animation before starting its replacement;
+  // no delayed style callback may overwrite an icon that has since become the dragged one.
   useLayoutEffect(() => {
     const prev = prevRects.current
-    if (!prev) return
     prevRects.current = null
-    for (const [app, el] of items.current) {
+    if (prev) for (const [app, el] of items.current) {
+      animations.current.get(app)?.cancel()
+      animations.current.delete(app)
       if (app === drag.current?.app) continue
       const before = prev.get(app)
       if (before === undefined) continue
-      const dx = toUi(before - el.getBoundingClientRect().left)
-      if (!dx) continue
-      el.style.transition = 'none'
-      el.style.transform = `translateX(${dx}px)`
-      requestAnimationFrame(() => {
-        el.style.transition = 'transform 0.2s ease'
-        el.style.transform = ''
-      })
+      const dx = toUi(before - slot(el).left)
+      if (dx) animations.current.set(app, el.animate([
+        { transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' },
+      ], { duration: 200, easing: 'ease' }))
     }
-  }, [order])
+    // Reordering changes the dragged button's slot, not the point held under the pointer.
+    positionDrag()
+  })
 
-  // Mouse and pen only: on touch the dock scrolls sideways instead. Move/up are tracked on window
-  // because React moving the icon in the DOM mid-drag drops its pointer capture.
-  const dxRef = useRef(0)
-  // An open app that isn't pinned can be dragged in among the pinned ones to pin it there (signed
-  // in, and only apps that can sit on the dock); let go to the right of them and it stays unpinned.
+  // Capture on the document root: keyed buttons move in the DOM when reordered. Touch has the
+  // same gesture as mouse/pen; the dock fits its contents instead of scrolling sideways.
   const onPointerDown = (e: React.PointerEvent, app: DockId, running = false) => {
-    if (e.button !== 0 || e.pointerType === 'touch') return
+    if (e.button !== 0 || !e.isPrimary || drag.current) return
     if (running && !(canCustomize && !isLauncherId(app) && isDockableApp(app))) return
-    drag.current = { app, startX: e.clientX, moved: false, running }
-    dxRef.current = 0
+    const el = items.current.get(app)
+    const nav = navRef.current
+    if (!el || !nav) return
+    const capture = document.documentElement
+    const r = el.getBoundingClientRect()
+    drag.current = { app, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, grabX: e.clientX - r.left, grabY: e.clientY - r.top, moved: false, running }
 
     const onMove = (ev: PointerEvent) => {
       const d = drag.current
-      if (!d) return
-      if (!d.moved && Math.abs(ev.clientX - d.startX) < 6) return
-      d.moved = true
-      document.body.classList.add('is-dragging')
-      const el = items.current.get(d.app)!
-      const r = el.getBoundingClientRect()
-      // Screen pixels; the shift drawn (dxRef) is in page pixels (the UI scale, uiScale.ts).
-      const naturalCenter = r.left + r.width / 2 - dxRef.current * uiScale()
+      if (!d || ev.pointerId !== d.pointerId) return
+      if (!d.moved && Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) < 6) return
+      ev.preventDefault()
+      if (!d.moved) {
+        animations.current.get(d.app)?.cancel()
+        animations.current.delete(d.app)
+        d.moved = true
+        capture.setPointerCapture(d.pointerId)
+        document.body.classList.add('is-dragging')
+        setDragging({ app: d.app })
+      }
+      d.x = ev.clientX
+      d.y = ev.clientY
+      positionDrag()
       const others = orderRef.current.filter((a) => a !== d.app)
-      // Only the icons on show count (the ones behind More come after them anyway).
       const onShow = others.filter((a) => items.current.has(a))
       let idx = 0
       for (const a of onShow) {
-        const o = items.current.get(a)!.getBoundingClientRect()
+        const o = slot(items.current.get(a)!)
         if (ev.clientX > o.left + o.width / 2) idx++
       }
       const last = onShow.length ? items.current.get(onShow[onShow.length - 1])! : firstRef.current
-      const inPinned = !d.running || (!!last && ev.clientX <= last.getBoundingClientRect().right + last.getBoundingClientRect().width / 2)
+      const lastSlot = last && slot(last)
+      const inPinned = !d.running || (!!lastSlot && ev.clientX <= lastSlot.left + lastSlot.width * 1.5)
       const next = inPinned ? [...others.slice(0, idx), d.app, ...others.slice(idx)] : others
       if (next.join() !== orderRef.current.join()) {
         prevRects.current = new Map([...items.current].map(([a, node]) => [a, node.getBoundingClientRect().left]))
         orderRef.current = next // a quick drop can land before the re-render
         setOrder(next)
       }
-      dxRef.current = toUi(ev.clientX - naturalCenter)
-      setDragging({ app: d.app, dx: dxRef.current })
     }
 
-    const onUp = () => {
+    const finish = (commit: boolean) => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      window.removeEventListener('blur', onBlur)
+      window.removeEventListener('resize', onBlur)
+      window.removeEventListener('keydown', onKey)
+      capture.removeEventListener('lostpointercapture', onLostCapture)
       const d = drag.current
       drag.current = null
+      endDrag.current = null
+      if (d && capture.hasPointerCapture(d.pointerId)) capture.releasePointerCapture(d.pointerId)
       document.body.classList.remove('is-dragging')
       if (d?.moved) {
+        items.current.get(d.app)?.style.removeProperty('transform')
         suppressClick.current = true
-        // The click that follows a drag lands on whatever is under the pointer; drop the flag soon either way.
+        // Suppress the release click at nav capture, including All apps, More and Trash.
         setTimeout(() => (suppressClick.current = false), 50)
-        if (!d.running) setDockOrder(orderRef.current)
-        else if (orderRef.current.includes(d.app)) pinToDock(d.app, orderRef.current.indexOf(d.app))
-        else setOrder(dockItemsRef.current)
+        if (commit && !d.running) setDockOrder(orderRef.current)
+        else if (commit && orderRef.current.includes(d.app)) pinToDock(d.app, orderRef.current.indexOf(d.app))
       }
+      if (!commit || !d?.moved || (d.running && !orderRef.current.includes(d.app))) {
+        orderRef.current = dockItemsRef.current
+        setOrder(dockItemsRef.current)
+      }
+      prevRects.current = null
       setDragging(null)
     }
-
-    window.addEventListener('pointermove', onMove)
+    const onUp = (ev: PointerEvent) => { if (ev.pointerId === drag.current?.pointerId) finish(true) }
+    const onCancel = (ev: PointerEvent) => { if (ev.pointerId === drag.current?.pointerId) finish(false) }
+    // Touch transfers its implicit button capture to the root; that button's loss bubbles.
+    const onLostCapture = (ev: PointerEvent) => { if (ev.target === capture) onCancel(ev) }
+    const onBlur = (ev: Event) => { if (ev.target === window) finish(false) }
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.preventDefault(); finish(false) } }
+    endDrag.current = finish
+    window.addEventListener('pointermove', onMove, { passive: false })
     window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onUp)
+    window.addEventListener('pointercancel', onCancel)
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('resize', onBlur)
+    window.addEventListener('keydown', onKey)
+    capture.addEventListener('lostpointercapture', onLostCapture)
   }
 
   const launcherOf = (id: DockId) => (isLauncherId(id) ? launchers.find((l) => `launcher:${l.id}` === id) : undefined)
@@ -475,7 +527,6 @@ function Dock() {
         }}
         className={`dock-item ${isDragged ? 'is-dragged' : ''}`}
         data-drop={app}
-        style={isDragged ? { transform: `translate(${dragging.dx}px, -10px) scale(1.12)` } : undefined}
         onPointerDown={app === 'trash' ? undefined : (e) => onPointerDown(e, app, running)}
         onClick={() => {
           if (suppressClick.current) {
@@ -512,6 +563,13 @@ function Dock() {
       ref={navRef}
       className={`dock ${dragging ? 'is-reordering' : ''} ${dock.visible ? '' : 'is-hidden'}`}
       aria-label="Dock"
+      onClickCapture={(e) => {
+        if (suppressClick.current) {
+          e.preventDefault()
+          e.stopPropagation()
+          suppressClick.current = false
+        }
+      }}
       onPointerEnter={dock.show}
       onPointerLeave={() => !dragging && dock.hideSoon()}
       onFocus={dock.show}
@@ -638,7 +696,7 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
   const style = def.useFrame?.(id)
   const menuItems = def.useMenu?.(id, wm) ?? []
   return (
-    <Window win={w} title={def.name} chrome="note" className={`widget widget-${def.kind}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
+    <Window win={w} title={def.useTitle?.(id) ?? def.name} chrome="note" className={`widget widget-${def.kind}${style?.['--widget-bare' as keyof typeof style] === '1' ? ' widget-bare' : ''}`} style={style} menuItems={menuItems} closeLabel={def.closeLabel} resizableWidth={def.resizable}>
       {APP_META.widget.render(w)}
     </Window>
   )
@@ -646,14 +704,21 @@ function WidgetWindow({ w, def, id }: { w: WinState; def: WidgetDef; id: string 
 
 const AUTH_NOTICES: Record<string, { title: string; body?: string }> = {
   ok: { title: 'Signed in', body: 'Notes, launchers and layouts now sync. Spotlight searches your repositories too (try #123 or repo@branch).' },
-  error: { title: 'Sign-in failed', body: 'GitHub did not complete the sign-in. Try again.' },
-  off: { title: 'Sign-in is not set up', body: 'This server has no GitHub OAuth app configured.' },
+  error: { title: 'Sign-in failed', body: 'The sign-in did not complete. Try again.' },
+  off: { title: 'Sign-in is not set up', body: 'This server has no sign-in configured for that.' },
+  denied: { title: 'Not signed in', body: 'Access was not granted.' },
+  'linked-github': { title: 'GitHub linked', body: 'You can now sign in to this account with GitHub too.' },
+  'linked-google': { title: 'Google linked', body: 'You can now sign in to this account with Google too. Google Calendar is connected separately, in Settings → Integrations.' },
+  'app-error': { title: 'Not signed in', body: 'The app sign-in did not complete or expired. Try signing in again.' },
+  'link-error': { title: 'Not linked', body: 'Linking did not complete. Start again from Settings → Account, on this device, while signed in.' },
 }
 
 /** Sign-ins the server turned away (server/auth.ts finishLogin), shown as a dialog (here, and on a game's direct link: Play.tsx). */
 export const REFUSED: Record<string, (reason: string | null) => { title: string; body: string }> = {
-  full: () => ({ title: "We're full", body: 'MvL OS has room for a limited number of accounts, and they are all taken. Your GitHub account was not added. Try again later; you can keep using this desktop as a guest.' }),
-  closed: () => ({ title: 'Sign-up is closed', body: 'New accounts are not being made right now. Your GitHub account was not added; you can keep using this desktop as a guest.' }),
+  full: () => ({ title: "We're full", body: 'MvL OS has room for a limited number of accounts, and they are all taken. No account was made. Try again later; you can keep using this desktop as a guest.' }),
+  closed: () => ({ title: 'Sign-up is closed', body: 'New accounts are not being made right now. No account was made; you can keep using this desktop as a guest.' }),
+  'link-taken': () => ({ title: 'Already in use', body: 'That account already signs in to another MvL OS account, so it was not linked. Accounts are never merged: sign in with it to use that account, or delete that account first.' }),
+  'link-exists': () => ({ title: 'Already linked', body: 'This account already has a different one of those linked. Remove it in Settings → Account first.' }),
   banned: (reason) => ({ title: 'This account is blocked', body: reason ? `The admin blocked this account: ${reason.slice(0, 200)}` : 'The admin blocked this account from signing in.' }),
 }
 
@@ -661,7 +726,7 @@ const GOOGLE_NOTICES: Record<string, { title: string; body?: string }> = {
   ok: { title: 'Google Calendar connected', body: 'Add an Agenda widget from the desktop menu (Add widget) to see it.' },
   denied: { title: 'Google Calendar not connected', body: 'Access was not granted.' },
   error: { title: 'Google Calendar could not connect', body: 'Google did not complete it. Try again from Settings.' },
-  signin: { title: 'Sign in first', body: 'Google Calendar attaches to your GitHub sign-in.' },
+  signin: { title: 'Sign in first', body: 'Google Calendar attaches to your MvL OS account: sign in first.' },
   off: { title: 'Google Calendar is not set up', body: 'This server has no Google OAuth client configured.' },
 }
 
@@ -692,7 +757,7 @@ export function Shell() {
   // moment the desk behind it shows. Nothing of the desk may peek out from behind it then.
   const covered = wm.windows.some((w) => w.maximized && !w.minimized && !NOTE_APPS.has(w.app) && wm.shown(w))
 
-  // Phones: app windows are full-screen sheets, and the notes (sticky widgets too) go one under
+  // Phones: app windows are full-screen sheets; built-in notes go one under
   // the other down a desktop that scrolls when they don't fit (styles.css). A note brought to
   // the front, or just added, scrolls into view.
   const mobile = useIsMobile()
@@ -746,6 +811,16 @@ export function Shell() {
     window.addEventListener('mvlos:open', onOpen)
     return () => window.removeEventListener('mvlos:open', onOpen)
   }, [wm.open])
+
+  // An agent's `widget activate` puts the widget it made on the desktop (focuses it when it is there already).
+  useEffect(() => {
+    const onWidget = (e: Event) => {
+      const d = (e as CustomEvent<{ kind: string; id: string }>).detail
+      if (d && typeof d.kind === 'string' && typeof d.id === 'string') openWidget(wm, d.kind, d.id)
+    }
+    window.addEventListener('mvlos:open-widget', onWidget)
+    return () => window.removeEventListener('mvlos:open-widget', onWidget)
+  }, [wm])
 
   // A reboot (or powering on again) starts from a clean desk, like a real one.
   useEffect(() => {
@@ -839,16 +914,18 @@ export function Shell() {
       <TopBar />
       {/* Icons and windows. On phones this layer scrolls down when windows reach below the
           screen; the top bar, the dock and the wallpaper stay where they are. */}
-      <div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
+      <WidgetVisibility value={!hidden && !covered}><div className={`desk-scroll ${hidden ? 'is-notes-hidden' : ''} ${covered ? 'is-covered' : ''}`}>
         <Desktop />
         <main className="windows">
-          {wm.windows.map((w) => (
+          {/* A phone only draws the widgets whose package says it works there (`phone: true`). */}
+          {wm.windows.filter((w) => !mobile || w.app !== 'widget' || wm.shown(w)).map((w) => (
             <AppWindow key={w.pid} w={w} />
           ))}
           {/* Phones: where a note being moved up or down the column will land. */}
           <NoteStackSlot />
         </main>
       </div>
+      </WidgetVisibility>
       <SnapPreview />
       <Dock />
       {overlay === 'launchpad' && <Launchpad />}

@@ -1,0 +1,43 @@
+/* The handle useSplitter gives a vertical splitter: 8px wide, centred on the seam by its negative
+   margins (so it takes no room of its own), and a thin accent line while it is hovered, focused or
+   dragged. On touch it is wider, with a faint line always showing where it is. */
+.usplit {
+  position: relative;
+  z-index: 3;
+  flex: none;
+  width: 8px;
+  margin: 0 -4px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+}
+.usplit::after {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.usplit:hover::after,
+.usplit:focus-visible::after,
+.usplit.is-dragging::after {
+  background: var(--accent);
+}
+.usplit:focus-visible {
+  outline: none;
+}
+@media (pointer: coarse) {
+  .usplit {
+    width: 18px;
+    margin: 0 -9px;
+  }
+  .usplit::after {
+    inset: 0 8px;
+    background: color-mix(in srgb, var(--fg) 12%, transparent);
+  }
+  .usplit:hover::after,
+  .usplit:focus-visible::after,
+  .usplit.is-dragging::after {
+    background: var(--accent);
+  }
+}

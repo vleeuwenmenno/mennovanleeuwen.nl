@@ -1,19 +1,26 @@
+import { HOME_LEFT, HOME_TOP, HOME_GRID, mobileHomeGeometry } from './homeLayout'
 import { arrangeDesktop } from './widgetLayout'
-import { avoidWidgetOverlap, desktopLayoutPriority } from './widgetLayoutPrefs'
+import { avoidWidgetOverlap, desktopLayoutPriority, mobileLayoutPriority } from './widgetLayoutPrefs'
+import { closeGuards } from './closeGuards'
+export { setCloseGuard } from './closeGuards'
+import { fitWidget } from './widgetLayout'
+import { widgetRunsOnPhone } from '../widgets/platform/phone'
+import { installations } from '../widgets/platform/installations'
 import { snapReserve } from './dockPrefs'
 import { viewH, viewW } from './uiScale'
 import { persistentProps } from './windowProps'
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { appHere } from './cvMode'
 import { synced } from './synced'
-import { changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
+import { changeScreenWidgets, mobileWidgetPlaces, screenWidgets, changeSet, entriesOf, importLayoutWidgets, layoutGate, liveWidgets, newKey, nextAt, onImport, placedOnPhone, widgetPlaces, type WidgetPlace, type WidgetSet } from './widgetPlaces'
+import { widgetMigrationUnresolved } from './accountSpace'
 import { startupPrefs, useStartupPrefs } from './startup'
 import { notify } from './notify'
 import { opensMaximized } from './windowPrefs'
 import { newTab } from './powerState'
 import { rememberedWorkspace, moveTabWorkspace, startTabWorkspaces, stopTabWorkspaces, tabWorkspacePrefs, tabWorkspacesSupported, useTabWorkspaces } from './tabWorkspaces'
 
-export type AppId = 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp' | 'tasks' | 'contacts' | 'photos' | 'mail' | 'weather' | 'git' | 'changelog' | 'about' | 'imagestudio' | 'videostudio'
+export type AppId = 'widgetworkshop' | 'terminal' | 'files' | 'viewer' | 'preview' | 'player' | 'pdf' | 'archive' | 'office' | 'newdoc' | 'newsheet' | 'newslides' | 'notes' | 'keys' | 'projects' | 'recents' | 'cv' | 'contact' | 'games' | 'zed' | 'trash' | 'notebook' | 'widget' | 'settings' | 'mcserver' | 'linkforge' | 'calendar' | 'agents' | 'amp' | 'tasks' | 'contacts' | 'photos' | 'mail' | 'weather' | 'git' | 'changelog' | 'about' | 'imagestudio' | 'videostudio'
 
 export type WinState = {
   pid: number
@@ -178,8 +185,9 @@ const isPhone = () => window.innerWidth < 720
 export const workspaceOf = (w: Pick<WinState, 'app' | 'ws'>): number | null => (NOTE_APPS.has(w.app) ? null : (w.ws ?? 1))
 
 /** Whether a window is on the screen's workspace (minimized or not): always on a phone, where
- * every window is reachable as if there were just one workspace. */
-const onScreen = (state: Pick<State, 'ws' | 'phone'>, w: WinState) => state.phone || workspaceOf(w) === null || workspaceOf(w) === state.ws
+ * every window is reachable as if there were just one workspace. A widget only shows on a phone when
+ * its package says it works there (`phone: true`, see widgetRunsOnPhone); the others stay hidden. */
+const onScreen = (state: Pick<State, 'ws' | 'phone'>, w: WinState) => !(state.phone && w.app === 'widget' && !widgetRunsOnPhone(w.props.kind, w.props.id)) && (state.phone || workspaceOf(w) === null || workspaceOf(w) === state.ws)
 
 /** The frontmost window that shows on the current workspace, for focus to fall back to. */
 const topShown = (state: Pick<State, 'ws' | 'phone'>, windows: WinState[]) =>
@@ -435,6 +443,7 @@ function apply(state: State, action: Action): State {
         ...state,
         phone: action.phone,
         windows: state.windows.map((w) => {
+          if (w.app === 'widget') return action.phone ? w : { ...w, ...fitWidget(w.want ?? w, width, height) }
           if (w.snap) return { ...w, ...snapRect(w.snap, width, height) }
           const fresh = !state.touched && action.layout.find((l) => l.app === w.app)
           // Fitted from where it was put, not from an earlier fitting: a bigger screen gets it back as it was.
@@ -482,6 +491,7 @@ export function stackOrder(windows: WinState[]): number[] {
 /** How tall each note is drawn (pid → px): a long note runs on below its box (Window.tsx measures it). */
 const drawnWidths = new Map<number, number>()
 const drawnHeights = new Map<number, number>()
+export const drawnWidth = (pid: number) => drawnWidths.get(pid)
 export const drawnHeight = (pid: number) => drawnHeights.get(pid)
 export function setDrawnSize(pid: number, size: { w: number; h: number } | null) {
   if (size === null) { drawnWidths.delete(pid); drawnHeights.delete(pid) }
@@ -519,10 +529,12 @@ const sameGeometry = (a: Geometry | undefined, b: Geometry) => !!a && Math.round
  * Where a widget from the set goes on this screen. A big screen puts it where it was put, moved
  * along with the screen's size when that was another one (a widget near the right edge stays
  * near the right edge), and fitted on after that. One placed on a phone has no place on a big
- * screen yet: it gets the usual spot for a new widget. A phone stacks them in a column anyway.
+ * screen yet: it gets the usual spot for a new widget. Mobile has independent grid geometry;
+ * older column layouts use their saved order for the initial grid rows.
  */
 function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: number) => Geometry): Geometry {
-  if (phone || p.screenUnknown) return { x: p.x, y: p.y, w: p.w, h: p.h }
+  if (phone) return mobileHomeGeometry(p, i, viewW())
+  if (p.screenUnknown) return { x: p.x, y: p.y, w: p.w, h: p.h }
   if (placedOnPhone(p)) return place(i)
   const vw = viewW()
   const vh = viewH()
@@ -538,6 +550,7 @@ function widgetGeometry(p: WidgetPlace, i: number, phone: boolean, place: (n: nu
 /** The widgets of the set that this build knows, as this screen shows them. */
 function widgetsShown(all: WidgetSet, phone: boolean, known: (kind: string) => boolean, place: (n: number) => Geometry): WidgetShown[] {
   return liveWidgets(all)
+    .sort((a, b) => phone ? (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id) : 0)
     .filter((p) => known(p.kind))
     .map((p, i) => ({ id: p.id, kind: p.kind, g: widgetGeometry(p, i, phone, place), minimized: !!p.minimized, stack: p.stack }))
 }
@@ -580,7 +593,7 @@ function showWidgets(state: State, list: WidgetShown[]): State {
   const seen = new Set<string>()
   let changed = false
   let pid = state.nextPid
-  const fit = (g: Geometry, p?: number) => (state.phone ? g : fitNote(g, viewW(), viewH(), state.phone, p === undefined ? undefined : drawnHeights.get(p)))
+  const fit = (g: Geometry) => (state.phone ? g : fitWidget(g, viewW(), viewH()))
   const windows: WinState[] = []
   for (const w of state.windows) {
     if (w.app !== 'widget') {
@@ -597,7 +610,7 @@ function showWidgets(state: State, list: WidgetShown[]): State {
     if (sameGeometry(w.want ?? w, p.g) && w.minimized === p.minimized && w.stack === p.stack) windows.push(w)
     else {
       changed = true
-      windows.push({ ...w, ...fit(p.g, w.pid), want: p.g, minimized: p.minimized, stack: p.stack, snap: undefined, maximized: false })
+      windows.push({ ...w, ...fit(p.g), want: p.g, minimized: p.minimized, stack: p.stack, snap: undefined, maximized: false })
     }
   }
   const added: WinState[] = []
@@ -651,16 +664,7 @@ type WM = {
 
 const Ctx = createContext<WM | null>(null)
 
-/**
- * Windows that want a say before they close (Agents while a thread is answering): the guard
- * answers whether to close after all. Set by the window itself, removed when it unmounts.
- */
-const closeGuards = new Map<number, () => Promise<boolean> | boolean>()
 const asking = new Set<number>()
-export function setCloseGuard(pid: number, guard: (() => Promise<boolean> | boolean) | null) {
-  if (guard) closeGuards.set(pid, guard)
-  else closeGuards.delete(pid)
-}
 /** Files' trash view (see apps/Files.tsx). */
 const TRASH_PATH = 'trash://'
 
@@ -682,6 +686,8 @@ export function WindowManagerProvider({
   /** Whether this build has a widget of this kind (one from a newer release is left alone). */
   knownWidget?: (kind: string) => boolean
 }) {
+  // A widget's `phone` flag lives in its installed revision: when that changes, what a phone shows changes.
+  const phoneRecords = installations.use()
   // The saved windows that belong to another page (the CV apps' windows from /cv, on the plain
   // desktop): not shown here, but saved back with this page's windows so /cv keeps them.
   const held = useRef<SavedWindow[]>([])
@@ -705,7 +711,7 @@ export function WindowManagerProvider({
     // Widgets are there whatever the desktop starts with: they are part of it, not windows.
     const start = startupPrefs().windows
     const saved = usable(layoutStore().get())
-    const withWidgets = (s: State) => showWidgets(s, shownWidgets(widgetPlaces.get(), s.phone))
+    const withWidgets = (s: State) => showWidgets(s, shownWidgets(screenWidgets(s.phone), s.phone))
     if (start === 'empty') return withWidgets(fresh([]))
     // One workspace per tab: a reload starts on the workspace it had (it is about to get it back).
     const perTab = start === 'last' && tabWorkspacePrefs.get().perTab && tabWorkspacesSupported && !isPhone()
@@ -796,7 +802,7 @@ export function WindowManagerProvider({
   const applied = useRef(new Map<string, WidgetShown>())
   const showSet = useCallback(
     (all: WidgetSet) => {
-      const list = shownWidgets(all, stateRef.current.phone)
+      const list = shownWidgets(stateRef.current.phone ? screenWidgets(true) : all, stateRef.current.phone)
       for (const p of list) applied.current.set(p.id, p)
       dispatch({ type: 'widgets', list })
     },
@@ -809,6 +815,7 @@ export function WindowManagerProvider({
   const savedEdits = useRef(0)
   const saveNow = useCallback(() => {
     if (stateRef.current.edits === savedEdits.current) return
+    if (widgetMigrationUnresolved()) return
     // Starting with the welcome windows or nothing: the layout saved before stays as it was, for
     // when Last windows is chosen again (and other devices keep theirs).
     if (startupPrefs().windows !== 'last') return
@@ -856,7 +863,11 @@ export function WindowManagerProvider({
   // updates from another tab count too, even when no remote value callback runs.
   useEffect(() => layoutStore().onSynced(() => gate.current!.consume()), [])
 
-  useEffect(() => widgetPlaces.onRemote(showSet), [showSet])
+  useEffect(() => {
+    const desktop = widgetPlaces.onRemote(showSet)
+    const mobile = mobileWidgetPlaces.onRemote(() => { if (stateRef.current.phone) showSet(screenWidgets(true)) })
+    return () => { desktop(); mobile() }
+  }, [showSet])
   useEffect(() => onImport(() => showSet(widgetPlaces.get())), [showSet])
   // The phone's column and a big screen's places differ: turning the screen into the other kind
   // shows the set again for it.
@@ -866,14 +877,22 @@ export function WindowManagerProvider({
     firstPhone.current = state.phone
     showSet(widgetPlaces.get())
   }, [state.phone, showSet])
+  const explicitWidgetCloses = useRef(new Set<string>())
   const lastWidgets = useRef<Map<string, WinState> | null>(null)
+  const lastWidgetScreen = useRef(state.phone)
   useLayoutEffect(() => {
     const now = new Map<string, WinState>()
     for (const w of state.windows) if (w.app === 'widget' && w.props.id && w.props.kind && !now.has(w.props.id)) now.set(w.props.id, w)
     const before = lastWidgets.current
     lastWidgets.current = now
+    // A viewport switch projects a different set; it is never a user deletion/addition.
+    if (lastWidgetScreen.current !== state.phone) {
+      lastWidgetScreen.current = state.phone
+      lastWidgets.current = null
+      return
+    }
     if (!before) return
-    const all = widgetPlaces.get()
+    const all = screenWidgets(state.phone)
     const vw = viewW()
     const vh = viewH()
     const put: Record<string, WidgetPlace> = {}
@@ -887,19 +906,20 @@ export function WindowManagerProvider({
       const entry = entriesOf(all, id)[0]
       const rec = entry?.place
       const round = { x: Math.round(g.x), y: Math.round(g.y), w: Math.round(g.w), h: Math.round(g.h), vw, vh, phone: state.phone }
-      if (rec && state.phone) {
-        // A phone only says where in its column; the place on a big screen stays.
-        if (rec.stack === w.stack && !!rec.minimized === w.minimized) continue
-        put[entry.key] = { ...rec, stack: w.stack, minimized: w.minimized || undefined, at: nextAt(rec) }
-      } else put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round, stack: w.stack, minimized: w.minimized || undefined, at: nextAt(rec) }
+      put[entry?.key ?? newKey(all, id)] = { id, kind: w.props.kind!, ...round,
+        ...(state.phone ? { homeGrid: true } : {}), stack: w.stack,
+        minimized: w.minimized || undefined, at: nextAt(rec) }
+
       applied.current.delete(id)
     }
     for (const id of before.keys()) {
       if (now.has(id)) continue
       applied.current.delete(id)
+      // Runtime discovery, hydration and visibility are not removal authority.
+      if (!explicitWidgetCloses.current.delete(id)) continue
       for (const e of entriesOf(all, id)) remove.push(e.key)
     }
-    if (Object.keys(put).length || remove.length) widgetPlaces.set((cur) => changeSet(cur, put, remove))
+    if (Object.keys(put).length || remove.length) changeScreenWidgets(state.phone, (cur) => changeSet(cur, put, remove))
   }, [state.windows, state.phone])
 
   // A CV app opened away from /cv opens right here, on every page from then on (WinState.anywhere).
@@ -955,22 +975,28 @@ export function WindowManagerProvider({
   // Projection only: persistence and remote reconciliation above always see state.windows.
   // A manual move/resize owns its displayed position; neighbours are only nudged in this view.
   const avoidOverlap = avoidWidgetOverlap.use()
-  const layoutPriority = desktopLayoutPriority.use()
+  const desktopPriority = desktopLayoutPriority.use()
+  const mobilePriority = mobileLayoutPriority.use()
+  const layoutPriority = state.phone ? mobilePriority : desktopPriority
   // Watch only the resolved identity: replacing an entry can leave every window's geometry
   // unchanged, while a pointer move should not add a second render for each placement save.
-  const priorityWidgetId = useSyncExternalStore(widgetPlaces.subscribe, () =>
-    layoutPriority?.startsWith('widget:') ? widgetPlaces.get().places[layoutPriority.slice(7)]?.id : undefined,
+  const priorityWidgetId = useSyncExternalStore((notify) => {
+    const a = widgetPlaces.subscribe(notify), b = mobileWidgetPlaces.subscribe(notify)
+    return () => { a(); b() }
+  }, () =>
+    layoutPriority?.startsWith('widget:') ? screenWidgets(state.phone).places[layoutPriority.slice(7)]?.id : undefined,
   )
   const displayWindows = useMemo(() => {
-    if (state.phone || !avoidOverlap) return state.windows
-    const notes = state.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized)
+    if (!state.phone && !avoidOverlap) return state.windows
+    const notes = state.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized && onScreen(state, w))
       .sort((a, b) => (a.props.id ?? a.app).localeCompare(b.props.id ?? b.app) || a.pid - b.pid)
     // Pids are session-local. Resolve the remembered entry only if it still exists; a removed
     // widget's priority must not attach to a reused pid or to a new placement of the same widget.
     const priorityPid = notes.find((w) => w.app === 'widget' ? !!priorityWidgetId && w.props.id === priorityWidgetId : layoutPriority === `note:${w.app}`)?.pid
-    const positions = arrangeDesktop(notes.map((w) => ({ ...w, drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid)
+    // A viewport fit may clamp state geometry; explicit overflow placement keeps its canonical Y.
+    const positions = arrangeDesktop(notes.map((w) => ({ ...w, ...(w.pid === priorityPid && w.want ? { y: w.want.y } : {}), drawnW: drawnWidths.get(w.pid), drawnH: drawnHeights.get(w.pid) })), viewW(), viewH(), priorityPid, state.phone)
     return state.windows.map((w) => positions.has(w.pid) ? { ...w, ...positions.get(w.pid)! } : w)
-  }, [state.windows, state.phone, avoidOverlap, layoutPriority, priorityWidgetId])
+  }, [state.windows, state.phone, avoidOverlap, layoutPriority, priorityWidgetId, phoneRecords])
 
   const value = useMemo<WM>(() => {
     const visible = state.windows.filter((w) => !w.minimized && onScreen(state, w))
@@ -982,14 +1008,17 @@ export function WindowManagerProvider({
       open,
       openNew,
       close: (pid) => {
-        const guard = closeGuards.get(pid)
-        if (!guard) return dispatch({ type: 'close', pid })
+        const finish = () => {
+          const target=stateRef.current.windows.find(w=>w.pid===pid)
+          if(target?.app==='widget'&&target.props.id)explicitWidgetCloses.current.add(target.props.id)
+          dispatch({type:'close',pid})
+        }
+        if (!closeGuards.has(pid)) return finish()
         if (asking.has(pid)) return // its question is already on screen
         asking.add(pid)
         Promise.resolve()
-          .then(guard)
-          .catch(() => true)
-          .then((ok) => ok && dispatch({ type: 'close', pid }))
+          .then(() => closeGuards.allow(pid))
+          .then((ok) => ok && finish())
           .finally(() => asking.delete(pid))
       },
       focus: (pid) => {
@@ -1001,13 +1030,20 @@ export function WindowManagerProvider({
       toggleMax: (pid) => dispatch({ type: 'toggleMax', pid }),
       setGeometry: (pid, geometry, { automatic = false } = {}) => {
         const shown = displayWindows.find((w) => w.pid === pid)
-        if (shown && NOTE_APPS.has(shown.app) && !state.phone) {
+        if (shown && NOTE_APPS.has(shown.app)) {
           if (!automatic) {
-            const entry = shown.app === 'widget' ? entriesOf(widgetPlaces.get(), shown.props.id ?? '')[0] : undefined
-            desktopLayoutPriority.set(shown.app === 'widget' ? (entry ? `widget:${entry.key}` : null) : `note:${shown.app}`)
+            const entry = shown.app === 'widget' ? entriesOf(screenWidgets(state.phone), shown.props.id ?? '')[0] : undefined
+            ;(state.phone ? mobileLayoutPriority : desktopLayoutPriority).set(shown.app === 'widget' ? (entry ? `widget:${entry.key}` : null) : `note:${shown.app}`)
           }
           // Resizing a nudged note keeps its visible origin; only this note becomes canonical.
           geometry = { x: shown.x, y: shown.y, w: shown.w, h: shown.h, ...geometry }
+        }
+        if (shown && NOTE_APPS.has(shown.app) && state.phone && !automatic) {
+          const snap = (n: number, origin: number) => origin + Math.round((n - origin) / HOME_GRID) * HOME_GRID
+          geometry = { ...geometry,
+            ...(geometry.x !== undefined ? { x: Math.max(HOME_LEFT, snap(geometry.x, HOME_LEFT)) } : {}),
+            ...(geometry.y !== undefined ? { y: Math.max(HOME_TOP, snap(geometry.y, HOME_TOP)) } : {}),
+          }
         }
         dispatch({ type: 'setGeometry', pid, geometry })
       },
@@ -1035,7 +1071,7 @@ export function WindowManagerProvider({
         layoutStore().set(null)
       },
     }
-  }, [displayWindows, state.windows, state.focused, state.ws, state.phone, state.away, open, openNew, relayout, elsewhereNotice, nameOf, tabs.status])
+  }, [state.windows, displayWindows, state.focused, state.ws, state.phone, state.away, open, openNew, relayout, elsewhereNotice, nameOf, tabs.status, phoneRecords])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

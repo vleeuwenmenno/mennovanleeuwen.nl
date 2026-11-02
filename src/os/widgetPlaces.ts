@@ -1,147 +1,14 @@
+import { mobileHomeGeometry } from './homeLayout'
 import { synced } from './synced'
 import { viewH, viewW } from './uiScale'
+import { accountGuard } from './accountSpace'
+import { canonicalPlacements, hasWidgetCutover, widgetsHydrated } from '../widgets/platform/canonicalState'
+import { changeSet, newKey, nextAt, importPlaces, num, normalizeSet, mergeSets, liveWidgets as liveSet, type WidgetPlace, type WidgetSet } from '../widgets/platform/placementSet'
+export { changeSet, entriesOf, mergeSets, newKey, nextAt, normalizeSet, placedOnPhone, removedKeys, wins } from '../widgets/platform/placementSet'
+export type { WidgetPlace, WidgetSet } from '../widgets/platform/placementSet'
 
-// Which widgets are on the desktop and where (src/widgets). Kept apart from the window layout
-// (wm.tsx) so they follow the account as a set merged entry by entry, like notes: two devices
-// adding widgets at the same time both keep theirs, and one device moving a widget doesn't put
-// back the windows another device closed. Phones and bigger screens share the one set; a phone
-// keeps the place a widget was put on a big screen, and only changes its place in the phone's
-// column of notes (`stack`).
-//
-// Each time a widget goes on the desktop it is a new entry, under a key of its own: the widget's
-// id the first time, a variant of it if that widget (a sticky's note) is put back after being
-// taken off. Entries carry a change counter (`at`): per entry, the higher one wins. A change made
-// here counts on from the entry it changes (nextAt), so a device whose clock runs behind still
-// wins with a change made after one from a device whose clock runs ahead; equal counters are
-// broken the same way everywhere. Taking a widget off removes its entry for good: its key goes
-// into `removed`, and no change from anywhere brings that key back, however late it turns up.
-// That list is only the keys (9 bytes each for most widgets), so it stays small enough to keep for
-// good. Entries moved over from an older window layout get `at: 0`, so anything done to that
-// widget since, anywhere, wins over them.
-
-export type WidgetPlace = {
-  /** The widget (its window's props.id, its settings' key; a sticky's note id) */
-  id: string
-  kind: string
-  /** Where it was put on a big screen, on a screen `vw` × `vh` px (see wm.tsx widgetGeometry). */
-  x: number
-  y: number
-  w: number
-  h: number
-  /** Legacy layouts did not record screen dimensions; keep their coordinates without scaling. */
-  screenUnknown?: boolean
-  /** Screen class is independent of logical dimensions at a high UI scale. Absent in old saves. */
-  phone?: boolean
-  vw: number
-  vh: number
-  /** Its place in the phone layout's column, once moved there by hand. */
-  stack?: number
-  minimized?: boolean
-  /** Change counter for merging (see nextAt); 0 for one moved over from a window layout. */
-  at: number
-}
-
-/** The set: the entries on the desktop by key, and the keys of those taken off, space-separated and sorted. */
-export type WidgetSet = { places: Record<string, WidgetPlace>; removed: string }
-
-const EMPTY: WidgetSet = { places: {}, removed: '' }
-const num = (v: unknown, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d)
-const KEY = /^[^\s]{1,80}$/
-
-function place(id: string, raw: Partial<WidgetPlace>): WidgetPlace {
-  return {
-    id,
-    kind: raw.kind!,
-    x: num(raw.x),
-    y: num(raw.y),
-    w: num(raw.w, 280),
-    h: num(raw.h, 260),
-    ...(raw.screenUnknown ? { screenUnknown: true } : {}),
-    ...(typeof raw.phone === 'boolean' ? { phone: raw.phone } : {}),
-    vw: num(raw.vw),
-    vh: num(raw.vh),
-    ...(typeof raw.stack === 'number' ? { stack: raw.stack } : {}),
-    ...(raw.minimized ? { minimized: true } : {}),
-    at: num(raw.at),
-  }
-}
-
-export const removedKeys = (set: WidgetSet) => new Set(set.removed ? set.removed.split(' ') : [])
-const joinKeys = (keys: Iterable<string>) => [...new Set(keys)].filter((k) => KEY.test(k)).sort().join(' ')
-
-/** Reads the set, including the first format (one record per widget id, `removed: true` for one taken off). */
-export function normalizeSet(v: unknown): WidgetSet {
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return EMPTY
-  const o = v as { places?: unknown; removed?: unknown }
-  const first = !('places' in o)
-  const entries = Object.entries((first ? o : o.places) as Record<string, Partial<WidgetPlace> & { removed?: unknown }>)
-  const removed = new Set(!first && typeof o.removed === 'string' && o.removed ? o.removed.split(' ') : [])
-  const places: Record<string, WidgetPlace> = {}
-  for (const [key, raw] of entries) {
-    if (!raw || typeof raw !== 'object' || typeof raw.kind !== 'string' || !KEY.test(key)) continue
-    if (raw.removed) removed.add(key)
-    else places[key] = place(typeof raw.id === 'string' && raw.id ? raw.id : key, raw)
-  }
-  for (const k of removed) delete places[k]
-  return { places, removed: joinKeys(removed) }
-}
-
-/** The counter for a change to `existing` made now: past the entry's own, whatever the clock says. */
-export const nextAt = (existing?: Pick<WidgetPlace, 'at'>) => Math.max(Date.now(), (existing?.at ?? 0) + 1)
-
-/** Old saves used screen pixels and can still infer their screen class from the width. */
-export const placedOnPhone = (p: WidgetPlace) => p.phone ?? p.vw < 720
-
-/** Whether `a` wins over `b`: the higher counter, then (a tie) the same pick on every device. */
-export function wins(a: WidgetPlace, b: WidgetPlace): boolean {
-  if (a.at !== b.at) return a.at > b.at
-  if (placedOnPhone(a) !== placedOnPhone(b)) return !placedOnPhone(a)
-  if (a.vw !== b.vw) return a.vw > b.vw
-  return JSON.stringify(place(a.id, a)) > JSON.stringify(place(b.id, b))
-}
-
-/** Per entry, the side that changed it last wins; entries only one side has are kept; removed is removed. */
-export function mergeSets(local: WidgetSet, remote: WidgetSet): WidgetSet {
-  const removed = new Set([...removedKeys(remote), ...removedKeys(local)])
-  const places: Record<string, WidgetPlace> = {}
-  for (const [k, r] of Object.entries(remote.places)) if (!removed.has(k)) places[k] = r
-  for (const [k, l] of Object.entries(local.places)) if (!removed.has(k) && (!places[k] || wins(l, places[k]))) places[k] = l
-  return { places, removed: joinKeys(removed) }
-}
-
-export const widgetPlaces = synced<WidgetSet>('widgets:placed', EMPTY, { normalize: normalizeSet, merge: mergeSets, mergeTabs: true })
-
-/** The widgets on the desktop. */
-export const liveWidgets = (set: WidgetSet = widgetPlaces.get()) =>
-  Object.keys(set.places)
-    .sort()
-    .map((k) => set.places[k])
-
-/** The entries of a widget on the desktop (one, unless two devices put it back at once), first key first. */
-export const entriesOf = (set: WidgetSet, id: string) =>
-  Object.keys(set.places)
-    .filter((k) => set.places[k].id === id)
-    .sort()
-    .map((key) => ({ key, place: set.places[key] }))
-
-/** A key for a new entry of widget `id`: its id, unless that was used before. */
-export function newKey(set: WidgetSet, id: string): string {
-  const removed = removedKeys(set)
-  if (!set.places[id] && !removed.has(id)) return id
-  let key: string
-  do key = `${id}~${Math.random().toString(36).slice(2, 7)}`
-  while (set.places[key] || removed.has(key))
-  return key
-}
-
-/** `set` with these entries changed or added and these keys removed. */
-export function changeSet(set: WidgetSet, put: Record<string, WidgetPlace>, remove: string[] = []): WidgetSet {
-  const removed = removedKeys(set)
-  const places = { ...set.places }
-  for (const [k, p] of Object.entries(put)) if (!removed.has(k)) places[k] = p
-  for (const k of remove) delete places[k]
-  return { places, removed: remove.length ? joinKeys([...removed, ...remove]) : set.removed }
-}
+export const widgetPlaces = canonicalPlacements
+export const liveWidgets = (set: WidgetSet = widgetPlaces.get()) => liveSet(set)
 
 /**
  * Adds widgets from an older window layout that the set doesn't know yet (not even as removed),
@@ -149,20 +16,26 @@ export function changeSet(set: WidgetSet, put: Record<string, WidgetPlace>, remo
  * by the equal-counter preference (desktop first). Returns whether anything changed.
  */
 export function importWidgets(found: Omit<WidgetPlace, 'at'>[]): boolean {
-  const eligible = (set: WidgetSet, f: Omit<WidgetPlace, 'at'>) => {
-    if (!f.id || !KEY.test(f.id) || removedKeys(set).has(f.id)) return false
-    const entries = entriesOf(set, f.id)
-    return !entries.length || (entries.length === 1 && entries[0].key === f.id && entries[0].place.at === 0 && wins({ ...f, at: 0 }, entries[0].place))
-  }
-  const missing = found.filter((f) => eligible(widgetPlaces.get(), f))
-  if (!missing.length) return false
-  widgetPlaces.set((cur) => changeSet(cur, Object.fromEntries(missing.filter((f) => eligible(cur, f)).map((f) => [f.id, { ...f, at: 0 }]))))
+  // Once the canonical envelope exists, old clients' layout writes are never input again.
+  if (hasWidgetCutover()) return false
+  if (importPlaces(widgetPlaces.get(), found) === widgetPlaces.get()) return false
+  widgetPlaces.set(cur => importPlaces(cur, found))
   imported.forEach((l) => l())
   return true
 }
 
+/** Explicit new-client placement gesture. Legacy layout import must never call this. */
+export function placeWidgets(found: Omit<WidgetPlace,'at'>[]) {
+  widgetPlaces.set(set=>{
+    let next=set
+    for(const value of found){const existing=Object.entries(next.places).find(([,p])=>p.id===value.id);const key=existing?.[0]??newKey(next,value.id);next=changeSet(next,{[key]:{...value,at:nextAt(existing?.[1])}})}
+    return next
+  })
+  imported.forEach(listener=>listener())
+}
+
 const imported = new Set<() => void>()
-/** Called after widgets were moved over from a window layout (the window manager shows them). */
+/** Reproject widget windows after legacy import or deferred mobile initialization. */
 export function onImport(l: () => void) {
   imported.add(l)
   return () => {
@@ -216,4 +89,98 @@ export function layoutGate(neverSynced: boolean) {
       first = false
     },
   })
+}
+
+/** Null means inherit the legacy shared setup until the first explicit mobile edit. An empty
+ * set is intentional (all mobile widgets removed), and must never fall back to the desktop. */
+export const mobileWidgetPlaces = synced<WidgetSet | null>('widgets:placed:mobile', null, {
+  normalize: (v) => v == null ? null : normalizeSet(v),
+  merge: (a, b) => a === null ? b : b === null ? a : mergeSets(a, b),
+  mergeTabs: true,
+})
+export const widgetsForScreen = (desktop: WidgetSet, mobile: WidgetSet | null, phone: boolean): WidgetSet =>
+  phone ? mobile ?? desktop : desktop
+// Until canonical hydration, the inherited desktop is unknown. Keep only explicit edits,
+// never an empty snapshot or a callback that could later close over a different account/view.
+type PendingMobile = { delta: WidgetSet; width: number; height: number; stop: (() => void)[] }
+let pendingMobile: PendingMobile | undefined
+let mobileDisposed = false
+const EMPTY_MOBILE: WidgetSet = { places: {}, removed: '' }
+const applyMobile = (base: WidgetSet, delta: WidgetSet, rebase = false) => changeSet(base,
+  rebase ? Object.fromEntries(Object.entries(delta.places).map(([key, place]) => [key, { ...place, at: Math.max(place.at, (base.places[key]?.at ?? -1) + 1) }])) : delta.places,
+  delta.removed ? delta.removed.split(' ') : [])
+export const screenWidgets = (phone: boolean): WidgetSet => {
+  if (!phone) return widgetPlaces.get()
+  const base = mobileWidgetPlaces.get() ?? widgetPlaces.get()
+  return pendingMobile ? applyMobile(migrateMobileWidgets(base, pendingMobile.width, pendingMobile.height), pendingMobile.delta) : base
+}
+function clearPendingMobile() {
+  const pending = pendingMobile
+  pendingMobile = undefined
+  pending?.stop.forEach(stop => stop())
+}
+function disposeMobile() {
+  mobileDisposed = true
+  clearPendingMobile()
+}
+function finishPendingMobile() {
+  const pending = pendingMobile
+  if (!pending || mobileDisposed) return
+  if (!accountGuard()) { disposeMobile(); return }
+  // A separate mobile set from another tab is also a complete base; it needs no desktop seed.
+  if (!widgetsHydrated() && mobileWidgetPlaces.get() === null) return
+  mobileWidgetPlaces.set(current => applyMobile(migrateMobileWidgets(current ?? widgetPlaces.get(), pending.width, pending.height), pending.delta, true))
+  clearPendingMobile()
+  // A local commit is not an onRemote event. Reconcile the WM even when hydration's desktop
+  // projection was unchanged (for example an empty inherited account).
+  imported.forEach(listener => listener())
+}
+export function changeScreenWidgets(phone: boolean, fn: (set: WidgetSet) => WidgetSet) {
+  if (!phone) { widgetPlaces.set(fn); return }
+  if (mobileDisposed || !accountGuard()) return
+  if (!pendingMobile && (widgetsHydrated() || mobileWidgetPlaces.get() !== null)) {
+    mobileWidgetPlaces.set(current => fn(migrateMobileWidgets(current ?? widgetPlaces.get(), viewW(), viewH())))
+    return
+  }
+  const width = pendingMobile?.width ?? viewW(), height = pendingMobile?.height ?? viewH()
+  const before = migrateMobileWidgets(screenWidgets(true), width, height)
+  const after = fn(before)
+  const put = Object.fromEntries(Object.entries(after.places).filter(([key, place]) => JSON.stringify(place) !== JSON.stringify(before.places[key])))
+  const beforeRemoved = new Set(before.removed.split(' '))
+  const remove = [...new Set([
+    ...after.removed.split(' ').filter(key => key && !beforeRemoved.has(key)),
+    ...Object.keys(before.places).filter(key => !after.places[key]),
+  ])]
+  if (!Object.keys(put).length && !remove.length) return
+  const delta = changeSet(pendingMobile?.delta ?? EMPTY_MOBILE, put, remove)
+  if (!pendingMobile) {
+    const pending: PendingMobile = { delta, width, height, stop: [] }
+    pendingMobile = pending
+    if (typeof window !== 'undefined') {
+      const hide = (event: PageTransitionEvent) => { if (!event.persisted) disposeMobile() }
+      window.addEventListener('pagehide', hide)
+      window.addEventListener('mvlos:forget', disposeMobile)
+      window.addEventListener('mvlos:account-changed', disposeMobile)
+      pending.stop.push(() => {
+        window.removeEventListener('pagehide', hide)
+        window.removeEventListener('mvlos:forget', disposeMobile)
+        window.removeEventListener('mvlos:account-changed', disposeMobile)
+      })
+    }
+    // onSynced can call synchronously when already ready; don't leak the unsubscribe it returns.
+    const watch = (stop: () => void) => { if (pendingMobile === pending) pending.stop.push(stop); else stop() }
+    watch(mobileWidgetPlaces.onRemote(finishPendingMobile))
+    watch(widgetPlaces.onSynced(finishPendingMobile))
+  } else pendingMobile.delta = delta
+  finishPendingMobile()
+}
+if (import.meta.hot) import.meta.hot.dispose(disposeMobile)
+
+/** Freeze the old column's ordered starting coordinates on first edit, without touching its source.
+ * Otherwise deleting an earlier legacy entry would change every later entry's row on reload. */
+export function migrateMobileWidgets(set: WidgetSet, width: number, height: number): WidgetSet {
+  const ordered = Object.entries(set.places).sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
+  return { ...set, places: Object.fromEntries(ordered.map(([key, p], index) => [key, p.homeGrid ? p : {
+    ...p, ...mobileHomeGeometry(p, index, width), homeGrid: true, phone: true, vw: width, vh: height, at: nextAt(p),
+  }])) }
 }
