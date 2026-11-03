@@ -443,7 +443,7 @@ try {
   assert.deepEqual(catalog.samplers, ['euler', 'euler_ancestral', 'dpmpp_2m', 'dpmpp_3m_sde', 'dpmpp_sde'])
   assert.deepEqual(catalog.schedulers, ['simple', 'beta', 'karras', 'normal', 'sgm_uniform'])
   assert.deepEqual(new Set(catalog.nodes), new Set(Object.keys(info)))
-  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'LoadImageMask', 'MaskToImage', 'ImageToMask', 'SetLatentNoiseMask', 'ImageCompositeMasked', 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete', 'EmptyFlux2LatentImage'])
+  assert.deepEqual(discoveryRequests, [...Object.keys(info), 'UpscaleModelLoader', 'ImageUpscaleWithModel', 'LoadImageMask', 'MaskToImage', 'ImageToMask', 'SetLatentNoiseMask', 'ImageCompositeMasked', 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete', 'EmptyFlux2LatentImage', 'TextGenerate'])
   // Without the ComfyUI-RMBG nodes, automatic masks and LaMa removal are reported off, nothing else changes.
   assert.equal(catalog.autoMask, false); assert.match(catalog.autoMaskError, /SAM3Segment or SAM2Segment/); assert.equal(catalog.remove, false)
   assert.ok(Buffer.byteLength(irrelevantCatalog) > 8 * 1024 * 1024)
@@ -508,6 +508,49 @@ try {
     assert.throws(() => imageWorkflow(moss, { prompt: 'x', loras: chain }, { nodes: ['LoraLoader'] }), /MOSS Image requires a model-only LoRA loader/)
     assert.throws(() => imageWorkflow(moss, { prompt: 'x', clip_skip: 2 }), /clip_skip applies/)
     assert.ok(PRESETS.includes('moss_image'), 'generate_image and list_image_models offer moss_image')
+  }
+  // Optional native prompt enhancement (TextGenerate), as in the official MOSS Image and Krea 2 templates.
+  {
+    const { enhancerProblem, MOSS_ENHANCER_SYSTEM_PROMPT, KREA2_ENHANCER_SYSTEM_PROMPT } = await import('../server/agentImageEnhancer.ts')
+    const named = (preset: 'moss_image' | 'krea2_raw' | 'krea2_turbo') => ({ ...settings, preset, model: 'm.safetensors', clip: 'encoder.safetensors', vae: 'vae.safetensors' })
+    for (const preset of ['moss_image', 'krea2_raw', 'krea2_turbo'] as const) {
+      const base = imageWorkflow(named(preset), { prompt: 'a red fox', negative_prompt: preset === 'krea2_turbo' ? undefined : 'blur', seed: 7 })
+      // Absent, false, or only a seed: the exact old graph, and the seed alone does not switch it on.
+      for (const input of [{}, { enable_prompt_enhancer: false }, { prompt_enhancer_seed: 5 }]) assert.deepEqual(imageWorkflow(named(preset), { prompt: 'a red fox', negative_prompt: preset === 'krea2_turbo' ? undefined : 'blur', seed: 7, ...input }).graph, base.graph, preset)
+      assert.ok(!base.graph.enhance && base.enhancer === null && base.graph['4'].inputs.text === 'a red fox')
+      const on = imageWorkflow(named(preset), { prompt: 'a red fox', negative_prompt: preset === 'krea2_turbo' ? undefined : 'blur', seed: 7, enable_prompt_enhancer: true, prompt_enhancer_seed: 123 })
+      const node = on.graph.enhance
+      assert.equal(node.class_type, 'TextGenerate'); assert.deepEqual(node.inputs.clip, ['2', 0])
+      assert.equal(node.inputs.sampling_mode, 'on'); assert.equal(node.inputs['sampling_mode.seed'], 123, 'own seed'); assert.equal(on.seed, 7, 'image seed untouched')
+      assert.deepEqual(on.graph['4'].inputs.text, ['enhance', 0], 'the caption feeds the positive encoder')
+      assert.equal(on.graph['7'].inputs.positive[0], '4')
+      assert.deepEqual([node.inputs['sampling_mode.temperature'], node.inputs['sampling_mode.top_k'], node.inputs['sampling_mode.top_p'], node.inputs['sampling_mode.min_p']], [0.7, 64, 0.95, 0.05])
+      assert.equal(node.inputs.use_default_template, true); assert.deepEqual(on.enhancer, { seed: 123 })
+      assert.equal(on.graph['5'].inputs.text ?? 'zeroed', preset === 'krea2_turbo' ? 'zeroed' : 'blur', 'negative prompt is not enhanced')
+      if (preset === 'krea2_turbo') assert.deepEqual(on.graph['5'].inputs.conditioning, ['4', 0])
+      if (preset === 'moss_image') assert.deepEqual([node.inputs.system_prompt, node.inputs.prompt, node.inputs.max_length, node.inputs['sampling_mode.repetition_penalty'], node.inputs.thinking, node.inputs.mtp], [MOSS_ENHANCER_SYSTEM_PROMPT, 'a red fox', 4096, 1, false, 'auto'])
+      else assert.deepEqual([node.inputs.prompt, node.inputs.max_length, node.inputs['sampling_mode.repetition_penalty'], node.inputs.thinking, 'system_prompt' in node.inputs], [`${KREA2_ENHANCER_SYSTEM_PROMPT}a red fox`, 512, 1.05, true, false])
+    }
+    assert.ok(MOSS_ENHANCER_SYSTEM_PROMPT.startsWith('You are a prompt engineer for an image generation model.') && KREA2_ENHANCER_SYSTEM_PROMPT.endsWith("User's Input:\n"))
+    const random = imageWorkflow(named('moss_image'), { prompt: 'x', enable_prompt_enhancer: true })
+    assert.ok(Number.isSafeInteger(random.enhancer!.seed) && random.enhancer!.seed >= 0 && random.graph.enhance.inputs['sampling_mode.seed'] === random.enhancer!.seed, 'random seed is recorded')
+    for (const bad of [{ prompt_enhancer_seed: -1 }, { prompt_enhancer_seed: 1.5 }, { prompt_enhancer_seed: '3' }]) assert.throws(() => imageWorkflow(named('moss_image'), { prompt: 'x', ...bad }), /prompt_enhancer_seed/)
+    assert.throws(() => imageWorkflow(named('moss_image'), { prompt: 'x', enable_prompt_enhancer: 'yes' }), /true or false/)
+    assert.throws(() => imageWorkflow({ ...settings, preset: 'sdxl' }, { prompt: 'x', enable_prompt_enhancer: true }), /MOSS Image, Krea2 Raw and Krea2 Turbo only/)
+    assert.doesNotThrow(() => imageWorkflow({ ...settings, preset: 'sdxl' }, { prompt: 'x', enable_prompt_enhancer: false }))
+    // Capability: judged from the installed TextGenerate schema.
+    const field = (type: string) => [type, {}]
+    const schema = { input: { required: { clip: field('CLIP'), prompt: field('STRING'), max_length: field('INT'), sampling_mode: ['COMFY_DYNAMICCOMBO_V3', { options: [{ key: 'on', inputs: { required: Object.fromEntries(['temperature', 'top_k', 'top_p', 'min_p', 'repetition_penalty', 'seed'].map((k) => [k, field('FLOAT')])) } }, { key: 'off', inputs: { required: {} } }] }] }, optional: { thinking: field('BOOLEAN'), use_default_template: field('BOOLEAN'), mtp: field('COMBO'), system_prompt: field('STRING') } } }
+    // The schema a real ComfyUI 0.43.0 answers on /object_info/TextGenerate (verified against its live graph run).
+    const real = JSON.parse((await import('node:fs')).readFileSync(new URL('./fixtures/comfyui-0.43.0-object_info-TextGenerate.json', import.meta.url), 'utf8'))
+    for (const preset of ['moss_image', 'krea2_raw', 'krea2_turbo'] as const) assert.equal(enhancerProblem(preset, real, ['TextGenerate']), '', `${preset} runs on the real 0.43.0 schema`)
+    assert.equal(enhancerProblem('moss_image', { TextGenerate: schema }, ['TextGenerate']), ''); assert.equal(enhancerProblem('krea2_raw', { TextGenerate: schema }, ['TextGenerate']), '')
+    assert.match(enhancerProblem('moss_image', {}, []), /newer ComfyUI with the TextGenerate node/)
+    const noSystem = { input: { required: schema.input.required, optional: { ...schema.input.optional, system_prompt: undefined as never } } }; delete (noSystem.input.optional as Record<string, unknown>).system_prompt
+    assert.match(enhancerProblem('moss_image', { TextGenerate: noSystem }, ['TextGenerate']), /lacks system_prompt/); assert.equal(enhancerProblem('krea2_turbo', { TextGenerate: noSystem }, ['TextGenerate']), '', 'Krea2 sends no system_prompt input')
+    const noSeed = { input: { required: { ...schema.input.required, sampling_mode: ['COMFY_DYNAMICCOMBO_V3', { options: [{ key: 'on', inputs: { required: { temperature: field('FLOAT') } } }] }] }, optional: schema.input.optional } }
+    assert.match(enhancerProblem('moss_image', { TextGenerate: noSeed }, ['TextGenerate']), /no top_k, top_p, min_p, repetition_penalty, seed sampling input/)
+    assert.match(enhancerProblem('sdxl', { TextGenerate: schema }, ['TextGenerate']), /not available for this workflow/)
   }
   assert.equal(imageWorkflow(settings, { prompt: 'default weight', loras: [{ name: loraNames[0] }] }).graph['10'].inputs.strength_model, 1)
   for (const loras of [null, {}, Array.from({ length: 6 }, () => chain[0]), [{ name: 'a', weight: NaN }], [{ name: 'a', weight: Infinity }], [{ name: 'a', weight: -0.1 }], [{ name: 'a', weight: 2.1 }], [{ name: 'a', weight: '1' }]]) {
@@ -1515,6 +1558,25 @@ try {
   delete info.VAEEncode
   await assert.rejects(prepareImageGeneration(admin, editThread.id, { prompt: 'edit', source_image_id: sourceId }, new AbortController().signal), /needs LoadImage/)
   info.VAEEncode = { input: { required: {} } }
+  // A LoRA made for another model-only family is refused: ComfyUI would skip all its keys without an error (a Krea 2 LoRA on MOSS Image renders pixel-identical to none).
+  await assert.rejects(prepareImageGeneration(admin, editThread.id, { preset: 'z_image', model: 'z-test.safetensors', clip: 'encoder.safetensors', vae: 'vae.safetensors', prompt: 'x', loras: [{ name: loraNames[0], weight: 1 }] }, new AbortController().signal), (e: any) => e.status === 409 && /Krea2, not Z-Image/.test(e.message) && /declared base model/.test(e.message))
+  // Prompt enhancement is planned against the installed TextGenerate schema; recorded only when on.
+  {
+    const kreaInput = { preset: 'krea2_turbo', model: 'krea-turbo.safetensors', clip: 'qwen3vl_4b.safetensors', vae: 'qwen_image_vae.safetensors', prompt: 'a lighthouse', seed: 5 }
+    const plain = await prepareImageGeneration(admin, editThread.id, kreaInput, new AbortController().signal)
+    assert.ok(!('enable_prompt_enhancer' in plain.parameters) && !('prompt_enhancer_seed' in plain.parameters) && !plain.summary.rows.some(([k]: string[]) => k === 'Prompt enhancement'), 'off by default: nothing recorded, no card row')
+    await assert.rejects(prepareImageGeneration(admin, editThread.id, { ...kreaInput, enable_prompt_enhancer: true }, new AbortController().signal), (e: any) => e.status === 409 && /TextGenerate/.test(e.message))
+    const field = (type: string) => [type, {}]
+    info.TextGenerate = { input: { required: { clip: field('CLIP'), prompt: field('STRING'), max_length: field('INT'), sampling_mode: ['COMFY_DYNAMICCOMBO_V3', { options: [{ key: 'on', inputs: { required: Object.fromEntries(['temperature', 'top_k', 'top_p', 'min_p', 'repetition_penalty', 'seed'].map((k) => [k, field('FLOAT')])) } }] }] }, optional: { thinking: field('BOOLEAN'), use_default_template: field('BOOLEAN') } } }
+    try {
+      const planned = await prepareImageGeneration(admin, editThread.id, { ...kreaInput, enable_prompt_enhancer: true, prompt_enhancer_seed: 31 }, new AbortController().signal)
+      assert.ok(planned.summary.rows.some(([k, v]: string[]) => k === 'Prompt enhancement' && v.includes('seed 31')), 'the approval card says so')
+      assert.deepEqual([(planned.parameters as any).enable_prompt_enhancer, (planned.parameters as any).prompt_enhancer_seed, planned.parameters.seed], [true, 31, 5], 'recorded with its own seed')
+      await assert.rejects(prepareImageGeneration(admin, editThread.id, { preset: 'sdxl', model: 'test.safetensors', prompt: 'x', enable_prompt_enhancer: true }, new AbortController().signal), /MOSS Image, Krea2 Raw and Krea2 Turbo only/)
+      assert.match(JSON.stringify((await json('GET', '/api/agents/images/catalog')).promptEnhancer), /"krea2_turbo":""/)
+    } finally { delete info.TextGenerate }
+    assert.match((await json('GET', '/api/agents/images/catalog')).promptEnhancer.krea2_turbo, /newer ComfyUI/)
+  }
   generationArgs = { prompt: 'Change the sky', source_image_id: sourceId, denoise: 0.45, width: 512, height: 768, seed: 123 }
   requestedTool = 'generate_image'; extraToolCalls = []; retryLearning = true
   const declinedEdit = await thread('default'), beforeDeclinedUpload = uploads.length

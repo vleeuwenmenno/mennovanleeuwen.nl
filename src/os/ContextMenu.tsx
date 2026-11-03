@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useBackLayer } from './backLayers'
 import { openLink, openMailto } from '../data/links'
 import { notify } from './notify'
 import { toUi, uiScale } from './uiScale'
@@ -161,7 +162,7 @@ function hold(on: boolean) {
   else unholdTimer = setTimeout(() => document.documentElement.classList.remove('is-touch-holding'), 400)
 }
 
-type Press = { id: number; target: Element; x: number; y: number; timer: ReturnType<typeof setTimeout> | null; fired: boolean; /** Text was already selected when the finger went down (the visitor's, not the press's) */ selected: boolean }
+type Press = { id: number; target: Element; x: number; y: number; timer: ReturnType<typeof setTimeout> | null; fired: boolean; /** A hold gesture (lift, second hold) owns this finger: the long press stands down */ owned?: boolean; /** Text was already selected when the finger went down (the visitor's, not the press's) */ selected: boolean }
 let press: Press | null = null
 /** The contextmenu event a long press is sending right now. */
 let synthetic: Event | null = null
@@ -170,6 +171,8 @@ let unhandled: Event | null = null
 /** When the last long press opened something, to drop Android's own event for the same press. */
 let firedAt = 0
 let swallowClickUntil = 0
+/** The second hold opened a menu and the finger is still down: its lift's click is the hold's. */
+let heldClick = false
 const fingers = new Set<number>()
 
 function buzz() {
@@ -201,6 +204,69 @@ export function releaseTouchPress() {
   if (press.timer) clearTimeout(press.timer)
   press = null
   hold(false)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Held items (desktop icons, phone widgets, Files rows): two holds. The first lifts the item (a
+// buzz) so it can be dragged; let go without dragging and the second hold, on the same item within
+// SECOND_HOLD_MS, opens its menu (a second buzz). So a lift never opens a menu on top of itself:
+// the item's own gesture owns the finger (ownTouchPress), and the browser's contextmenu for that
+// finger is dropped.
+
+/** How long a held finger must stay still before an item lifts, and before the second hold opens its menu. */
+export const TOUCH_HOLD_MS = 380
+/** Time after letting go of a lift (without dragging) in which holding the same item again opens its menu. */
+export const SECOND_HOLD_MS = 3000
+
+let primed: { el: Element; at: number } | null = null
+/** The finger that a hold gesture owns, and until when its contextmenu events are still dropped. */
+let owner: { id: number; until: number; /** A second finger touched down while this one was held */ spoiled?: boolean } | null = null
+
+/** A lift ended without a drag: the next hold on `el` is the menu's. */
+export function primeSecondHold(el: Element | null) {
+  primed = el ? { el, at: Date.now() } : null
+}
+/** Whether the hold that just began on `el` is the second one (the menu's). */
+export function isSecondHold(el: Element | null): boolean {
+  return !!el && !!primed && primed.el === el && el.isConnected && Date.now() - primed.at <= SECOND_HOLD_MS
+}
+export function forgetSecondHold() {
+  primed = null
+}
+/** Whether a second finger joined the gesture (a pinch, a two-finger scroll), even if it is gone again: a hold must stand down. */
+export const touchSpoiled = () => fingers.size > 1 || !!owner?.spoiled
+
+/** Called from a hold gesture's pointerdown: this finger is its own, not a long press that sends a contextmenu. */
+export function ownTouchPress(pointerId: number) {
+  owner = { id: pointerId, until: 0 }
+  if (press?.id === pointerId && !press.fired) {
+    if (press.timer) clearTimeout(press.timer)
+    press.timer = null
+    press.owned = true
+  }
+}
+
+/**
+ * The second hold: sends the contextmenu a long press sends, with a buzz, and drops the click that
+ * follows the lift. Returns whether something opened (an item without a menu leaves the hold a lift).
+ */
+export function openHeldMenu(target: Element | null, x: number, y: number): boolean {
+  if (!target?.isConnected) return false
+  const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, composed: true, view: window, button: 2, buttons: 0, clientX: x, clientY: y, screenX: x, screenY: y })
+  synthetic = ev
+  try {
+    target.dispatchEvent(ev)
+  } finally {
+    synthetic = null
+  }
+  if (!ev.defaultPrevented) return false
+  forgetSecondHold()
+  firedAt = Date.now()
+  // The click that follows the lift is dropped (set at the lift, or taken back if the gesture is cancelled).
+  swallowClickUntil = Date.now() + 10_000
+  heldClick = true
+  buzz()
+  return true
 }
 
 /** The press opened a menu (or an app took it): the lift must not also tap what is underneath. */
@@ -243,10 +309,19 @@ export function installTouchContextMenu() {
       // A new touch: the click still owed to the last press (if the browser never sent it) is not this one.
       swallowClickUntil = 0
       // The first finger down starts the count afresh, in case a lift went missing (an iframe took it).
-      if (e.isPrimary) fingers.clear()
+      if (e.isPrimary) {
+        fingers.clear()
+        owner = null
+      }
+      // A touch anywhere but on the item that is waiting for its second hold ends the wait.
+      if (primed && !(e.target instanceof Node && primed.el.contains(e.target))) primed = null
       fingers.add(e.pointerId)
       // A second finger is a pinch or a two-finger scroll, never a press.
-      if (fingers.size > 1) return cancelTouchMenu()
+      if (fingers.size > 1) {
+        if (owner) owner.spoiled = true
+        forgetSecondHold()
+        return cancelTouchMenu()
+      }
       const el = e.target instanceof Element ? e.target : null
       if (!el || el.closest(NO_TOUCH_MENU) || wantsNativeMenu(e)) return
       press = { id: e.pointerId, target: el, x: e.clientX, y: e.clientY, timer: setTimeout(fire, LONG_PRESS_MS), fired: false, selected: !window.getSelection()?.isCollapsed }
@@ -272,6 +347,11 @@ export function installTouchContextMenu() {
     (e) => {
       if (e.pointerType !== 'touch') return
       fingers.delete(e.pointerId)
+      if (owner?.id === e.pointerId) owner.until = Date.now() + 700
+      if (heldClick) {
+        heldClick = false
+        swallowClickUntil = Date.now() + 600
+      }
       const p = press
       if (p?.id !== e.pointerId) return
       press = null
@@ -290,6 +370,13 @@ export function installTouchContextMenu() {
     (e) => {
       if (e.pointerType !== 'touch') return
       fingers.delete(e.pointerId)
+      if (owner?.id === e.pointerId) owner.until = Date.now() + 700
+      // A cancelled gesture never ends in a hold's click, and its first hold is not a lift to come back to.
+      forgetSecondHold()
+      if (heldClick) {
+        heldClick = false
+        swallowClickUntil = 0
+      }
       if (press?.id === e.pointerId) {
         if (press.timer) clearTimeout(press.timer)
         press = null
@@ -337,6 +424,13 @@ export function installTouchContextMenu() {
     'contextmenu',
     (e) => {
       if (e === synthetic || !e.isTrusted || (e as PointerEvent).pointerType === 'mouse') return
+      // A hold gesture has this finger (a lift, or the second hold that opens the menu itself): the
+      // browser's own menu event for it would open a second menu on a dragged item.
+      if (owner && (fingers.size > 0 || Date.now() < owner.until)) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        return
+      }
       const p = press
       // Ours already went out for this press (or only just did): one menu per press.
       if (p?.fired || Date.now() - firedAt < 1000) {
@@ -467,6 +561,7 @@ export function ContextMenuHost() {
     () => current,
   )
 
+  useBackLayer(!!menu, () => set(null))
   useEffect(() => {
     if (!menu) return
     const close = (e: Event) => {

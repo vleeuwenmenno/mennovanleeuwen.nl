@@ -6,32 +6,56 @@
   overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
 }
 .desk-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Phone home screens: fixed pages side by side (src/os/homePages.ts), nothing scrolls down. The dots sit
+   right above the dock, wherever it measured to be (--home-dock-edge, src/os/bottomReserve.ts). */
 .home-pages {
-  position: fixed; z-index: 100; bottom: calc(100px + var(--sab, 0px)); left: 50%;
-  transform: translateX(-50%); display: flex; gap: 6px; padding: 4px;
-  background: var(--bg); border: 1px solid var(--inactive-border);
+  position: fixed; z-index: 100; left: 0; right: 0; bottom: calc(var(--home-dock-edge, calc(82px + var(--sab, 0px))) + 6px);
+  display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none;
 }
-.home-pages button { min-height: 36px; padding: 4px 12px; color: var(--fg); background: var(--bg); border: 1px solid transparent; }
-.home-pages button[aria-current] { border-color: var(--accent); color: var(--accent); }
+.home-pages > * { pointer-events: auto; }
+.home-dots {
+  display: flex; align-items: center; height: 28px; padding: 0 4px; border-radius: 14px;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+}
+/* The pill is 28px; the buttons in it keep a 40px tap target (6px over its edges, where the page keeps room: bottomReserve.ts). */
+.home-dot, .home-edit { min-width: 28px; height: 40px; padding: 0; display: grid; place-items: center; color: var(--fg); background: none; border: 0; font: inherit; }
+.home-dot span { width: 8px; height: 8px; border-radius: 50%; background: color-mix(in srgb, var(--fg) 40%, transparent); transition: width 0.15s, background 0.15s; }
+.home-dot[aria-current] span { width: 18px; border-radius: 4px; background: var(--accent); }
+.home-edit { min-width: 36px; font-size: 16px; opacity: 0.75; }
+.home-dot:focus-visible, .home-edit:focus-visible, .home-edit-bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.home-edit-bar {
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; max-width: calc(100vw - 16px); padding: 6px;
+  background: var(--bg); border: 1px solid var(--accent);
+}
+.home-edit-bar button { min-height: 44px; padding: 4px 14px; color: var(--fg); background: var(--bg); border: 1px solid var(--inactive-border); font: inherit; }
+.home-edit-bar button.is-done { color: var(--accent); border-color: var(--accent); }
+.home-edit-bar button:disabled { opacity: 0.45; }
+.home-hint { flex-basis: 100%; text-align: center; font-size: 12px; opacity: 0.8; }
 .desk-scroll.is-covered .home-pages { display: none; }
+.home-snap { display: none; }
 @media (max-width: 719px) {
-  :root .desk.is-home-icons .desk-icon { display: flex; }
-  .desk.is-home-icons { touch-action: pan-y; }
-  :root .desk.is-home-icons .desk-icon { touch-action: none; }
-  .desk-scroll:not(.is-notes-hidden) > .desk { pointer-events: none; }
-  .desk-scroll .windows { padding-bottom: calc(160px + var(--sab)); }
   .desk-scroll:has(.window:not(.chrome-note):not(.is-min):not(.is-away)) .home-pages { display: none; }
+  /* One viewport-high row of pages; the sideways scroll snaps to a page and a swipe never skips one.
+     Vertical movement belongs to what is touched (an app's own scrolling), never to the page. */
+  :root .desk-scroll { overflow: auto hidden; overscroll-behavior: contain; scroll-snap-type: x mandatory; touch-action: pan-x pan-y; }
+  /* Something is being carried: the finger moves it, the page only turns by itself at the edge. */
+  :root .desk-scroll.is-arranging { overflow: hidden; scroll-snap-type: none; }
+  :root .desk-scroll .windows, :root .desk-scroll > .desk { position: absolute; top: 0; bottom: 0; left: 0; right: auto; height: 100%; min-height: 0; width: calc(var(--home-pages, 1) * 100vw / var(--ui-scale, 1)); }
+  .home-snap { display: block; position: absolute; top: 0; bottom: 0; width: calc(100vw / var(--ui-scale, 1)); scroll-snap-align: start; scroll-snap-stop: always; pointer-events: none; }
+}
+@media (max-width: 719px) and (prefers-reduced-motion: no-preference) {
+  :root .desk-scroll { scroll-behavior: smooth; }
 }
 @media (max-width: 719px) {
-  :root .desk.is-home .desk-icon { display: flex; touch-action: none; }
+  :root .desk.is-home .desk-icon { display: flex; touch-action: pan-x pan-y; }
   :root .desk-scroll .windows { display: block; padding: 0; }
   :root .desk-scroll .window.chrome-note {
     position: absolute; left: var(--home-x) !important; top: var(--home-y) !important;
     width: var(--home-w) !important; transform: none;
   }
-  :root .desk-scroll .window.chrome-note .note-grip { touch-action: none; }
+  :root .desk-scroll .window.chrome-note .note-grip { touch-action: pan-x pan-y; }
   :root .desk-scroll:not(.is-notes-hidden) > .desk { pointer-events: auto; }
 }
 /* Only home items travel with this scroller. App controls stay in viewport coordinates. */
 :root .desk-scroll .window:not(.chrome-note) { position: fixed; }
-:root .desk-scroll, :root .desk { touch-action: pan-y; }
+@media (min-width: 720px) { :root .desk-scroll, :root .desk { touch-action: pan-y; } }

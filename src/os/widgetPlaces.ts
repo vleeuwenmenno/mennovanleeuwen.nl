@@ -1,10 +1,10 @@
-import { mobileHomeGeometry } from './homeLayout'
+import { localX, mobileWidgetRect, pageOfX } from './homePages'
 import { synced } from './synced'
 import { viewH, viewW } from './uiScale'
 import { accountGuard } from './accountSpace'
 import { canonicalPlacements, hasWidgetCutover, widgetsHydrated } from '../widgets/platform/canonicalState'
-import { changeSet, newKey, nextAt, importPlaces, num, normalizeSet, mergeSets, liveWidgets as liveSet, type WidgetPlace, type WidgetSet } from '../widgets/platform/placementSet'
-export { changeSet, entriesOf, mergeSets, newKey, nextAt, normalizeSet, placedOnPhone, removedKeys, wins } from '../widgets/platform/placementSet'
+import { changeSet, newKey, nextAt, importPlaces, num, normalizeSet, mergeSets, phoneOrder, liveWidgets as liveSet, type WidgetPlace, type WidgetSet } from '../widgets/platform/placementSet'
+export { changeSet, entriesOf, mergeSets, newKey, nextAt, normalizeSet, phoneOrder, placedOnPhone, removedKeys, wins } from '../widgets/platform/placementSet'
 export type { WidgetPlace, WidgetSet } from '../widgets/platform/placementSet'
 
 export const widgetPlaces = canonicalPlacements
@@ -176,11 +176,48 @@ export function changeScreenWidgets(phone: boolean, fn: (set: WidgetSet) => Widg
 }
 if (import.meta.hot) import.meta.hot.dispose(disposeMobile)
 
+/**
+ * A phone page was removed (it was empty): every saved widget on a later page moves down one, as
+ * a whole set: the same widget under two keys, kinds this build does not know, and older places
+ * (frozen here first, pages included). Only the page changes; width, height and the place on the
+ * page stay as saved.
+ */
+export function shiftMobilePagesAfter(set: WidgetSet, removed: number, width: number, height: number): WidgetSet {
+  const frozen = migrateMobileWidgets(set, width, height)
+  const places = { ...frozen.places }
+  phoneOrder(frozen).forEach(([key, p], index) => {
+    const here = p.page === undefined ? mobileWidgetRect(p, index, width, height) : null
+    const page = p.page ?? pageOfX(here!.x)
+    if (p.page !== undefined && page <= removed) return
+    if (p.page === undefined && page <= removed) {
+      places[key] = { ...p, page, x: localX(here!.x), y: here!.y, at: nextAt(p) }
+      return
+    }
+    places[key] = { ...p, ...(here ? { x: localX(here.x), y: here.y } : {}), page: page - 1, at: nextAt(p) }
+  })
+  return { ...frozen, places }
+}
+
+/** Where each saved widget sits on the phone's pages, known kinds or not (for what counts as an empty page). */
+export function mobileWidgetPageCounts(set: WidgetSet, width: number, height: number): number[] {
+  const counts: number[] = []
+  phoneOrder(set).forEach(([, p], index) => {
+    const page = p.page ?? pageOfX(mobileWidgetRect(p, index, width, height).x)
+    counts[page] = (counts[page] ?? 0) + 1
+  })
+  return Array.from(counts, (n) => n ?? 0)
+}
+
 /** Freeze the old column's ordered starting coordinates on first edit, without touching its source.
  * Otherwise deleting an earlier legacy entry would change every later entry's row on reload. */
 export function migrateMobileWidgets(set: WidgetSet, width: number, height: number): WidgetSet {
-  const ordered = Object.entries(set.places).sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
-  return { ...set, places: Object.fromEntries(ordered.map(([key, p], index) => [key, p.homeGrid ? p : {
-    ...p, ...mobileHomeGeometry(p, index, width), homeGrid: true, phone: true, vw: width, vh: height, at: nextAt(p),
-  }])) }
+  // The same order widgetsShown (wm.tsx) projects them in: equal ids and stacks keep one index.
+  const ordered = phoneOrder(set)
+  return { ...set, places: Object.fromEntries(ordered.map(([key, p], index) => {
+    if (p.homeGrid) return [key, p]
+    // The page it was on (from the screen it was saved on) is frozen with its coordinates, since
+    // vh is replaced by this screen's: otherwise a later edit would move untouched widgets between pages.
+    const r = mobileWidgetRect(p, index, width, height)
+    return [key, { ...p, w: r.w, h: r.h, x: localX(r.x), y: r.y, page: pageOfX(r.x), homeGrid: true, phone: true, vw: width, vh: height, at: nextAt(p) }]
+  })) }
 }

@@ -6,7 +6,7 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { accounts, type User } from './auth.ts'
-import { cancelQueuedPrompt, claimComfyJob, imagesFirst, imageBackendScope, imageSettings, readJSON, releaseComfyJob, request, uploadSource } from './agentImages.ts'
+import { cancelQueuedPrompt, claimComfyJob, hostLabel, imagesFirst, imageBackendScope, imageHostForScope, imageHostRoute, imageHosts, imageSettings, onImageHost, readJSON, releaseComfyJob, request, uploadSource, type ImageSettings } from './agentImages.ts'
 import { imageSource, sourceRaster } from './agentImageSources.ts'
 import { buildVideoGraph, fitVideoNodes, nodeChoices, videoGraphProblem, type VideoNodeSchema, type VideoRender } from './agentVideoGraphs.ts'
 import { applyComfyMessage, openComfySocket, progressState, queuePosition } from './comfyProgress.ts'
@@ -82,15 +82,16 @@ export function saveVideoModelSettings(user: User, body: unknown): VideoModelSet
 
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 6 * 1024 * 1024
-/** A catalog per account and backend, for a minute: planning and the editor ask often. */
-const catalogs = new Map<number, { scope: string; at: number; value: { catalog: VideoCatalog; schemas: Record<string, VideoNodeSchema> } }>()
+/** A catalog per account and host (its backend scope), for a minute: planning and the editor ask often. */
+const catalogs = new Map<string, { owner: number; at: number; value: { catalog: VideoCatalog; schemas: Record<string, VideoNodeSchema> } }>()
+const CATALOGS_MAX = 64
 
-export async function videoCatalog(user: User, signal: AbortSignal = AbortSignal.timeout(30_000), fresh = false) {
-  const s = imageSettings(user)
+/** The video nodes and model files of one host: `s`, or the default host. */
+export async function videoCatalog(user: User, signal: AbortSignal = AbortSignal.timeout(30_000), fresh = false, s: ImageSettings = imageSettings(user)) {
   if (!s.url) throw new HttpError(409, 'Connect ComfyUI in Settings → Image & Video Studio first')
   const scope = imageBackendScope(user, s)
-  const cached = catalogs.get(user.id)
-  if (!fresh && cached && cached.scope === scope && Date.now() - cached.at < 60_000) return cached.value
+  const cached = catalogs.get(scope)
+  if (!fresh && cached && Date.now() - cached.at < 60_000) return cached.value
   const schemas: Record<string, VideoNodeSchema> = {}
   let remaining = CATALOG_LIMIT
   for (const node of VIDEO_NODES) {
@@ -121,7 +122,9 @@ export async function videoCatalog(user: User, signal: AbortSignal = AbortSignal
     schedulers: nodeChoices(schemas.BasicScheduler, 'scheduler'),
   }
   const value = { catalog, schemas }
-  catalogs.set(user.id, { scope, at: Date.now(), value })
+  catalogs.delete(scope)
+  catalogs.set(scope, { owner: user.id, at: Date.now(), value })
+  while (catalogs.size > CATALOGS_MAX) catalogs.delete(catalogs.keys().next().value!)
   return value
 }
 
@@ -266,13 +269,12 @@ const estimateBytes = (r: Pick<VideoRender, 'width' | 'height' | 'family' | 'dur
  * compile into a valid plan, the duration and size fit the model, the model files are installed
  * and the graph matches this ComfyUI's nodes, the keyframes are the account's, and there is room.
  */
-export async function prepareRender(user: User, projectId: string, signal: AbortSignal) {
+export async function prepareRender(user: User, projectId: string, signal: AbortSignal, host?: unknown) {
   const row = ownProject(user, projectId)
   const project = normalizeProject(JSON.parse(row.data))
   const seg = project.segments[0]
   const family = project.family
-  const settings = imageSettings(user)
-  if (!settings.url) throw new HttpError(409, 'Connect ComfyUI in Settings → Image & Video Studio first')
+  if (!imageSettings(user).url) throw new HttpError(409, 'Connect ComfyUI in Settings → Image & Video Studio first')
   const problem = videoParameterProblem(family, seg.duration, project.width, project.height)
   if (problem) throw new HttpError(400, problem)
   const compiled = compileProject(project)
@@ -280,22 +282,27 @@ export async function prepareRender(user: User, projectId: string, signal: Abort
   if (!compiled.prompt.trim()) throw new HttpError(400, 'The prompt is empty')
   if (seg.lastFrame && !FAMILY_RULES[family].lastFrame) throw new HttpError(400, `${FAMILY_LABEL[family]} does not take a last frame: remove it, or switch to MiniMax H3.`)
   for (const k of [seg.firstFrame, seg.lastFrame]) if (k) ownSource(user, k.sourceId)
-  const { catalog, schemas } = await videoCatalog(user, signal)
-  if (!catalog.families[family].ok) throw new HttpError(409, catalog.families[family].error)
-  const models = resolveVideoModels(family, videoModelSettings(user)[family], catalog)
-  const missing = missingVideoModels(family, models)
-  if (missing) throw new HttpError(409, missing)
-  if (seg.turbo && !models.turboLora) throw new HttpError(409, 'Turbo needs the H3 Turbo LoRA: pick it in Settings → Image & Video Studio → Video, or switch Turbo off.')
   const seed = seg.seed >= 0 ? seg.seed : randomInt(0, 2 ** 32)
-  const render: StoredRender = {
-    family, models, prompt: compiled.prompt, width: project.width, height: project.height, duration: seg.duration, seed,
-    steps: H3_SAMPLING.steps, turbo: seg.turbo, turboStrength: H3_SAMPLING.turboStrength, turboSteps: H3_SAMPLING.turboSteps,
-    first: seg.firstFrame?.sourceId ?? null, last: family === 'minimax_h3' ? (seg.lastFrame?.sourceId ?? null) : null, title: project.title,
-  }
-  const built = buildVideoGraph(render, { first: render.first ? 'first.png' : undefined, last: render.last ? 'last.png' : undefined })
-  fitVideoNodes(built.graph, schemas)
-  const graphProblem = videoGraphProblem(built.graph, schemas)
-  if (graphProblem) throw new HttpError(409, graphProblem)
+  // The host: the named one, else the default and then the others, the first whose nodes and model
+  // files fit (read only). The job keeps that host's scope, so it runs there even after a default switch.
+  const { value: { render, built }, host: settings, fallbackFrom } = await onImageHost(user, imageHostRoute(user, host), signal, async (on, attempt) => {
+    const { catalog, schemas } = await videoCatalog(user, attempt, false, on)
+    if (!catalog.families[family].ok) throw new HttpError(409, catalog.families[family].error)
+    const models = resolveVideoModels(family, videoModelSettings(user)[family], catalog)
+    const missing = missingVideoModels(family, models)
+    if (missing) throw new HttpError(409, missing)
+    if (seg.turbo && !models.turboLora) throw new HttpError(409, 'Turbo needs the H3 Turbo LoRA: pick it in Settings → Image & Video Studio → Video, or switch Turbo off.')
+    const render: StoredRender = {
+      family, models, prompt: compiled.prompt, width: project.width, height: project.height, duration: seg.duration, seed,
+      steps: H3_SAMPLING.steps, turbo: seg.turbo, turboStrength: H3_SAMPLING.turboStrength, turboSteps: H3_SAMPLING.turboSteps,
+      first: seg.firstFrame?.sourceId ?? null, last: family === 'minimax_h3' ? (seg.lastFrame?.sourceId ?? null) : null, title: project.title,
+    }
+    const built = buildVideoGraph(render, { first: render.first ? 'first.png' : undefined, last: render.last ? 'last.png' : undefined })
+    fitVideoNodes(built.graph, schemas)
+    const graphProblem = videoGraphProblem(built.graph, schemas)
+    if (graphProblem) throw new HttpError(409, graphProblem)
+    return { render, built }
+  })
   checkRoom(user, estimateBytes(render))
   const effective = effectiveSeconds(family, seg.duration)
   const summary = {
@@ -306,12 +313,12 @@ export async function prepareRender(user: User, projectId: string, signal: Abort
       ['Size', `${project.width} × ${project.height}`],
       ['Keyframes', [seg.firstFrame ? `first: ${seg.firstFrame.name}` : '', render.last && seg.lastFrame ? `last: ${seg.lastFrame.name}` : ''].filter(Boolean).join(' · ') || 'none (text only)'],
       ['Seed', String(seed)],
-      ['Runs on', 'your ComfyUI; takes minutes of its GPU'],
+      ['Runs on', `${imageHosts(user).length > 1 ? `ComfyUI host “${settings.hostName}”` : 'your ComfyUI'}; takes minutes of its GPU${fallbackFrom.length ? ` (${fallbackFrom.map((f) => `“${f.host.name}” could not: ${f.error}`).join(' · ')})`.slice(0, 600) : ''}`],
     ] as [string, string][],
     // The whole prompt (at most 16 000 characters): the card scrolls it.
     body: compiled.prompt,
   }
-  return { project: row, render, summary, scope: imageBackendScope(user, settings) }
+  return { project: row, render, summary, scope: imageBackendScope(user, settings), host: hostLabel(settings) }
 }
 
 const jobView = (r: JobRow) => {
@@ -432,8 +439,10 @@ async function runJob(job: JobRow, ctl: AbortController) {
   const fail = (error: string, status: VideoJobStatus = 'failed') => setJob(job.id, { status, error, ended_at: Date.now(), progress: null })
   if (!user) return fail('The account is gone or banned.', 'cancelled')
   const render = JSON.parse(job.render) as StoredRender
-  const s = imageSettings(user)
-  if (imageBackendScope(user, s) !== job.backend_scope) return fail('The ComfyUI connection changed after this render was queued: render again.')
+  // The host the render was queued for, found by its scope: a default switch keeps it, an edited
+  // or removed host fails the job (never moved to another host).
+  const s = imageHostForScope(user, job.backend_scope)
+  if (!s) return fail('The ComfyUI connection changed after this render was queued: render again.')
   const limit = AbortSignal.any([ctl.signal, AbortSignal.timeout(deadlineMs())])
   let promptId: string | null = null
   let socket: { close: () => void } | null = null
@@ -456,7 +465,7 @@ async function runJob(job: JobRow, ctl: AbortController) {
       names[slot] = name
     }
     const built = buildVideoGraph(render, names)
-    fitVideoNodes(built.graph, (await videoCatalog(user, limit)).schemas)
+    fitVideoNodes(built.graph, (await videoCatalog(user, limit, false, s)).schemas)
     const state = progressState()
     const clientId = randomUUID()
     let wake: (() => void) | null = null
@@ -531,7 +540,7 @@ async function runJob(job: JobRow, ctl: AbortController) {
  * cancel all end it, and the file goes): at most OUTPUT_MAX and never more than the account has room
  * for (refused before reading when ComfyUI says the size up front), and an MP4 (an ftyp box first).
  */
-async function download(user: User, s: ReturnType<typeof imageSettings>, filename: string, subfolder: string, path: string, signal: AbortSignal): Promise<number> {
+async function download(user: User, s: ImageSettings, filename: string, subfolder: string, path: string, signal: AbortSignal): Promise<number> {
   const params = new URLSearchParams({ filename, subfolder, type: 'output' })
   const res = await guardedFetch(user, `${s.url}/view?${params}`, { redirect: 'manual', headers: s.token ? { Authorization: `Bearer ${s.token}` } : {}, signal: AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)]) })
   if (!res.ok || !res.body) {
@@ -719,14 +728,14 @@ export function planVideoTool(user: User, thread: string, args: Record<string, u
 
 /** render_video, checked: what the approval card shows, and the call that queues it once allowed. */
 export async function prepareRenderTool(user: User, args: Record<string, unknown>, signal: AbortSignal) {
-  if (Object.keys(args).some((k) => k !== 'project_id') || typeof args.project_id !== 'string') throw new HttpError(400, 'Supply project_id from plan_video')
+  if (Object.keys(args).some((k) => k !== 'project_id' && k !== 'host') || typeof args.project_id !== 'string') throw new HttpError(400, 'Supply project_id from plan_video, and optionally host')
   const projectId = args.project_id
-  const prepared = await prepareRender(user, projectId, signal)
+  const prepared = await prepareRender(user, projectId, signal, args.host)
   return {
     summary: prepared.summary,
     run: async () => {
       const job = await startRender(user, projectId, 'agent', signal, prepared)
-      return JSON.stringify({ job_id: job.id, project_id: projectId, status: job.status, message: 'Queued on the user\'s ComfyUI. It runs on the server for minutes, also with the tab closed; the user sees it in the Video Studio and gets a notification. Do not wait for it or check on it in this turn.' })
+      return JSON.stringify({ job_id: job.id, project_id: projectId, status: job.status, ...(imageHosts(user).length > 1 ? { host: prepared.host } : {}), message: 'Queued on the user\'s ComfyUI. It runs on the server for minutes, also with the tab closed; the user sees it in the Video Studio and gets a notification. Do not wait for it or check on it in this turn.' })
     },
   }
 }
@@ -740,6 +749,7 @@ export async function handleVideoApi(req: IncomingMessage, res: ServerResponse, 
   if (path === '/api/video' && read) return json(res, 200, { configured: !!imageSettings(user).url, maxQueued: MAX_QUEUED }), true
   if (path === '/api/video/catalog' && read) {
     const { catalog } = await videoCatalog(user, AbortSignal.timeout(30_000), url.searchParams.has('fresh'))
+    // The Video Studio's lists come from the default host; a render may still go to another (prepareRender).
     const chosen = videoModelSettings(user)
     return json(res, 200, { catalog, chosen, resolved: Object.fromEntries(VIDEO_FAMILIES.map((f) => [f, resolveVideoModels(f, chosen[f], catalog)])) }), true
   }
@@ -791,6 +801,6 @@ export async function handleVideoApi(req: IncomingMessage, res: ServerResponse, 
 
 // Deleting the account deletes its rows (ON DELETE CASCADE); its video files go here.
 onUserGone((userId) => {
-  catalogs.delete(userId)
+  for (const [scope, entry] of catalogs) if (entry.owner === userId) catalogs.delete(scope)
   rmSync(join(dataDir(), 'videos', String(userId)), { recursive: true, force: true })
 })

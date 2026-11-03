@@ -5,8 +5,17 @@ import type { Recommended } from './modelFamilies'
 
 import type { ImagePreset, ImageConfig, ImageOverrides, ImageAssetCatalog, ImageAssetField, ImageSelection, ImageSampling, ImageGenerationSettings, ImageLoraHint, ImageProgress } from './imageModels'
 export type { ImagePreset, ImageConfig, ImageOverrides } from './imageModels'
-export type ImageSettings = { url: string; token: boolean; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: boolean; qualityCheck: boolean; prediction: Record<string, 'vpred' | 'eps'> }
-export type ImageCatalog = ImageAssetCatalog
+/** One ComfyUI host as the settings show it: the token only as "saved", never its value. */
+export type ImageHostView = { id: string; name: string; url: string; token: boolean; default: boolean }
+/** A host as the server checks it (GET /api/agents/images/hosts): reachable with its counts, or its error. */
+export type ImageHostStatus = { id: string; name: string; default?: boolean; reachable: boolean; error?: string; counts?: Record<string, number>; capabilities?: Record<string, boolean> }
+/** A host to save: a known id edits it (empty token keeps the saved one), no id adds one. */
+export type ImageHostDraft = { id?: string; name: string; url: string; token?: string; clearToken?: boolean; default?: boolean }
+/** At most this many hosts (server/agentImages.ts IMAGE_HOSTS_MAX). */
+export const IMAGE_HOSTS_MAX = 8
+/** url and token: the default host's, for older readers; hosts is the whole list. */
+export type ImageSettings = { url: string; token: boolean; hosts: ImageHostView[]; defaultHost: string; preset: ImagePreset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: boolean; qualityCheck: boolean; prediction: Record<string, 'vpred' | 'eps'> }
+export type ImageCatalog = ImageAssetCatalog & { host?: { id: string; name: string } }
 export type GeneratedImage = { id: string; name: string; url: string; size: number; width: number; height: number; seed?: number; preset?: ImagePreset; settings?: ImageGenerationSettings }
 export const getImageSettings = () => api<ImageSettings>('/api/agents/images/settings')
 /** Saves only the approval choice; the rest of the saved settings stay as they are. */
@@ -14,11 +23,15 @@ export const saveImageApproval = (askBeforeGenerate: boolean) => api<ImageSettin
 /** Said on window after the connection is saved or removed, so an open Image Studio reads it again. */
 export const IMAGE_SETTINGS_EVENT = 'mvlos:image-settings'
 const announced = <T,>(p: Promise<T>) => p.then((v) => (window.dispatchEvent(new Event(IMAGE_SETTINGS_EVENT)), v))
-export const saveImageSettings = ({ civitaiKey: _saved, prediction: _predictions, ...s }: Omit<ImageSettings, 'token'> & { token: string; clearToken?: boolean }) => announced(api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s }))
+/** Saves the host list (and which is the default) with the account's default workflow and models. */
+export const saveImageSettings = (s: { hosts: ImageHostDraft[]; preset: ImagePreset; model: string; clip: string; vae: string }) => announced(api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: s }))
+/** Each host checked on its own: an offline one shows its error, the others still answer. */
+export const getImageHostStatus = () => api<{ hosts: ImageHostStatus[] }>('/api/agents/images/hosts')
 /** Saves one of the model details and quality check switches, or the Civitai key (empty keeps it). */
 export const saveImageIntelSettings = (patch: { civitaiLookup?: boolean; qualityCheck?: boolean; civitaiKey?: string; clearCivitaiKey?: boolean; prediction?: { model: string; value: PredictionSetting } }) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: patch })
 export const resetImageSettings = () => announced(api<ImageSettings>('/api/agents/images/settings', { method: 'DELETE' }))
-export const getImageCatalog = () => api<ImageCatalog>('/api/agents/images/catalog')
+/** One host's catalog: `host` (an id), or the default host. */
+export const getImageCatalog = (host?: string) => api<ImageCatalog & { host?: { id: string; name: string } }>(`/api/agents/images/catalog${host ? `?host=${encodeURIComponent(host)}` : ''}`)
 
 export type ImageProfile = { id: number; name: string; description: string; origin: 'user' | 'suggestion' }
 /** The account's profiles, each with the number of image observations filed under it. */
@@ -36,14 +49,15 @@ export function generatedImage(result?: string): GeneratedImage | null {
   } catch { return null }
 }
 
-export type ThreadImageSettings = { overrides: ImageOverrides; defaults: ImageConfig; effective: ImageConfig; selection?: Record<ImageAssetField, ImageSelection>; discoveryError?: string; sampling?: ImageSampling }
+/** host: the host this thread's discovery used; hosts: every configured host, to pick the thread's own. */
+export type ThreadImageSettings = { overrides: ImageOverrides; defaults: ImageConfig; effective: ImageConfig; selection?: Record<ImageAssetField, ImageSelection>; discoveryError?: string; sampling?: ImageSampling; host?: { id: string; name: string } | null; hosts?: { id: string; name: string; default?: boolean }[] }
 export const getThreadImageSettings = (id: string) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`)
-export const saveThreadImageSettings = (id: string, overrides: ImageOverrides) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'PUT', json: overrides })
-export const resetThreadImageSettings = (id: string) => api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'DELETE' })
+export const saveThreadImageSettings = (id: string, overrides: ImageOverrides) => announced(api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'PUT', json: overrides }))
+export const resetThreadImageSettings = (id: string) => announced(api<ThreadImageSettings>(`/api/agents/images/threads/${id}`, { method: 'DELETE' }))
 
 export type ModelCategory = 'checkpoints' | 'diffusion_models' | 'text_encoders' | 'vae' | 'upscale_models'
 export type ModelMetadata = { available: boolean; reason?: string; source?: string; title?: string; baseModel?: string; size?: number; tags?: string[]; preview?: string }
-export const getModelMetadata = (category: ModelCategory, name: string, signal: AbortSignal) => api<ModelMetadata>(`/api/agents/images/model-metadata?${new URLSearchParams({ category, name })}`, { signal })
+export const getModelMetadata = (category: ModelCategory, name: string, signal: AbortSignal, host?: string) => api<ModelMetadata>(`/api/agents/images/model-metadata?${new URLSearchParams({ category, name, ...(host ? { host } : {}) })}`, { signal })
 
 /** A model file's prediction type as the owner sets it in the model browser; auto lets the server decide. */
 export type PredictionSetting = 'auto' | 'vpred' | 'eps'
@@ -58,7 +72,7 @@ export type ModelDetails = {
   recommended?: Partial<Recommended> & { strength?: number; strength_source?: string; trained_words?: string[]; matches_selected_model?: boolean | null }
   notes: string[]
 }
-export const getModelDetails = (name: string, kind: 'checkpoint' | 'lora' | 'embedding', signal?: AbortSignal) => api<ModelDetails>(`/api/agents/images/model-details?${new URLSearchParams({ name, kind })}`, { signal })
+export const getModelDetails = (name: string, kind: 'checkpoint' | 'lora' | 'embedding', signal?: AbortSignal, host?: string) => api<ModelDetails>(`/api/agents/images/model-details?${new URLSearchParams({ name, kind, ...(host ? { host } : {}) })}`, { signal })
 export const getImageLoras = () => api<{ loras: ImageLoraHint[]; total: number; truncated: boolean }>('/api/agents/images/loras')
 export const saveImageLearningPreference = (saveImageLearnings: boolean) => api<ImageSettings>('/api/agents/images/settings', { method: 'PUT', json: { saveImageLearnings } })
 
@@ -67,11 +81,11 @@ export const saveImageObservationApproval = (askBeforeSavingObservations: boolea
 export const getImageObservations = () => api<ObservationsView>('/api/agents/images/observations')
 
 /** An installed LoRA as the # picker shows it: LoRA Manager's facts when it has them, else what the name says. */
-export type LoraDetail = { name: string; title: string; baseModel: string; triggers: string[]; tags: string[]; folder: string; size: number | null; hasPreview: boolean }
+export type LoraDetail = { host?: string; name: string; title: string; baseModel: string; triggers: string[]; tags: string[]; folder: string; size: number | null; hasPreview: boolean }
 /** Every installed LoRA (up to 2000), with facts for the ones LoRA Manager matches (first 50). `manager`: LoRA Manager answered. */
-export const getLoraDetails = () => api<{ loras: LoraDetail[]; total: number; truncated: boolean; manager: boolean }>('/api/agents/images/lora-details')
+export const getLoraDetails = (thread?: string, signal?: AbortSignal) => api<{ loras: LoraDetail[]; total: number; truncated: boolean; manager: boolean }>(`/api/agents/images/lora-details${thread ? `?thread=${encodeURIComponent(thread)}` : ''}`, { signal })
 /** The LoRA's own preview, through this server (only when `hasPreview`). */
-export const loraPreviewUrl = (name: string) => `/api/agents/images/lora-preview?${new URLSearchParams({ name })}`
+export const loraPreviewUrl = (name: string, host?: string) => `/api/agents/images/lora-preview?${new URLSearchParams({ name, ...(host ? { host } : {}) })}`
 
 /** An explicit model upscale; diffusion settings are deliberately absent. */
 export type UpscaleImageInput = { operation: 'upscale'; source_image_id: string; upscale_model: string } & ({ scale: number } | { width: number; height: number })
@@ -91,7 +105,7 @@ export async function refineImage(id: string, input: RefineImageInput, onEvent: 
   await readEvents(res, onEvent)
 }
 
-export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'checkpoint_vae' | 'clip_skip' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler'>>
+export type InpaintImageInput = { operation: 'inpaint'; source_image_id: string; mask_id: string; prompt: string; denoise: number } & Partial<Pick<import('./imageModels').DiffusionImageSettings, 'preset' | 'model' | 'clip' | 'vae' | 'checkpoint_vae' | 'clip_skip' | 'loras' | 'steps' | 'cfg' | 'sampler' | 'scheduler' | 'enable_prompt_enhancer' | 'prompt_enhancer_seed'>>
 export async function saveImageMask(thread: string, source: string, mask: Blob) {
   const data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()

@@ -44,7 +44,7 @@ const backend = `http://127.0.0.1:${(comfy.address() as { port: number }).port}`
 try {
   const { database, encrypt } = await import('../server/db.ts')
   for (const id of [1, 2]) database().prepare('INSERT INTO users (id, github_id, login, github_token, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)').run(id, id, `u${id}`, encrypt('none'))
-  const { saveImageSettings } = await import('../server/agentImages.ts')
+  const { saveImageSettings, imageSettings } = await import('../server/agentImages.ts')
   const { loraDetails, loraPreview, sidecarPreview, previewCacheBytes } = await import('../server/agentLoraPreview.ts')
   const owner = { id: 1, admin: true } as never, other = { id: 2, admin: false } as never
   saveImageSettings(owner, { url: backend, token: 'secret' })
@@ -55,10 +55,10 @@ try {
   assert.deepEqual(view.loras.map((l) => l.name), [...installed].sort(), 'exactly the installed LoRAs, nothing else')
   const by = (v: typeof view, n: string) => v.loras.find((l) => l.name === n)!
   const ink = by(view, installed[0]), paper = by(view, installed[1])
-  assert.deepEqual({ ...ink }, { name: 'Styles\\ink-wash.safetensors', title: 'Ink Wash Style', baseModel: 'SDXL 1.0', triggers: ['inkwash', 'sumi-e'], tags: ['style', 'ink'], folder: 'Styles', size: 151_000_000, hasPreview: true })
+  assert.deepEqual({ ...ink }, { host: imageSettings(owner).hostId, name: 'Styles\\ink-wash.safetensors', title: 'Ink Wash Style', baseModel: 'SDXL 1.0', triggers: ['inkwash', 'sumi-e'], tags: ['style', 'ink'], folder: 'Styles', size: 151_000_000, hasPreview: true })
   assert.equal(paper.hasPreview, false, 'a preview outside the LoRA’s own folder is ignored')
   assert.equal(paper.baseModel, 'Flux.1 D')
-  assert.deepEqual({ ...by(view, 'plain.safetensors') }, { name: 'plain.safetensors', title: 'plain', baseModel: '', triggers: [], tags: [], folder: '', size: null, hasPreview: false }, 'unmatched: facts from the name only')
+  assert.deepEqual({ ...by(view, 'plain.safetensors') }, { host: imageSettings(owner).hostId, name: 'plain.safetensors', title: 'plain', baseModel: '', triggers: [], tags: [], folder: '', size: null, hasPreview: false }, 'unmatched: facts from the name only')
   assert.ok(!JSON.stringify(view).includes(backend) && !JSON.stringify(view).includes('secret') && !JSON.stringify(view).includes('/models/'), 'no backend URL, token or backend path leaks')
 
   const first = await loraPreview(owner, ink.name)

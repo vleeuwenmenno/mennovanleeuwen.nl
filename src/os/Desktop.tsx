@@ -21,13 +21,17 @@ import { notify } from './notify'
 import { cvMode } from './cvMode'
 import { useAccount } from './account'
 import { ask } from './Dialogs'
-import { cancelTouchMenu, closeContextMenu, openContextMenu, type MenuItem } from './ContextMenu'
+import { cancelTouchMenu, closeContextMenu, forgetSecondHold, isSecondHold, openContextMenu, openHeldMenu, ownTouchPress, primeSecondHold, TOUCH_HOLD_MS, touchSpoiled, type MenuItem } from './ContextMenu'
 import { resetLayout, restoreIcons, trashIcons, updateDesktop, useDesktop, type IconPos } from './desktopStore'
 import { openLink } from '../data/links'
 import { useSwing } from './swing'
 import { mobileWidgetEnvelope, widgetEnvelope } from './widgetLayout'
 import { drawnHeight, drawnWidth, useWM, type AppId } from './wm'
-import { homeSwipe, freeHomeRect, iconLayout, ICON_W, ICON_H, HOME_LEFT, HOME_TOP, type HomeRect } from './homeLayout'
+import { freeHomeRect, iconLayout, deskBottomReserve, ICON_W, ICON_H, HOME_LEFT, HOME_TOP, type HomeRect } from './homeLayout'
+import { watchBottomReserve } from './bottomReserve'
+import { cellOnPreviousPage, dropCell, fromContentX, iconPages, joinX, localX, pageOfX, savedIconPage, takenCells, type PageObstacle } from './homePages'
+import { addHomePage, edgeDwell, goToPage, homeScroller, homeUi, itemsOnPage, onPageRemoved } from './homePager'
+import { HomePager, pageMenu } from './HomePager'
 import { NOTE_APPS, notesHidden } from './deskPrefs'
 import { useIsMobile } from './useIsMobile'
 import { uiPoint, viewH, viewW } from './uiScale'
@@ -90,12 +94,11 @@ const CELL_W = ICON_W
 const CELL_H = ICON_H
 const TOP = HOME_TOP
 const LEFT = HOME_LEFT
-const DOCK_SPACE = 100
 function gridSize() {
-  return { cols: Math.max(1, Math.floor((viewW() - LEFT * 2) / CELL_W)), rows: Math.max(1, Math.floor((viewH() - TOP - DOCK_SPACE) / CELL_H)) }
+  return { cols: Math.max(1, Math.floor((viewW() - LEFT * 2) / CELL_W)), rows: Math.max(1, Math.floor((viewH() - TOP - deskBottomReserve()) / CELL_H)) }
 }
 const rightX = () => LEFT + (gridSize().cols - 1) * CELL_W
-const toPx = (p: IconPos) => ({ x: rightX() - p.col * CELL_W, y: TOP + p.row * CELL_H })
+const toPx = (p: IconPos) => ({ x: (p.page ?? 0) * viewW() + rightX() - p.col * CELL_W, y: TOP + p.row * CELL_H })
 const key = (p: IconPos) => `${p.col},${p.row}`
 
 /**
@@ -144,6 +147,13 @@ export function Desktop() {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [viewport, setViewport] = useState(0)
   const drag = useRef<Drag | null>(null)
+  const holdRef = useRef<{ armed: boolean; el: HTMLElement; startX: number; startY: number; x: number; y: number; stop: () => void } | null>(null)
+  const lastMove = useRef<ReactPointerEvent | null>(null)
+  // A new page only when the last one holds something: dwelling on an empty last page just stays there.
+  const dwell = useRef(edgeDwell(() => itemsOnPage(homeUi.get().count - 1) > 0))
+  const moveRef = useRef<(e: ReactPointerEvent) => void>(() => {})
+  useEffect(() => () => holdRef.current?.stop(), [])
+  useEffect(() => watchBottomReserve(), [])
   // Mirrors `offset` so pointerup sees the last move even if no render happened in between.
   const offsetRef = useRef({ dx: 0, dy: 0 })
   const surface = useRef<HTMLDivElement>(null)
@@ -226,39 +236,46 @@ export function Desktop() {
   // The site's own icons stay unless switched off (then the desktop is just the Seafile Desktop folder and launchers).
   const siteShown = !seafileDesktop || siteIcons
   const visible = [...(siteShown ? DESKTOP_ICONS.filter((i) => !desk.trashed.includes(i.id)) : []), ...sfIcons, ...officeIcons, ...linkIcons]
-  const obstacles = hidden ? [] : wm.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized && wm.shown(w)).map((w) => mobile ? mobileWidgetEnvelope(w, drawnWidth(w.pid), drawnHeight(w.pid)) : widgetEnvelope(w, drawnWidth(w.pid), drawnHeight(w.pid)))
+  const noteWindows = wm.windows.filter((w) => NOTE_APPS.has(w.app) && !w.minimized && wm.shown(w))
+  // A phone has pages (homePages.ts): its icons keep clear of that page's widgets, hidden or not,
+  // so putting the widgets away and back never moves an icon.
+  const pageObstacles: PageObstacle[] = mobile ? noteWindows.map((w) => ({ page: pageOfX(w.x), rect: mobileWidgetEnvelope({ x: localX(w.x), y: w.y, w: w.w, h: w.h }, drawnWidth(w.pid), drawnHeight(w.pid)) })) : []
+  const pageObstacleKey = JSON.stringify(pageObstacles)
+  const obstacles = hidden || mobile ? [] : noteWindows.map((w) => widgetEnvelope(w, drawnWidth(w.pid), drawnHeight(w.pid)))
   const obstacleKey = JSON.stringify(obstacles)
   const storedPositions = mobile ? desk.mobilePositions ?? desk.positions : desk.positions
-  const positions = useMemo(() => iconLayout(visible.map((i) => i.id), storedPositions, viewW(), viewH(), obstacles), [visible.map((i) => i.id).join(), storedPositions, viewport, obstacleKey])
-  const savePositions = (next: Record<string, IconPos>) => updateDesktop((s) => ({ ...s, [mobile ? 'mobilePositions' : 'positions']: next }))
-  const extent = Math.max(viewH(), ...Object.values(positions).map((p) => TOP + (p.row + 1) * CELL_H + DOCK_SPACE), ...obstacles.map((r) => r.y + r.h + DOCK_SPACE))
+  const positions: Record<string, IconPos> = useMemo(() => mobile
+    ? iconPages(visible.map((i) => i.id), storedPositions, viewW(), viewH(), pageObstacles)
+    : iconLayout(visible.map((i) => i.id), storedPositions, viewW(), viewH(), obstacles),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [visible.map((i) => i.id).join(), storedPositions, viewport, obstacleKey, pageObstacleKey, mobile])
+  // A phone edit changes the icons in sight; the ones out of sight (trashed, hidden) keep their cells.
+  const savePositions = (next: Record<string, IconPos>) => updateDesktop((s) => ({ ...s, ...(mobile ? { mobilePositions: { ...(s.mobilePositions ?? s.positions), ...next } } : { positions: next }) }))
+  const extent = mobile ? undefined : Math.max(viewH(), ...Object.values(positions).map((p) => TOP + (p.row + 1) * CELL_H + deskBottomReserve()), ...obstacles.map((r) => r.y + r.h + deskBottomReserve()))
 
-  useEffect(() => {
-    if (!mobile) return
-    const scroll = surface.current?.parentElement
-    if (!scroll) return
-    let start: { x: number; y: number; at: number } | null = null
-    const down = (e: PointerEvent) => {
-      const target = e.target as HTMLElement
-      if (e.pointerType !== 'touch' || target.closest('button, input, textarea, a, .desk-icon') || target.closest('.note-grip') || target.closest('.window:not(.chrome-note)')) return
-      start = { x: e.clientX, y: e.clientY, at: Date.now() }
+  // How many icons each page holds, for the page dots (which pages can be taken away).
+  const iconCounts = useMemo(() => {
+    const counts: number[] = []
+    if (mobile) {
+      for (const p of Object.values(positions)) counts[p.page ?? 0] = (counts[p.page ?? 0] ?? 0) + 1
+      // Icons out of sight that can come back (trashed, or the site's own while hidden) still hold their page.
+      const shown = new Set(visible.map((i) => i.id))
+      const restorable = new Set([...desk.trashed, ...DESKTOP_ICONS.map((i) => i.id)])
+      for (const [id, p] of Object.entries(storedPositions)) if (!shown.has(id) && restorable.has(id)) counts[savedIconPage(p)] = (counts[savedIconPage(p)] ?? 0) + 1
     }
-    const up = (e: PointerEvent) => {
-      if (!start) return
-      const page = homeSwipe(e.clientX - start.x, e.clientY - start.y, Date.now() - start.at)
-      start = null
-      if (page) { notesHidden.set(page === 'icons'); scroll.scrollTop = 0; cancelTouchMenu() }
-    }
-    const cancel = () => { start = null }
-    scroll.addEventListener('pointerdown', down, true)
-    scroll.addEventListener('pointerup', up, true)
-    scroll.addEventListener('pointercancel', cancel, true)
-    return () => {
-      scroll.removeEventListener('pointerdown', down, true)
-      scroll.removeEventListener('pointerup', up, true)
-      scroll.removeEventListener('pointercancel', cancel, true)
-    }
-  }, [mobile])
+    return Array.from(counts, (n) => n ?? 0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positions, mobile, storedPositions, desk.trashed])
+  useEffect(() => { if (mobile) homeUi.set({ icons: iconCounts }) }, [iconCounts, mobile])
+
+  // Taking an empty page away: the icons on later pages move down one. Everything is pinned
+  // (page and cell) so nothing else is guessed again afterwards.
+  // The ones out of sight (trashed, hidden) move with the rest, so showing them again finds them in place.
+  useEffect(() => mobile ? onPageRemoved((removed) => updateDesktop((s) => ({ ...s,
+    mobilePositions: {
+      ...Object.fromEntries(Object.entries(s.mobilePositions ?? s.positions).map(([id, p]) => [id, savedIconPage(p) > removed ? cellOnPreviousPage(p) : p])),
+      ...Object.fromEntries(Object.entries(positions).map(([id, p]) => [id, (p.page ?? 0) > removed ? { ...p, page: (p.page ?? 0) - 1 } : p])),
+    } }))) : undefined, [mobile, positions])
 
   useEffect(() => {
     const onResize = () => setViewport((n) => n + 1)
@@ -333,6 +350,56 @@ export function Desktop() {
     const at = contentPoint(e)
     drag.current = { kind: 'icons', startX: at.x, startY: at.y, ids, moved: false, clickedId: icon.id, additive }
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    if (mobile && e.pointerType === 'touch') armHold(e, icon)
+  }
+
+  /**
+   * A finger on an icon on the phone: a swipe turns the page, a tap opens it, and only holding
+   * still lifts it (a buzz). Lifted, the page stops following the finger and the icon does. A lift
+   * never opens the menu: let go without moving, then hold the icon again within a few seconds
+   * (SECOND_HOLD_MS) and that second hold opens its menu, with a second buzz.
+   */
+  function armHold(e: ReactPointerEvent, icon: DesktopIcon) {
+    holdRef.current?.stop()
+    const startX = e.clientX
+    const startY = e.clientY
+    const el = e.currentTarget as HTMLElement
+    // The finger is this gesture's: no long press, and no contextmenu from the browser, on top of it.
+    ownTouchPress(e.pointerId)
+    const second = isSecondHold(el)
+    const hold = { armed: false, el, startX, startY, x: startX, y: startY, stop: () => {} }
+    const block = (t: TouchEvent) => hold.armed && t.cancelable && t.preventDefault()
+    // The page turning under a still finger carries the icon with it.
+    const rescroll = () => hold.armed && lastMove.current && moveRef.current(lastMove.current)
+    const scroller = homeScroller()
+    document.addEventListener('touchmove', block, { passive: false })
+    scroller?.addEventListener('scroll', rescroll, { passive: true })
+    const timer = setTimeout(() => {
+      if (!drag.current || drag.current.kind !== 'icons') return
+      // A second finger is a pinch or a two-finger scroll, never a hold.
+      if (touchSpoiled()) return void (forgetSecondHold(), hold.stop(), (drag.current = null))
+      suppressTap.current = true
+      if (second) {
+        forgetSecondHold()
+        setSelected(new Set([icon.id]))
+        // The icon stays where it is: the menu is this hold's whole job, and a finger moving
+        // after it opened never drags.
+        if (openHeldMenu(el, hold.x, hold.y)) return void (drag.current = null)
+      }
+      hold.armed = true
+      try { navigator.vibrate?.(10) } catch { /* no vibration motor */ }
+      homeScroller()?.classList.add('is-arranging')
+      setSelected(new Set([icon.id]))
+    }, TOUCH_HOLD_MS)
+    hold.stop = () => {
+      clearTimeout(timer)
+      document.removeEventListener('touchmove', block)
+      scroller?.removeEventListener('scroll', rescroll)
+      scroller?.classList.remove('is-arranging')
+      dwell.current.end()
+      if (holdRef.current === hold) holdRef.current = null
+    }
+    holdRef.current = hold
   }
 
   function onSurfacePointerDown(e: ReactPointerEvent) {
@@ -349,6 +416,22 @@ export function Desktop() {
   function onPointerMove(e: ReactPointerEvent) {
     const d = drag.current
     if (!d) return
+    const hold = holdRef.current
+    if (hold) {
+      hold.x = e.clientX
+      hold.y = e.clientY
+      // Moved before the hold was up: a swipe. The page has the finger, not the icon.
+      if (!hold.armed) {
+        if (Math.hypot(e.clientX - hold.startX, e.clientY - hold.startY) > 8) {
+          forgetSecondHold()
+          hold.stop()
+          drag.current = null
+        }
+        return
+      }
+      lastMove.current = e
+      dwell.current.update(e.clientX)
+    }
     // Page pixels, as the icons are placed in (the UI scale, uiScale.ts).
     const { x: px, y: py } = contentPoint(e)
     const dx = px - d.startX
@@ -394,9 +477,19 @@ export function Desktop() {
     })
   }
 
+  /** The free cell nearest a point (`x` logical page space, `y` page pixels) on the phone's pages, clear of `except` and of widgets. */
+  function mobileCell(x: number, y: number, except: Set<string>, extra: IconPos[] = []): IconPos | undefined {
+    const others = [...visible.filter((i) => !except.has(i.id)).map((i) => positions[i.id]), ...extra].filter(Boolean)
+    return dropCell(x, y, viewW(), viewH(), takenCells(others.map((c) => ({ page: c.page ?? 0, col: c.col, row: c.row })), viewW(), pageObstacles), Math.max(homeUi.get().count, 1))
+  }
+
+  moveRef.current = onPointerMove
+
   function onPointerUp(e?: ReactPointerEvent) {
     const d = drag.current
     drag.current = null
+    const held = holdRef.current
+    held?.stop()
     document.body.classList.remove('is-dragging')
     swing.end()
     if (d?.kind === 'marquee') {
@@ -412,24 +505,25 @@ export function Desktop() {
       return
     }
     if (!d.moved) {
+      // Lifted and put back down without moving: the next hold on this icon is its menu's.
+      if (held?.armed && e) return void primeSecondHold(held.el)
       // A plain click on an already-selected icon narrows the selection to it; Ctrl-click toggles.
       if (d.additive && selected.has(d.clickedId) && d.ids.length > 1) setSelected(new Set([...selected].filter((s) => s !== d.clickedId)))
       else if (!d.additive) setSelected(new Set([d.clickedId]))
       return
     }
-    if (mobile && d.ids.length === 1) {
+    if (mobile) {
       const id = d.ids[0]
       const from = positions[id]
       const p = toPx(from)
-      const { cols } = gridSize()
-      let target = { col: Math.max(0, Math.min(cols - 1, Math.round((rightX() - p.x - offsetRef.current.dx) / CELL_W))),
-        row: Math.max(0, Math.round((p.y + offsetRef.current.dy - TOP) / CELL_H)) }
-      if (obstacles.some((r) => {
-        const at = toPx(target)
-        return at.x < r.x + r.w && at.x + CELL_W > r.x && at.y < r.y + r.h && at.y + CELL_H > r.y
-      })) target = snap(toPx(target).x, toPx(target).y, new Set(visible.filter((i) => i.id !== id).map((i) => key(positions[i.id]))), obstacles)
-      const other = visible.find((i) => i.id !== id && key(positions[i.id]) === key(target))
-      savePositions({ ...positions, [id]: target, ...(other ? { [other.id]: from } : {}) })
+      // Where the finger is now, in the page space as it is scrolled right now.
+      if (e) {
+        const now = contentPoint(e)
+        offsetRef.current = { dx: now.x - d.startX, dy: now.y - d.startY }
+      }
+      const at = mobileCell(fromContentX(p.x + offsetRef.current.dx, CELL_W, viewW(), Math.max(homeUi.get().count, 2)), p.y + offsetRef.current.dy, new Set([id]))
+      // No pinned swap: the icon takes the nearest free cell; the others stay where they are.
+      savePositions({ ...positions, [id]: at ?? from })
       offsetRef.current = { dx: 0, dy: 0 }
       setOffset({ dx: 0, dy: 0 })
       return
@@ -465,8 +559,13 @@ export function Desktop() {
     if (!landed.length) return
     const taken = new Set(visible.map((i) => key(positions[i.id])))
     const next: Record<string, IconPos> = {}
+    const placed: IconPos[] = []
     landed.forEach((l, k) => {
-      const cell = snap(at.x - CELL_W / 2 - k * CELL_W, at.y + (surface.current?.parentElement?.scrollTop ?? 0) - 30, taken, obstacles)
+      const scrolled = surface.current?.parentElement
+      const cell = mobile
+        ? mobileCell(fromContentX(at.x + (scrolled?.scrollLeft ?? 0) - CELL_W / 2 - k * CELL_W, CELL_W, viewW(), Math.max(homeUi.get().count, 2)), at.y - 30, new Set(), placed) ?? { page: 0, col: 0, row: 0 }
+        : snap(at.x - CELL_W / 2 - k * CELL_W, at.y + (scrolled?.scrollTop ?? 0) - 30, taken, obstacles)
+      placed.push(cell)
       taken.add(key(cell))
       next[l.launcherId ? `launcher:${l.launcherId}` : `sf:${l.path.split('/').pop()}`] = cell
     })
@@ -518,8 +617,10 @@ export function Desktop() {
       const p = positions[id]
       const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]
       if (delta) {
-        const next = snap(toPx(p).x + delta[0] * CELL_W, toPx(p).y + delta[1] * CELL_H,
-          new Set(visible.filter((i) => i.id !== id).map((i) => key(positions[i.id]))), obstacles)
+        const next = mobile
+          ? mobileCell(fromContentX(toPx(p).x + delta[0] * CELL_W, CELL_W, viewW(), Math.max(homeUi.get().count, 2)), toPx(p).y + delta[1] * CELL_H, new Set([id])) ?? p
+          : snap(toPx(p).x + delta[0] * CELL_W, toPx(p).y + delta[1] * CELL_H,
+              new Set(visible.filter((i) => i.id !== id).map((i) => key(positions[i.id]))), obstacles)
         savePositions({ ...positions, [id]: next })
       }
     } else if (e.key === 'Enter' && sel.length) sel.forEach(open)
@@ -536,7 +637,21 @@ export function Desktop() {
 
   // --- context menus ---------------------------------------------------------------------
 
+  /** On a phone every icon can also be sent to another page by its menu (the alternative to dragging it there). */
   function iconMenu(icon: DesktopIcon): MenuItem[] {
+    const items = iconMenuBase(icon)
+    if (!mobile || (selected.has(icon.id) && selected.size > 1)) return items
+    return [...items, { separator: true }, pageMenu(positions[icon.id]?.page ?? 0, (page) => moveIconToPage(icon.id, page))]
+  }
+
+  function moveIconToPage(id: string, page: number) {
+    if (page >= homeUi.get().count && addHomePage() === null) return
+    const cell = mobileCell(joinX(page, rightX()), TOP, new Set([id]))
+    if (cell) savePositions({ ...positions, [id]: cell })
+    requestAnimationFrame(() => requestAnimationFrame(() => goToPage(cell?.page ?? page)))
+  }
+
+  function iconMenuBase(icon: DesktopIcon): MenuItem[] {
     const many = selected.has(icon.id) && selected.size > 1
     if (many) {
       const ids = [...selected]
@@ -613,7 +728,9 @@ export function Desktop() {
     const base = kind === 'folder' ? 'New folder' : 'untitled.txt'
     let name = base
     for (let n = 2; taken.has(name); n++) name = kind === 'folder' ? `New folder ${n}` : `untitled-${n}.txt`
-    const cell = snap(at.x - CELL_W / 2, at.y - 30, new Set(visible.map((i) => key(positions[i.id]))), obstacles)
+    const cell = mobile
+      ? mobileCell(fromContentX(at.x - CELL_W / 2, CELL_W, viewW(), Math.max(homeUi.get().count, 2)), at.y - 30, new Set()) ?? { page: 0, col: 0, row: 0 }
+      : snap(at.x - CELL_W / 2, at.y - 30, new Set(visible.map((i) => key(positions[i.id]))), obstacles)
     ;(kind === 'folder' ? mkdir(`${sfDesktop}/${name}`) : createFile(`${sfDesktop}/${name}`))
       .then((made) => {
         const id = `sf:${made.split('/').pop()}`
@@ -627,6 +744,7 @@ export function Desktop() {
   function desktopMenu(at: { x: number; y: number }): MenuItem[] {
     const clip = getClipboard()
     return [
+      ...(mobile ? [{ label: 'Edit home screen', onSelect: () => homeUi.set({ editing: true }) }, { separator: true } as MenuItem] : []),
       {
         label: 'New',
         submenu: [
@@ -778,10 +896,7 @@ export function Desktop() {
       })}
       {marquee && <div className="marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />}
     </div>
-    {mobile && <nav className="home-pages" aria-label="Home views">
-      <button type="button" aria-current={!hidden ? 'page' : undefined} onClick={() => { notesHidden.set(false); surface.current?.parentElement?.scrollTo(0, 0) }}>Home</button>
-      <button type="button" aria-current={hidden ? 'page' : undefined} onClick={() => { notesHidden.set(true); surface.current?.parentElement?.scrollTo(0, 0) }}>Icons</button>
-    </nav>}
+    {mobile && <HomePager />}
     </>
   )
 }

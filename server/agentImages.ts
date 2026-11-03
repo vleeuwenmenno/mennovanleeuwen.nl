@@ -4,16 +4,17 @@ import { assertInpaintNodes, INPAINT_EXTRA_NODES, inpaintGraph } from './agentIm
 import { imageMask, saveAutoMask, type ImageMask } from './agentImageMasks.ts'
 import { AUTO_MASK_NODES, MASK_TOO_LARGE, REMOVE_MAX_SIDE, REMOVE_NODES, autoMaskOptions, autoMaskPlans, binaryMaskPng, missingNodes, pngFirstChannel, removeGraph, type AutoMaskInput, type SegmentNodeInfo } from './agentImageSegment.ts'
 import { UPSCALE_NODES, UPSCALE_RESOURCE_NOTE, upscaleWorkflow, validateUpscaleGraph, nodeOptions, type ImageGraph, type ImageGraphProgress, type NodeInfo } from './agentImageUpscale.ts'
+import { enhancerNode, enhancerProblem, enhancerRequest, enhancerSettings, ENHANCER_INPUT_KEYS } from './agentImageEnhancer.ts'
 import { imageSource, sourceDimensions, type ImageSource } from './agentImageSources.ts'
 import { selectedImageProfile } from './agentImageProfiles.ts'
 import { applyComfyMessage, openComfySocket, progressState, queuePosition, throttleProgress } from './comfyProgress.ts'
-import { imagePresetSpec, presetModels, loadsAsCheckpoint, type ImageProgress, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, type ImageLora, type ImageLoraHint, recommendedImageSampling, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings, type DiffusionImageSettings, type HiresSettings } from '../src/data/imageModels.ts'
+import { imagePresetSpec, presetModels, loadsAsCheckpoint, type ImageProgress, resolveImageAssets, type ImageAssetCatalog, type ImageModelHint, type ImageLora, type ImageLoraHint, recommendedImageSampling, loraBaseMismatch, IMAGE_SAMPLERS, IMAGE_SCHEDULERS, type ImageGenerationSettings, type DiffusionImageSettings, type HiresSettings } from '../src/data/imageModels.ts'
 import { randomInt, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { User } from './auth.ts'
 import { database, decrypt, encrypt, privateDigest } from './db.ts'
-import { guardedFetch, readCapped } from './egress.ts'
+import { EgressError, guardedFetch, readCapped } from './egress.ts'
 import { HttpError, json, readJson, SECURITY, UNTRUSTED } from './http.ts'
 import { checkRoom } from './quota.ts'
 import { servePreview, type PreviewSource } from './imagePreview.ts'
@@ -28,28 +29,229 @@ export type Preset = (typeof PRESETS)[number]
  *  civitaiKey: optional Civitai API key, sent only to civitai.com as a Bearer header.
  *  qualityCheck: check each generated picture and allow one automatic retry when it is clearly broken. */
 /** prediction: the owner's own word on a model file's prediction type (exact installed name → v-pred or eps); absent means Auto. Set only in Settings, never by the agent. */
-export type ImageSettings = { url: string; token: string; preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: string; qualityCheck: boolean; prediction: Record<string, 'vpred' | 'eps'> }
-const defaults = (): ImageSettings => ({ url: '', token: '', preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, askBeforeSavingObservations: false, saveImageLearnings: true, civitaiLookup: true, civitaiKey: '', qualityCheck: true, prediction: {} })
-function settingsFor(userId: number): ImageSettings {
+type ImageGlobals = { preset: Preset; model: string; clip: string; vae: string; askBeforeGenerate: boolean; askBeforeSavingObservations: boolean; saveImageLearnings: boolean; civitaiLookup: boolean; civitaiKey: string; qualityCheck: boolean; prediction: Record<string, 'vpred' | 'eps'> }
+/**
+ * One of the account's ComfyUI hosts. `id` is opaque and stable (edits, renames and default
+ * switches keep it); tools and the browser name hosts by id or name, never by address or secret.
+ */
+export type ImageHost = { id: string; name: string; url: string; token: string }
+/** At most this many hosts per account; discovery and routing stay bounded by it. */
+export const IMAGE_HOSTS_MAX = 8
+/** Implicit routing (no host named) plans on at most this many hosts: the default first, then the others in order. */
+export const IMAGE_ROUTE_ATTEMPTS = 3
+type StoredImageSettings = ImageGlobals & { hosts: ImageHost[]; defaultHost: string }
+/**
+ * The settings one operation runs with: the account's global preferences plus exactly one host
+ * (`url`/`token`/`hostId`/`hostName`; all empty when no host is configured). Everything that talks
+ * to ComfyUI takes one of these, so a whole operation stays on the host it was planned for.
+ */
+export type ImageSettings = ImageGlobals & { url: string; token: string; hostId: string; hostName: string }
+const globalDefaults = (): ImageGlobals => ({ preset: 'sdxl', model: '', clip: '', vae: '', askBeforeGenerate: false, askBeforeSavingObservations: false, saveImageLearnings: true, civitaiLookup: true, civitaiKey: '', qualityCheck: true, prediction: {} })
+const HOST_ID = /^h[0-9a-f]{16}$/
+const newHostId = () => `h${randomUUID().replaceAll('-', '').slice(0, 16)}`
+/** The host a single-URL configuration from before hosts becomes: the same ID on every read until it is saved. */
+const legacyHostId = (userId: number) => `h${privateDigest(JSON.stringify(['image-host-legacy', userId])).slice(0, 16)}`
+function storedFor(userId: number): StoredImageSettings {
   const row = database().prepare('SELECT secret FROM integrations WHERE user_id = ? AND name = ?').get(userId, NAME) as { secret: string } | undefined
-  return row ? { ...defaults(), ...JSON.parse(decrypt(row.secret)) } : defaults()
+  if (!row) return { ...globalDefaults(), hosts: [], defaultHost: '' }
+  const { url, token, hosts: rawHosts, defaultHost: rawDefault, hostId: _id, hostName: _name, ...globals } = JSON.parse(decrypt(row.secret)) as Record<string, unknown>
+  let hosts: ImageHost[] = []
+  if (Array.isArray(rawHosts)) hosts = rawHosts.filter((h): h is ImageHost => !!h && typeof h === 'object' && HOST_ID.test(h.id) && typeof h.name === 'string' && typeof h.url === 'string' && !!h.url && typeof h.token === 'string').slice(0, IMAGE_HOSTS_MAX).map(({ id, name, url, token }) => ({ id, name, url, token }))
+  // Migration: the one URL and token saved before hosts existed is the default host, token and all.
+  else if (typeof url === 'string' && url) hosts = [{ id: legacyHostId(userId), name: 'ComfyUI', url, token: typeof token === 'string' ? token : '' }]
+  const defaultHost = hosts.some((h) => h.id === rawDefault) ? rawDefault as string : hosts[0]?.id ?? ''
+  return { ...globalDefaults(), ...(globals as Partial<ImageGlobals>), hosts, defaultHost }
 }
+const globalsOf = ({ hosts: _hosts, defaultHost: _default, ...globals }: StoredImageSettings): ImageGlobals => globals
+const bound = (s: StoredImageSettings, host: ImageHost | undefined): ImageSettings => ({ ...globalsOf(s), url: host?.url ?? '', token: host?.token ?? '', hostId: host?.id ?? '', hostName: host?.name ?? '' })
+const defaultOf = (s: StoredImageSettings) => s.hosts.find((h) => h.id === s.defaultHost) ?? s.hosts[0]
+function settingsFor(userId: number): ImageSettings {
+  const s = storedFor(userId)
+  return bound(s, defaultOf(s))
+}
+/** The account's preferences with its default host (no host at all: url is empty). */
 export const imageSettings = (user: User): ImageSettings => settingsFor(user.id)
+/** The account's hosts, default first, then the rest in their saved order. Never leaves the server with tokens. */
+export function imageHosts(user: User): (ImageSettings & { isDefault: boolean })[] {
+  const s = storedFor(user.id), first = defaultOf(s)
+  return [first, ...s.hosts.filter((h) => h !== first)].filter((h): h is ImageHost => !!h).map((h) => ({ ...bound(s, h), isDefault: h === first }))
+}
+/** A host as records, tools and the browser may name it: its id and name, never its address or token. */
+export const hostLabel = (s: Pick<ImageSettings, 'hostId' | 'hostName'>) => ({ id: s.hostId, name: s.hostName })
+/** A host in a list of them: its label and whether it is the default now. */
+export const hostEntry = (s: ImageSettings & { isDefault: boolean }) => ({ ...hostLabel(s), default: s.isDefault })
+const hostList = (user: User) => imageHosts(user).map((h) => `“${h.hostName}” (${h.hostId}${h.isDefault ? ', default' : ''})`).join(', ')
+/**
+ * One of the account's own hosts, by its id or (case-insensitively) its exact name. Anything else,
+ * an address included, is refused: a tool can only choose among hosts the owner configured.
+ */
+export function imageHostSettings(user: User, ref: unknown): ImageSettings & { isDefault: boolean } {
+  if (typeof ref !== 'string' || !ref.trim() || ref.length > 100 || /[\x00-\x1f]/.test(ref)) throw new HttpError(400, 'host is the id or name of a configured ComfyUI host, from list_image_hosts')
+  const hosts = imageHosts(user), want = ref.trim()
+  const found = hosts.find((h) => h.hostId === want) ?? hosts.find((h) => h.hostName.toLowerCase() === want.toLowerCase())
+  if (!found) throw new HttpError(404, hosts.length ? `No configured ComfyUI host is called “${want.slice(0, 60)}”. Configured hosts: ${hostList(user)}.` : 'Configure ComfyUI in Settings → Apps → Image & Video Studio first')
+  return found
+}
+/** The host whose current address and credentials give this backend scope, if it is still configured. */
+export function imageHostForScope(user: User, scope: string): ImageSettings | null {
+  return imageHosts(user).find((h) => imageBackendScope(user, h) === scope) ?? null
+}
+/** Whether the host a plan captured is still configured with the same address and credentials (a default switch alone keeps it). */
+export function sameImageHost(user: User, s: ImageSettings) {
+  const now = s.hostId ? imageHosts(user).find((h) => h.hostId === s.hostId) : undefined
+  return !!now && now.url === s.url && now.token === s.token
+}
+/**
+ * The hosts one operation may plan on. A named host is explicit: only it, and its error is
+ * reported with the alternatives. Without one: `prefer` (a thread's or a recorded host), the
+ * default, then the others, at most IMAGE_ROUTE_ATTEMPTS. Planning only reads, so trying the next
+ * host is safe; once a plan runs it never moves to another host (no prompt is queued twice).
+ */
+export function imageHostRoute(user: User, ref?: unknown, prefer?: unknown): { explicit: boolean; hosts: ImageSettings[]; skipped: ImageSettings[] } {
+  if (ref !== undefined && ref !== null && ref !== '') return { explicit: true, hosts: [imageHostSettings(user, ref)], skipped: [] }
+  const all = imageHosts(user)
+  // No host: the empty settings, so ownership and input checks still answer first and the first
+  // ComfyUI request says to configure one (as with a single host).
+  if (!all.length) return { explicit: false, hosts: [imageSettings(user)], skipped: [] }
+  const first = typeof prefer === 'string' ? all.find((h) => h.hostId === prefer) : undefined
+  const ordered = first ? [first, ...all.filter((h) => h !== first)] : all
+  return { explicit: false, hosts: ordered.slice(0, IMAGE_ROUTE_ATTEMPTS), skipped: ordered.slice(IMAGE_ROUTE_ATTEMPTS) }
+}
+/** Whether a planning failure belongs to that host (unreachable, refused, missing nodes or assets), so another host may succeed. */
+export const hostFailure = (error: unknown) => error instanceof EgressError || error instanceof HttpError && [404, 409, 502, 503, 504].includes(error.status)
+/** An error message with the host's address replaced by its name: tool results name hosts, never addresses. */
+export function hostMessage(s: Pick<ImageSettings, 'url' | 'hostName'>, error: unknown) {
+  let message = error instanceof Error ? error.message : String(error)
+  try { const host = new URL(s.url).host; if (host) message = message.replaceAll(host, `host “${s.hostName}”`) } catch { /* no address to hide */ }
+  return message.slice(0, 600)
+}
+/**
+ * Runs `plan` on the route's hosts in order until one succeeds. Only host failures move on, and
+ * only for an implicit route; an input error or a cancellation stops at once. The result says
+ * which host it is and which ones were tried first.
+ */
+export async function onImageHost<T>(user: User, route: ReturnType<typeof imageHostRoute>, signal: AbortSignal, plan: (s: ImageSettings, attempt: AbortSignal) => Promise<T>): Promise<{ value: T; host: ImageSettings; fallbackFrom: { host: { id: string; name: string }; error: string }[] }> {
+  const failed: { host: { id: string; name: string }; error: string; cause: unknown }[] = []
+  for (const s of route.hosts) {
+    signal.throwIfAborted()
+    // Leave time for the other hosts within a 30-second discovery request.
+    const timeout = AbortSignal.timeout(route.hosts.length > 1 ? 8_000 : 25_000)
+    const attempt = AbortSignal.any([signal, timeout])
+    try { return { value: await plan(s, attempt), host: s, fallbackFrom: failed.map(({ host, error }) => ({ host, error })) } }
+    catch (error) {
+      if (signal.aborted) throw error
+      if (timeout.aborted || error instanceof Error && error.name === 'TimeoutError') error = new HttpError(504, 'ComfyUI host discovery timed out')
+      if (route.explicit || !hostFailure(error)) throw withHost(user, s, error, route.explicit)
+      failed.push({ host: hostLabel(s), error: hostMessage(s, error), cause: error })
+    }
+  }
+  // One host: its answer, as it was.
+  if (imageHosts(user).length < 2) throw failed[0].cause
+  const untried = route.skipped.length ? ` Not tried (without host at most ${IMAGE_ROUTE_ATTEMPTS} hosts are tried): ${route.skipped.map((h) => `“${h.hostName}” (${h.hostId})`).join(', ')}; pass host to use one.` : ''
+  const status = failed.some((f) => f.cause instanceof HttpError && f.cause.status === 409) ? 409 : (failed[0].cause as HttpError).status ?? 502
+  // The same answer everywhere (a source without settings) is said once.
+  const reasons = failed.every((f) => f.error === failed[0].error) ? `On ${failed.map((f) => `“${f.host.name}”`).join(' and ')}: ${failed[0].error}` : failed.map((f) => `On “${f.host.name}”: ${f.error}`).join(' ')
+  throw new HttpError(status, `No ComfyUI host could run this. ${reasons}${untried}`)
+}
+/** A failure on one host, labelled with it; for a host failure it names the other hosts to try (explicitly) next. */
+function withHost(user: User, s: ImageSettings, error: unknown, explicit: boolean) {
+  if (!(error instanceof HttpError) || !s.hostId || imageHosts(user).length < 2) return error
+  const others = imageHosts(user).filter((h) => h.hostId !== s.hostId)
+  const hint = hostFailure(error) ? ` Other configured hosts: ${others.map((h) => `“${h.hostName}” (${h.hostId})`).join(', ')}; ${explicit ? 'pass one of them as host, or omit host to let the default and the others be tried' : 'pass one of them as host'}.` : ''
+  const labelled = new HttpError(error.status, `On ComfyUI host “${s.hostName}”: ${hostMessage(s, error)}${hint}`)
+  return labelled
+}
 /** Whether generate_image waits for the owner's approval (Settings → Agents → Images). */
 export const imageGenerationAsks = (userId: number) => settingsFor(userId).askBeforeGenerate
 /** Whether observation writes wait for approval outside Plan and Bypass. */
 export const imageObservationAsks = (userId: number) => settingsFor(userId).askBeforeSavingObservations
+/** Per host: its address and credentials, so a default switch keeps every host's scope (and its observations). */
 export const imageBackendScope = (user: User, settings = imageSettings(user)) => privateDigest(JSON.stringify(['image-backend', user.id, settings.url, settings.token]))
-const view = (s: ImageSettings) => ({ ...s, token: !!s.token, civitaiKey: !!s.civitaiKey })
+const view = (s: StoredImageSettings) => {
+  const first = defaultOf(s)
+  return { ...globalsOf(s), civitaiKey: !!s.civitaiKey, url: first?.url ?? '', token: !!first?.token, defaultHost: first?.id ?? '', hosts: s.hosts.map((h) => ({ id: h.id, name: h.name, url: h.url, token: !!h.token, default: h === first })) }
+}
+// `default: true` on one entry makes it the default (also a host added in the same save).
+const HOST_KEYS = new Set(['id', 'name', 'url', 'token', 'clearToken', 'default'])
+function normalizedHostUrl(value: string) {
+  let u: URL
+  try { u = new URL(value) } catch { throw new HttpError(400, 'Enter a ComfyUI HTTP(S) URL') }
+  if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash) throw new HttpError(400, 'Use an HTTP(S) URL without credentials, query or fragment')
+  return u.href.replace(/\/+$/, '')
+}
+/**
+ * The host list as the browser sends it: every host, in order. A known id edits that host (an
+ * empty or boolean token keeps its saved token, clearToken removes it); no id adds one. Ids the
+ * account does not own are refused. Answers the hosts and the id of the one marked default.
+ */
+function savedHosts(current: ImageHost[], input: unknown): { hosts: ImageHost[]; marked?: string } {
+  if (!Array.isArray(input) || input.length > IMAGE_HOSTS_MAX) throw new HttpError(400, `Configure at most ${IMAGE_HOSTS_MAX} ComfyUI hosts`)
+  const seen = new Set<string>()
+  let marked: string | undefined
+  const out = input.map((raw): ImageHost => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).some((k) => !HOST_KEYS.has(k))) throw new HttpError(400, 'Each host is { id?, name, url, token?, clearToken? }')
+    const h = raw as Record<string, unknown>
+    const existing = h.id === undefined ? undefined : current.find((c) => c.id === h.id)
+    if (h.id !== undefined && !existing) throw new HttpError(400, 'Unknown ComfyUI host; reload the settings')
+    if (existing && seen.has(existing.id)) throw new HttpError(400, 'A host is listed twice')
+    if (typeof h.name !== 'string' || !h.name.trim() || h.name.trim().length > 60 || /[\x00-\x1f]/.test(h.name)) throw new HttpError(400, 'Give each host a name of 1–60 characters')
+    if (typeof h.url !== 'string' || !h.url.trim() || h.url.length > 2048) throw new HttpError(400, 'Enter a ComfyUI HTTP(S) URL for each host')
+    if (h.token !== undefined && typeof h.token !== 'string' && typeof h.token !== 'boolean' || typeof h.token === 'string' && (h.token.length > 2048 || /[\r\n]/.test(h.token))) throw new HttpError(400, 'Invalid authorization token')
+    if (h.clearToken !== undefined && typeof h.clearToken !== 'boolean' || h.default !== undefined && typeof h.default !== 'boolean') throw new HttpError(400, 'Invalid clearToken or default')
+    const id = existing?.id ?? newHostId()
+    seen.add(id)
+    if (h.default === true) { if (marked) throw new HttpError(400, 'Mark one host as the default'); marked = id }
+    const token = h.clearToken === true ? '' : typeof h.token === 'string' && h.token.trim() ? h.token.trim() : existing?.token ?? ''
+    return { id, name: h.name.trim(), url: normalizedHostUrl(h.url.trim()), token }
+  })
+  const names = out.map((h) => h.name.toLowerCase()), urls = out.map((h) => h.url)
+  if (new Set(names).size !== names.length) throw new HttpError(400, 'Give each host its own name')
+  if (new Set(urls).size !== urls.length) throw new HttpError(400, 'Each host needs its own URL')
+  return { hosts: out, marked }
+}
 export function saveImageSettings(user: User, input: Record<string, unknown>) {
-  const s = imageSettings(user)
-  for (const key of ['url', 'token', 'model', 'clip', 'vae', 'civitaiKey'] as const) {
+  const stored = storedFor(user.id)
+  const s: StoredImageSettings = { ...stored, hosts: stored.hosts.map((h) => ({ ...h })) }
+  const legacy = ['url', 'token', 'clearToken'].some((k) => input[k] !== undefined)
+  // An older single-host form sends the whole view back, hosts included: an unchanged list is no edit.
+  const unchanged = Array.isArray(input.hosts) && input.hosts.length === stored.hosts.length && input.hosts.every((h, i) => h && typeof h === 'object' && h.id === stored.hosts[i].id && h.name === stored.hosts[i].name && h.url === stored.hosts[i].url && typeof h.token !== 'string' && !h.clearToken)
+  if (legacy && input.hosts !== undefined && !unchanged) throw new HttpError(400, 'Send hosts, or url and token for the default host, not both')
+  if (input.hosts !== undefined && !(legacy && unchanged)) {
+    const saved = savedHosts(stored.hosts, input.hosts)
+    s.hosts = saved.hosts
+    if (saved.marked) s.defaultHost = saved.marked
+  }
+  if (legacy) {
+    // The single-host form (older clients, scripts): url and token edit the default host.
+    let host: ImageHost | undefined = defaultOf(s)
+    if (input.url !== undefined && (typeof input.url !== 'string' || input.url.length > 2048)) throw new HttpError(400, 'Invalid url')
+    if (input.token !== undefined && input.token !== '' && (typeof input.token !== 'string' || input.token.length > 2048)) throw new HttpError(400, 'Invalid token')
+    if (typeof input.url === 'string' && !input.url.trim()) { if (host) s.hosts = s.hosts.filter((h) => h !== host); host = undefined }
+    else if (typeof input.url === 'string') {
+      const url = normalizedHostUrl(input.url.trim())
+      if (s.hosts.some((h) => h !== host && h.url === url)) throw new HttpError(400, 'Each host needs its own URL')
+      if (!host) {
+        if (s.hosts.length >= IMAGE_HOSTS_MAX) throw new HttpError(400, `Configure at most ${IMAGE_HOSTS_MAX} ComfyUI hosts`)
+        host = { id: s.hosts.some((h) => h.id === legacyHostId(user.id)) ? newHostId() : legacyHostId(user.id), name: s.hosts.some((h) => h.name.toLowerCase() === 'comfyui') ? `ComfyUI ${s.hosts.length + 1}` : 'ComfyUI', url, token: '' }
+        s.hosts.push(host); s.defaultHost = host.id
+      } else host.url = url
+    }
+    if (host && typeof input.token === 'string' && input.token.trim()) host.token = input.token.trim()
+    if (host && input.clearToken === true) host.token = ''
+    if (host && /[\r\n]/.test(host.token)) throw new HttpError(400, 'Invalid authorization token')
+  }
+  if (input.defaultHost !== undefined) {
+    if (typeof input.defaultHost !== 'string' || !s.hosts.some((h) => h.id === input.defaultHost)) throw new HttpError(400, 'The default host must be one of the configured hosts')
+    s.defaultHost = input.defaultHost
+  }
+  // Removing the default leaves the first remaining host as the default, or none at all.
+  if (!s.hosts.some((h) => h.id === s.defaultHost)) s.defaultHost = s.hosts[0]?.id ?? ''
+  for (const key of ['model', 'clip', 'vae', 'civitaiKey'] as const) {
     // The settings view reports civitaiKey as a boolean; sending that view back keeps the saved key.
-    if (input[key] === undefined || ((key === 'token' || key === 'civitaiKey') && input[key] === '') || (key === 'civitaiKey' && typeof input[key] === 'boolean')) continue
+    if (input[key] === undefined || (key === 'civitaiKey' && (input[key] === '' || typeof input[key] === 'boolean'))) continue
     if (typeof input[key] !== 'string' || input[key].length > 2048) throw new HttpError(400, `Invalid ${key}`)
     s[key] = input[key].trim()
   }
-  if (input.clearToken === true) s.token = ''
   if (input.clearCivitaiKey === true) s.civitaiKey = ''
   // One model file's prediction type: { model, value: 'auto' | 'vpred' | 'eps' }.
   if (input.prediction !== undefined) {
@@ -70,20 +272,17 @@ export function saveImageSettings(user: User, input: Record<string, unknown>) {
     if (!PRESETS.includes(input.preset as Preset)) throw new HttpError(400, 'Choose a supported image preset')
     s.preset = input.preset as Preset
   }
-  if (s.url) {
-    let u: URL
-    try { u = new URL(s.url) } catch { throw new HttpError(400, 'Enter a ComfyUI HTTP(S) URL') }
-    if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash) throw new HttpError(400, 'Use an HTTP(S) URL without credentials, query or fragment')
-    s.url = u.href.replace(/\/+$/, '')
-  }
-  if (/[\r\n]/.test(s.token)) throw new HttpError(400, 'Invalid authorization token')
   if (s.civitaiKey && !/^[A-Za-z0-9._-]{8,200}$/.test(s.civitaiKey)) throw new HttpError(400, 'A Civitai API key is letters and digits only')
-  database().prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, name) DO UPDATE SET secret = excluded.secret').run(user.id, NAME, encrypt(JSON.stringify(s)), Date.now())
+  // The default host's url and token are also kept at the top, as before hosts, so an older
+  // server version reading this row still finds its connection (hosts wins on every newer read).
+  const first = defaultOf(s)
+  database().prepare('INSERT INTO integrations (user_id, name, secret, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, name) DO UPDATE SET secret = excluded.secret').run(user.id, NAME, encrypt(JSON.stringify({ ...s, url: first?.url ?? '', token: first?.token ?? '' })), Date.now())
   return view(s)
 }
 
-export type ImageOverrides = Partial<Pick<ImageSettings, 'preset' | 'model' | 'clip' | 'vae'>> & { width?: number; height?: number; seed?: number | null; loras?: ImageLora[] }
-const CONFIG_KEYS = new Set(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed', 'loras'])
+/** host (threads only): the id of the ComfyUI host this thread prefers; the default and the others still follow it. */
+export type ImageOverrides = Partial<Pick<ImageSettings, 'preset' | 'model' | 'clip' | 'vae'>> & { width?: number; height?: number; seed?: number | null; loras?: ImageLora[]; host?: string }
+const CONFIG_KEYS = new Set(['preset', 'model', 'clip', 'vae', 'width', 'height', 'seed', 'loras', 'host'])
 export function validateImageOverrides(value: unknown): ImageOverrides {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'Image overrides must be an object')
   const input = value as Record<string, unknown>
@@ -110,6 +309,10 @@ export function validateImageOverrides(value: unknown): ImageOverrides {
     out.seed = v as number | null
   }
   if ('loras' in input) out.loras = validateLoras(input.loras)
+  if ('host' in input) {
+    if (typeof input.host !== 'string' || !HOST_ID.test(input.host)) throw new HttpError(400, 'host is the id of a configured ComfyUI host')
+    out.host = input.host
+  }
   return out
 }
 /** Exact installed identifiers are checked separately, after bounded input validation. */
@@ -132,47 +335,65 @@ function effectiveConfig(s: ImageSettings, overrides: ImageOverrides) {
   const preset = overrides.preset ?? s.preset
   return { loras: overrides.loras ?? [], preset, model: overrides.model ?? s.model, clip: overrides.clip ?? s.clip, vae: overrides.vae ?? s.vae, width: overrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? (preset === 'sd15' ? 512 : 1024), seed: overrides.seed ?? null }
 }
-export function threadImageSettings(user: User, thread: string, catalog?: ImageAssetCatalog) {
+/** The host a thread prefers, while it is still configured (a removed one is simply no preference). */
+export function threadImageHost(user: User, thread: string): ImageSettings | undefined {
+  const row = ownImageThread(user, thread)
+  const host = row.image_config ? (JSON.parse(row.image_config) as { host?: unknown }).host : undefined
+  return typeof host === 'string' ? imageHosts(user).find((h) => h.hostId === host) : undefined
+}
+export function threadImageSettings(user: User, thread: string, catalog?: ImageAssetCatalog, on?: ImageSettings) {
   const row = ownImageThread(user, thread)
   const overrides = row.image_config ? validateImageOverrides(JSON.parse(row.image_config)) : {}
   const s = imageSettings(user)
-  // No URL, token or auth flags enter thread data, tool results, or shared exports.
+  // No URL, token or auth flags enter thread data, tool results, or shared exports: hosts by id and name only.
   const configured = effectiveConfig(s, overrides)
   const resolved = catalog ? resolveImageAssets(configured, catalog) : null
-  return { overrides, defaults: effectiveConfig(s, {}), effective: { ...configured, ...resolved?.effective }, selection: resolved?.selection, sampling: catalog ? recommendedImageSampling(configured.preset, resolved?.effective.model ?? configured.model, catalog) : undefined }
+  const hosts = imageHosts(user)
+  const host = on ?? hosts.find((h) => h.hostId === overrides.host) ?? hosts[0]
+  return { overrides, defaults: effectiveConfig(s, {}), effective: { ...configured, ...resolved?.effective }, selection: resolved?.selection, sampling: catalog ? recommendedImageSampling(configured.preset, resolved?.effective.model ?? configured.model, catalog) : undefined, host: host ? hostLabel(host) : null, hosts: hosts.map(hostEntry) }
 }
 export async function discoverThreadImageSettings(user: User, thread: string) {
   const current = threadImageSettings(user, thread)
   try {
-    const awaitCatalog = await imageCatalog(user)
+    const signal = AbortSignal.timeout(30_000)
+    const { value: awaitCatalog, host } = await onImageHost(user, imageHostRoute(user, undefined, current.overrides.host), signal, (s, attempt) => imageCatalog(user, attempt, s))
     const resolved = resolveImageAssets(current.effective, awaitCatalog)
-    return { ...current, effective: { ...current.effective, ...resolved.effective }, selection: resolved.selection, sampling: recommendedImageSampling(resolved.effective.preset, resolved.effective.model, awaitCatalog) }
+    return { ...current, host: hostLabel(host), effective: { ...current.effective, ...resolved.effective }, selection: resolved.selection, sampling: recommendedImageSampling(resolved.effective.preset, resolved.effective.model, awaitCatalog) }
   }
   catch (error) { return { ...current, discoveryError: error instanceof Error ? error.message : 'Image discovery unavailable' } }
 }
 export async function saveThreadImageSettings(user: User, thread: string, value: unknown, discovered?: Awaited<ReturnType<typeof imageCatalog>>) {
   ownImageThread(user, thread)
   const overrides = validateImageOverrides(value)
+  // A thread's host must be one of the account's own.
+  if (overrides.host !== undefined && !imageHosts(user).some((h) => h.hostId === overrides.host)) throw new HttpError(400, 'Choose one of your configured ComfyUI hosts')
   const s = imageSettings(user)
   let effective = effectiveConfig(s, overrides)
   if (effective.width * effective.height > 1536 * 1024) throw new HttpError(400, 'Image area must not exceed 1536 × 1024 pixels')
   // Resetting to defaults must also work with an offline or disconnected backend.
   if (['preset', 'model', 'clip', 'vae'].some((key) => key in overrides) || overrides.loras?.length) {
-    const catalog = discovered ?? await imageCatalog(user)
-    validateLoras(effective.loras, catalog.loras)
-    const resolved = resolveImageAssets(effective, catalog)
-    for (const selected of Object.values(resolved.selection)) if (!selected.automatic && 'error' in selected && selected.error) throw new HttpError(400, selected.error)
-    effective = { ...effective, ...resolved.effective }
-    const models = presetModels(effective.preset, catalog)
-    if (effective.model && !models.includes(effective.model)) throw new HttpError(400, 'Choose an installed model for the selected preset')
-    if (Boolean(imagePresetSpec(effective.preset).clipType) && ((effective.clip && !catalog.clips.includes(effective.clip)) || (effective.vae && !catalog.vaes.includes(effective.vae)) || !catalog.clipTypes.includes(imagePresetSpec(effective.preset).clipType))) throw new HttpError(400, 'This diffusion preset requires its supported text encoder type and an installed encoder and VAE')
-    // Explicit inactive encoder/VAE overrides must still refer to real catalog assets.
-    if (overrides.clip && !catalog.clips.includes(overrides.clip) || overrides.vae && !catalog.vaes.includes(overrides.vae)) throw new HttpError(400, 'Choose an installed text encoder and VAE')
+    // Checked against the thread's host, or the first host (default first) that has these assets.
+    const signal = AbortSignal.timeout(30_000)
+    const route = discovered ? null : overrides.host ? imageHostRoute(user, overrides.host) : imageHostRoute(user)
+    const check = async (catalog: Awaited<ReturnType<typeof imageCatalog>>) => {
+      let next = effective
+      const fail = (message: string) => new HttpError(route && route.hosts.length > 1 && !route.explicit ? 409 : 400, message)
+      try { validateLoras(next.loras, catalog.loras) } catch (e) { throw fail((e as Error).message) }
+      const resolved = resolveImageAssets(next, catalog)
+      for (const selected of Object.values(resolved.selection)) if (!selected.automatic && 'error' in selected && selected.error) throw fail(selected.error)
+      next = { ...next, ...resolved.effective }
+      const models = presetModels(next.preset, catalog)
+      if (next.model && !models.includes(next.model)) throw fail('Choose an installed model for the selected preset')
+      if (Boolean(imagePresetSpec(next.preset).clipType) && ((next.clip && !catalog.clips.includes(next.clip)) || (next.vae && !catalog.vaes.includes(next.vae)) || !catalog.clipTypes.includes(imagePresetSpec(next.preset).clipType))) throw fail('This diffusion preset requires its supported text encoder type and an installed encoder and VAE')
+      // Explicit inactive encoder/VAE overrides must still refer to real catalog assets.
+      if (overrides.clip && !catalog.clips.includes(overrides.clip) || overrides.vae && !catalog.vaes.includes(overrides.vae)) throw fail('Choose an installed text encoder and VAE')
+      return next
+    }
+    effective = discovered ? await check(discovered) : (await onImageHost(user, route!, signal, async (h, attempt) => check(await imageCatalog(user, attempt, h)))).value
   }
   database().prepare('UPDATE agent_threads SET image_config = ? WHERE id = ? AND user_id = ?').run(Object.keys(overrides).length ? JSON.stringify(overrides) : null, thread, user.id)
   return discovered ? threadImageSettings(user, thread, discovered) : discoverThreadImageSettings(user, thread)
 }
-
 export async function request(user: User, s: ImageSettings, path: string, signal: AbortSignal, body?: unknown, optional = false) {
   if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Image & Video Studio first')
   // Egress checks every request, pinning DNS for non-admins; LAN endpoints are admin-only.
@@ -200,7 +421,7 @@ export async function readJSON(user: User, s: ImageSettings, path: string, signa
 const options = nodeOptions
 // Query only the built-in classes our presets use. A full /object_info can contain many
 // megabytes of unrelated custom-node metadata. Keep both each response and the total bounded.
-const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete', 'EmptyFlux2LatentImage'] as const
+const IMAGE_NODES = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'VAELoader', 'CLIPTextEncode', 'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'ConditioningZeroOut', 'LoraLoader', 'LoraLoaderModelOnly', 'LoadImage', 'ImageScale', 'VAEEncode', 'UpscaleModelLoader', 'ImageUpscaleWithModel', ...INPAINT_EXTRA_NODES, 'SAM3Segment', 'SAM2Segment', 'AILab_LamaRemover', 'GrowMask', 'MaskComposite', 'CLIPSetLastLayer', 'ModelSamplingDiscrete', 'EmptyFlux2LatentImage', 'TextGenerate'] as const
 const NODE_INFO_LIMIT = 1024 * 1024
 const CATALOG_LIMIT = 4 * 1024 * 1024
 export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_000), s = imageSettings(user), forPlanning = false) {
@@ -251,7 +472,39 @@ export async function imageCatalog(user: User, signal = AbortSignal.timeout(30_0
     if (!plans.length) autoMaskError = missingNodes(info as SegmentNodeInfo, AUTO_MASK_NODES) || problems.join('; ')
   } catch (e) { autoMaskError = (e as Error).message }
   try { removeGraph('source.png', 'mask.png', info as SegmentNodeInfo) } catch (e) { removeError = (e as Error).message }
-  return { inpaint: !inpaintError, inpaintError, autoMask: !autoMaskError, autoMaskError, remove: !removeError, removeError, ...(forPlanning ? { inpaintSchemas: info } : {}), upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
+  const promptEnhancer = Object.fromEntries((['moss_image', 'krea2_raw', 'krea2_turbo'] as const).map((preset) => [preset, enhancerProblem(preset, info, Object.keys(info))]))
+  return { promptEnhancer, inpaint: !inpaintError, inpaintError, autoMask: !autoMaskError, autoMaskError, remove: !removeError, removeError, ...(forPlanning ? { inpaintSchemas: info } : {}), upscalers, upscale: !upscaleError, upscaleError, img2img: ['LoadImage', 'ImageScale', 'VAEEncode'].every((n) => !!info[n]) && options(info, 'ImageScale', 'crop').includes('center') && options(info, 'ImageScale', 'upscale_method').includes('lanczos'), loras, loraHints, modelHints, presets: PRESETS, checkpoints: options(info, 'CheckpointLoaderSimple', 'ckpt_name'), diffusionModels: options(info, 'UNETLoader', 'unet_name'), clips: options(info, 'CLIPLoader', 'clip_name'), vaes: options(info, 'VAELoader', 'vae_name'), nodes: Object.keys(info), clipTypes: options(info, 'CLIPLoader', 'type'), samplers: options(info, 'KSampler', 'sampler_name'), schedulers: options(info, 'KSampler', 'scheduler') }
+}
+/**
+ * Every configured host side by side: whether it answers, what it has and, for a query, which of
+ * its installed files match. Each host is asked on its own (in parallel, each bounded to 20 s), so
+ * one offline host never hides the others, and catalogs are never merged: a name is only known to
+ * be installed on the hosts that list it.
+ */
+export async function imageHostsOverview(user: User, signal: AbortSignal, query = '', limit = 10) {
+  const q = query.toLowerCase()
+  const hosts = await Promise.all(imageHosts(user).map(async (h) => {
+    try {
+      const catalog = await imageCatalog(user, AbortSignal.any([signal, AbortSignal.timeout(20_000)]), h)
+      const lists = { checkpoints: catalog.checkpoints, diffusionModels: catalog.diffusionModels, loras: catalog.loras, upscalers: catalog.upscalers, clips: catalog.clips, vaes: catalog.vaes }
+      const matches = q ? Object.fromEntries(Object.entries(lists).map(([k, list]) => { const m = list.filter((n) => n.toLowerCase().includes(q)); return [k, { values: m.slice(0, limit), total: m.length }] }).filter(([, v]) => (v as { total: number }).total)) : undefined
+      return { ...hostEntry(h), reachable: true, counts: Object.fromEntries(Object.entries(lists).map(([k, list]) => [k, list.length])), capabilities: { image_to_image: catalog.img2img, inpaint: catalog.inpaint, automatic_masks: catalog.autoMask, lama_remove: catalog.remove, model_upscale: catalog.upscale }, ...(matches ? { matches } : {}) }
+    } catch (error) {
+      if (signal.aborted) throw error
+      return { ...hostEntry(h), reachable: false, error: hostMessage(h, error) }
+    }
+  }))
+  return { hosts, ...(q ? { query } : {}) }
+}
+/** Whether any host (default first) lists this checkpoint; when none answers, the first host's error. */
+async function installedCheckpointAnywhere(user: User, model: unknown) {
+  let firstError: unknown, answered = false
+  for (const h of imageHosts(user)) {
+    try { const catalog = await imageCatalog(user, AbortSignal.timeout(20_000), h); answered = true; if (catalog.checkpoints.includes(model as string)) return true }
+    catch (error) { firstError ??= error }
+  }
+  if (!answered && firstError) throw firstError
+  return false
 }
 /** Optional bounded metadata enrichment. Exact category + relative path only; no basename joins. */
 async function imageModelHints(user: User, settings: ImageSettings, signal: AbortSignal): Promise<ImageModelHint[]> {
@@ -294,7 +547,8 @@ async function imageLoraHints(user: User, settings: ImageSettings, signal: Abort
     return hints.filter((h) => !duplicates.has(h.name))
   } catch { return [] }
 }
-export type ImageInput = { checkpoint_vae?: unknown; clip_skip?: unknown; v_prediction?: unknown; mask_id?: unknown; hires?: unknown; operation?: unknown; upscale_model?: unknown; scale?: unknown; source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
+/** host: an id or name of one of the account's ComfyUI hosts (explicit: no fallback); never an address. */
+export type ImageInput = { host?: unknown; enable_prompt_enhancer?: unknown; prompt_enhancer_seed?: unknown; checkpoint_vae?: unknown; clip_skip?: unknown; v_prediction?: unknown; mask_id?: unknown; hires?: unknown; operation?: unknown; upscale_model?: unknown; scale?: unknown; source_image_id?: unknown; denoise?: unknown; loras?: unknown; profile_id?: unknown; profile_reason?: unknown; prompt?: unknown; negative_prompt?: unknown; width?: unknown; height?: unknown; seed?: unknown; preset?: unknown; model?: unknown; clip?: unknown; vae?: unknown; steps?: unknown; cfg?: unknown; sampler?: unknown; scheduler?: unknown }
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>
 export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { nodes: string[]; checkpoints?: string[]; diffusionModels?: string[] }, sourceName?: string) {
   if (!PRESETS.includes(s.preset)) throw new HttpError(400, 'Unsupported image workflow')
@@ -356,7 +610,11 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
       if (loader === 'LoraLoader') clip = [id, 1]
     })
   }
-  const positive = node('4', 'CLIPTextEncode', { clip, text: input.prompt.trim() })
+  // Optional TextGenerate enhancer (MOSS Image, Krea 2): it rewrites the positive prompt only; the negative text below is untouched.
+  const enhancer = enhancerRequest(s.preset, input)
+  const enhanced = enhancer ? node('enhance', 'TextGenerate', {}) : null
+  if (enhancer && enhanced) graph.enhance = enhancerNode(s.preset, input.prompt.trim(), enhancer.seed, clip)
+  const positive = node('4', 'CLIPTextEncode', { clip, text: enhanced ?? input.prompt.trim() })
   const negative = spec.zeroNegative ? node('5', 'ConditioningZeroOut', { conditioning: positive }) : node('5', 'CLIPTextEncode', { clip, text: input.negative_prompt ?? '' })
   let sourcePixels = sourceName ? node('20', 'LoadImage', { image: sourceName }) : null
   if (refining && input.upscale_model && sourcePixels) sourcePixels = node('refineUpscale', 'ImageUpscaleWithModel', { image: sourcePixels, upscale_model: node('refineModel', 'UpscaleModelLoader', { model_name: input.upscale_model }) })
@@ -366,8 +624,8 @@ export function imageWorkflow(s: ImageSettings, input: ImageInput, catalog?: { n
   const samples = node('7', 'KSampler', { model, positive, negative, latent_image: latent, seed, steps: sampling.steps, cfg: sampling.cfg, sampler_name: sampling.sampler, scheduler: sampling.scheduler, denoise })
   const images = node('8', 'VAEDecode', { samples, vae })
   node('9', 'SaveImage', { images, filename_prefix: 'agents/generated' })
-  const progress: ImageGraphProgress | undefined = refining ? { phases: { clipSkip: 'loading', vpred: 'loading', '1': 'loading', '2': 'loading', '3': 'loading', '4': 'encoding', '5': 'encoding', '6': 'encoding', '7': 'refining', '8': 'decoding', '9': 'saving', '20': 'loading', '21': 'refining', refineModel: 'loading', refineUpscale: 'upscaling' }, counters: { '7': 'refining', refineUpscale: 'upscaling' } } : undefined
-  return { graph, width, height, seed, sampling, loras, denoise, outputNode: '9', progress, clipSkip, checkpointVae, vPrediction: input.v_prediction === true }
+  const progress: ImageGraphProgress | undefined = refining ? { phases: { clipSkip: 'loading', vpred: 'loading', '1': 'loading', '2': 'loading', '3': 'loading', enhance: 'encoding', '4': 'encoding', '5': 'encoding', '6': 'encoding', '7': 'refining', '8': 'decoding', '9': 'saving', '20': 'loading', '21': 'refining', refineModel: 'loading', refineUpscale: 'upscaling' }, counters: { '7': 'refining', refineUpscale: 'upscaling' } } : undefined
+  return { graph, width, height, seed, sampling, loras, denoise, outputNode: '9', progress, enhancer, clipSkip, checkpointVae, vPrediction: input.v_prediction === true }
 }
 
 // Branches retain the artifact ID in the copied generate_image result, never a second PNG.
@@ -429,29 +687,50 @@ export function generatedImageForVision(user: User, thread: string, id?: unknown
   return { id: row.id, data: Buffer.from(row.body).toString('base64') }
 }
 
+/** The host an image was made on, when it is still configured: Generate another prefers it. */
+export function recordedImageHost(user: User, thread: string, id: string): string | undefined {
+  const image = imageInThread(user, thread, id)
+  const host = image.metadata ? (JSON.parse(image.metadata) as { host?: { id?: unknown } }).host?.id : undefined
+  return typeof host === 'string' && imageHosts(user).some((h) => h.hostId === host) ? host : undefined
+}
 export function imageAgainInput(user: User, thread: string, id: string): ImageInput {
   const image = imageInThread(user, thread, id)
   if (!image.metadata) throw new HttpError(409, 'This image has no recorded generation settings')
   const stored = JSON.parse(image.metadata) as ImageGenerationSettings
   if (stored.operation === 'remove') return { operation: 'remove', source_image_id: stored.source.id, mask_id: stored.mask.id }
   if (stored.operation === 'upscale') return { operation: 'upscale', source_image_id: stored.source.id, upscale_model: stored.upscale_model, width: stored.width, height: stored.height }
-  const { source, denoise, mask, ...settings } = stored
+  const { source, denoise, mask, host: _host, ...settings } = stored
   let seed: number
   do { seed = randomInt(2 ** 48 - 1) } while (seed === settings.seed)
   const { hires, ...base } = settings
+  // A new picture also gets a new caption: the enhancer's seed is drawn again, like the image seed.
+  if (base.enable_prompt_enhancer) base.prompt_enhancer_seed = randomInt(2 ** 48 - 1)
   const hiresInput = hires ? { width: hires.width, height: hires.height, steps: hires.steps, cfg: hires.cfg, sampler: hires.sampler, scheduler: hires.scheduler, denoise: hires.denoise, ...(hires.upscale_model ? { upscale_model: hires.upscale_model } : {}) } : undefined
   return { ...base, loras: settings.loras ?? [], seed, ...(hires ? { width: hires.base_width, height: hires.base_height, hires: hiresInput } : {}), ...(source ? { source_image_id: source.id, denoise } : {}), ...(mask ? { mask_id: mask.id } : {}) }
 }
 
-type ImagePlan = { mask?: ImageMask; maskUploadName?: string; source?: ImageSource; uploadName?: string; settings: ImageSettings; workflow: { graph: ImageGraph; width: number; height: number; outputNode: string; progress?: ImageGraphProgress; sampling?: { steps: number } }; parameters: ImageGenerationSettings }
-async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false): Promise<ImagePlan> {
+type ImagePlan = { mask?: ImageMask; maskUploadName?: string; source?: ImageSource; uploadName?: string; settings: ImageSettings; workflow: { graph: ImageGraph; width: number; height: number; outputNode: string; progress?: ImageGraphProgress; sampling?: { steps: number } }; parameters: ImageGenerationSettings; fallbackFrom?: { host: { id: string; name: string }; error: string }[] }
+/**
+ * Plans one image job on one host. `input.host` (an id or name) picks it explicitly; otherwise
+ * `prefer` (a recorded host, for Generate another), the thread's host, the default and then the
+ * others are tried in order, until one has everything the job asks for (see imageHostRoute).
+ * Planning only reads; the plan then runs on that host alone.
+ */
+async function planImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false, prefer?: string): Promise<ImagePlan> {
   ownImageThread(user, thread)
-  if (input?.operation === 'upscale') return planUpscale(user, input, signal)
-  if (input?.operation === 'remove') return planRemove(user, input, signal)
+  let host: unknown
+  if (input && typeof input === 'object' && !Array.isArray(input) && 'host' in input) { const { host: chosen, ...rest } = input; host = chosen; input = rest }
+  const route = imageHostRoute(user, host, prefer ?? threadImageHost(user, thread)?.hostId)
+  const { value, host: on, fallbackFrom } = await onImageHost(user, route, signal, (s, attempt) => planOnHost(user, thread, input, attempt, exact, s))
+  return { ...value, parameters: { ...value.parameters, host: hostLabel(on) }, ...(fallbackFrom.length ? { fallbackFrom } : {}) }
+}
+async function planOnHost(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact: boolean, s: ImageSettings): Promise<ImagePlan> {
+  if (input?.operation === 'upscale') return planUpscale(user, input, signal, s)
+  if (input?.operation === 'remove') return planRemove(user, input, signal, s)
   if (input?.operation !== undefined && input.operation !== 'generate' && input.operation !== 'refine' && input.operation !== 'inpaint') throw new HttpError(400, 'Choose operation generate, refine, inpaint, remove or upscale')
   // V-prediction is decided below from the model's facts, never by the caller ("Generate another" carries the recorded flag).
   if (input && typeof input === 'object' && 'v_prediction' in input) { const { v_prediction: _vpred, ...rest } = input; input = rest }
-  const allowed = new Set(['checkpoint_vae', 'clip_skip', 'operation', 'mask_id', 'hires', 'scale', 'upscale_model', 'source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
+  const allowed = new Set([...ENHANCER_INPUT_KEYS, 'checkpoint_vae', 'clip_skip', 'operation', 'mask_id', 'hires', 'scale', 'upscale_model', 'source_image_id', 'denoise', 'profile_id', 'profile_reason', 'prompt', 'negative_prompt', 'width', 'height', 'seed', 'preset', 'model', 'clip', 'vae', 'steps', 'cfg', 'sampler', 'scheduler', 'loras'])
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Only supported image generation parameters may be supplied; backend and workflow configuration are not tool options')
   const source = input.source_image_id === undefined ? undefined : imageSource(user, input.source_image_id)
   const refining = input.operation === 'refine'
@@ -469,7 +748,12 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   const overrides = validateImageOverrides(Object.fromEntries(['preset', 'model', 'clip', 'vae', ...(refining ? [] : ['width', 'height']), 'seed', 'loras'].filter((key) => input[key as keyof ImageInput] !== undefined).map((key) => [key, input[key as keyof ImageInput]])))
   // The entire plan, including credentials, is captured before approval. Per-call overrides never persist.
   const preset = overrides.preset ?? effective.preset
-  const configured = { ...imageSettings(user), ...effective, ...overrides, width: overrides.width ?? sessionOverrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? sessionOverrides.height ?? (preset === 'sd15' ? 512 : 1024) }
+  if (isInpaint && imagePresetSpec(preset).enhancer) {
+    // Tool callers inherit the same enhancer settings as the Studio; explicit false wins.
+    const inherited = inheritedRefinementInput(user, source!.id, { ...input, preset })
+    input = { ...input, ...Object.fromEntries(ENHANCER_INPUT_KEYS.filter((key) => inherited[key] !== undefined).map((key) => [key, inherited[key]])) }
+  }
+  const configured = { ...s, ...effective, ...overrides, width: overrides.width ?? sessionOverrides.width ?? (preset === 'sd15' ? 512 : 1024), height: overrides.height ?? sessionOverrides.height ?? (preset === 'sd15' ? 512 : 1024) }
   if (source) Object.assign(configured, refining ? refinementSize(source, input) : sourceDimensions(source, input.width, input.height, preset === 'sd15' ? 512 : 1024))
   const catalog = await imageCatalog(user, signal, configured, isInpaint)
   if (isInpaint && !catalog.inpaint) throw new HttpError(409, catalog.inpaintError)
@@ -486,10 +770,12 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
     for (const [kind, name, options] of required) if (typeof name !== 'string' || !name || !options.includes(name)) throw new HttpError(409, `Cannot Generate another: ${kind} “${String(name ?? '')}” is no longer installed on this backend`)
   }
   if (configured.loras.length && !catalog.nodes.some((n) => n === 'LoraLoader' || n === 'LoraLoaderModelOnly')) throw new HttpError(409, 'This ComfyUI has no LoRA loader')
-  validateLoras(configured.loras, catalog.loras)
+  validateLoras(configured.loras)
+  if (configured.loras.some((l) => !catalog.loras.includes(l.name))) throw new HttpError(409, 'A selected LoRA is not installed on this host; use an exact installed identifier from list_image_models')
   const resolved = resolveImageAssets(configured, catalog)
   if (resolved.errors.length) throw new HttpError(409, resolved.errors.join(' '))
   const settings = { ...configured, ...resolved.effective }
+  for (const lora of settings.loras) { const why = loraBaseMismatch(settings.preset, catalog.loraHints.find((h) => h.name === lora.name)); if (why) throw new HttpError(409, why) }
   const defaults = recommendedImageSampling(settings.preset, settings.model, catalog)
   const uploadName = source ? `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}` : undefined
   // Loaded on demand: agentModelIntel imports this module.
@@ -499,6 +785,7 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
   if (input.clip_skip !== undefined && input.clip_skip !== 1 && !catalog.nodes.includes('CLIPSetLastLayer')) throw new HttpError(409, 'This ComfyUI lacks CLIPSetLastLayer, so clip_skip is unavailable; omit it')
   const workflow = imageWorkflow(settings, { ...defaults, ...configured, seed: configured.seed ?? undefined, ...input, ...(vpred ? { v_prediction: true } : {}), ...(source ? { width: configured.width, height: configured.height } : {}) }, catalog, uploadName)
   if (refining) refinementSampling(input, workflow.sampling, settings.preset)
+  if (workflow.enhancer) { const problem = catalog.promptEnhancer?.[settings.preset as 'moss_image']; if (problem !== '') throw new HttpError(409, problem ?? 'Prompt enhancement is not available for this workflow.') }
   const spec = imagePresetSpec(settings.preset)
   if (!spec.clipType && (input.clip !== undefined && input.clip !== '' || input.vae !== undefined && input.vae !== '')) throw new HttpError(400, 'Checkpoint workflows use embedded encoder and VAE; separate component overrides are not supported')
   if (spec.clipType && !catalog.clipTypes.includes(spec.clipType)) throw new HttpError(409, 'ComfyUI does not support the required text encoder type')
@@ -511,7 +798,7 @@ async function planImageGeneration(user: User, thread: string, input: ImageInput
     workflow.graph['22'] = { class_type: 'LoadImageMask', inputs: { image: maskUploadName, channel: 'red' } }
     workflow.graph = inpaintGraph({ graph: workflow.graph, source: { ...source, image: ['20', 0] }, mask: { ...mask, mask: ['22', 0] }, samplerId: '7', decodeId: '8', saveId: '9', denoise: workflow.denoise }, catalog.inpaintSchemas ?? {}).graph
   }
-  const parameters: ImageGenerationSettings = { ...(mask ? { operation: 'inpaint' as const, mask: { id: mask.id, url: mask.url, width: mask.width, height: mask.height, semantics: 'white-edits-black-preserves' as const } } : {}), ...(refining ? { operation: 'refine' as const, ...(input.upscale_model ? { upscale_model: input.upscale_model as string } : {}) } : {}), ...(hires ? { hires } : {}), loras: workflow.loras, ...(workflow.clipSkip > 1 ? { clip_skip: workflow.clipSkip } : {}), ...(workflow.checkpointVae ? { checkpoint_vae: workflow.checkpointVae } : {}), ...(workflow.vPrediction ? { v_prediction: true } : {}), profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: workflow.denoise, ...(source ? { source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos-center-crop' as const } } : {}) }
+  const parameters: ImageGenerationSettings = { ...enhancerSettings(workflow.enhancer), ...(mask ? { operation: 'inpaint' as const, mask: { id: mask.id, url: mask.url, width: mask.width, height: mask.height, semantics: 'white-edits-black-preserves' as const } } : {}), ...(refining ? { operation: 'refine' as const, ...(input.upscale_model ? { upscale_model: input.upscale_model as string } : {}) } : {}), ...(hires ? { hires } : {}), loras: workflow.loras, ...(workflow.clipSkip > 1 ? { clip_skip: workflow.clipSkip } : {}), ...(workflow.checkpointVae ? { checkpoint_vae: workflow.checkpointVae } : {}), ...(workflow.vPrediction ? { v_prediction: true } : {}), profile_id: profile?.id ?? null, profile_reason: String(input.profile_reason ?? ''), preset: settings.preset, model: settings.model, clip: spec.clipType ? settings.clip : '', vae: spec.clipType ? settings.vae : '', ...workflow.sampling, width: workflow.width, height: workflow.height, seed: workflow.seed, prompt: String(input.prompt).trim(), negative_prompt: String(input.negative_prompt ?? ''), denoise: workflow.denoise, ...(source ? { source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos-center-crop' as const } } : {}) }
   return { settings, workflow, parameters, source, uploadName, mask, maskUploadName }
 }
 /** Walk only owned generated-image provenance, without reinterpreting uploaded filenames. */
@@ -531,10 +818,12 @@ function inheritedRefinementInput(user: User, id: string, input: ImageInput): Im
     if (depth === 7 && next) throw new HttpError(409, 'Source provenance exceeds 8 images; choose an earlier source')
   }
   if (!inherited && (typeof input.prompt !== 'string' || !input.prompt.trim())) throw new HttpError(409, 'This source has no recorded diffusion settings. Supply a prompt and configure compatible image components before refining.')
-  const keys = ['preset', 'model', 'clip', 'vae', 'checkpoint_vae', 'seed', 'loras', 'prompt', 'negative_prompt', 'steps', 'cfg', 'sampler', 'scheduler', 'clip_skip'] as const
+  const keys = ['preset', 'model', 'clip', 'vae', 'checkpoint_vae', 'seed', 'loras', 'prompt', 'negative_prompt', 'steps', 'cfg', 'sampler', 'scheduler', 'clip_skip', ...ENHANCER_INPUT_KEYS] as const
   const out: ImageInput = { ...Object.fromEntries(inherited ? keys.filter(k => inherited[k] !== undefined).map(k => [k, inherited![k]]) : []), ...input, denoise: input.denoise ?? 0.2 }
   // A checkpoint's custom VAE does not carry over to a refinement that switches to a diffusion workflow.
   if (input.checkpoint_vae === undefined && PRESETS.includes(out.preset as Preset) && imagePresetSpec(out.preset as Preset).clipType) delete out.checkpoint_vae
+  // Enhancement is inherited with the source's seed; a refinement that moves to another family drops it unless asked for.
+  if (PRESETS.includes(out.preset as Preset) && !imagePresetSpec(out.preset as Preset).enhancer) for (const key of ENHANCER_INPUT_KEYS) if (input[key] === undefined) delete out[key]
   return out
 }
 
@@ -570,25 +859,23 @@ async function nodeSchemas(user: User, settings: ImageSettings, nodes: readonly 
   return schemas
 }
 /** LaMa removal: the owned source at full size plus its owned mask. No prompt, model or sampler. */
-async function planRemove(user: User, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
+async function planRemove(user: User, input: ImageInput, signal: AbortSignal, settings: ImageSettings): Promise<ImagePlan> {
   signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
   if (Object.keys(input).some((key) => !['operation', 'source_image_id', 'mask_id'].includes(key))) throw new HttpError(400, 'Remove accepts only operation, source_image_id and mask_id; LaMa needs no prompt, model or sampling settings')
   const source = imageSource(user, input.source_image_id)
   if (source.width > REMOVE_MAX_SIDE || source.height > REMOVE_MAX_SIDE) throw new HttpError(400, `Removal runs at full size and needs a source at most ${REMOVE_MAX_SIDE} pixels per side; upscale less or crop first`)
   const mask = imageMask(user, input.mask_id, source)
-  const settings = imageSettings(user)
   const uploadName = `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}`
   const maskUploadName = `agents-mask-${randomUUID()}.png`
   const schemas = await nodeSchemas(user, settings, REMOVE_NODES, signal)
   const { graph, outputNode } = removeGraph(uploadName, maskUploadName, schemas as SegmentNodeInfo)
   return { settings, source, uploadName, mask, maskUploadName, workflow: { graph, width: source.width, height: source.height, outputNode }, parameters: { operation: 'remove', width: source.width, height: source.height, mask: { id: mask.id, url: mask.url, width: mask.width, height: mask.height, semantics: 'white-edits-black-preserves' }, source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'none' } } }
 }
-async function planUpscale(user: User, input: ImageInput, signal: AbortSignal): Promise<ImagePlan> {
+async function planUpscale(user: User, input: ImageInput, signal: AbortSignal, settings: ImageSettings): Promise<ImagePlan> {
   signal = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
   const allowed = new Set(['operation', 'source_image_id', 'upscale_model', 'scale', 'width', 'height'])
   if (Object.keys(input).some((key) => !allowed.has(key))) throw new HttpError(400, 'Upscale accepts only operation, source_image_id, upscale_model, scale or dimensions; no diffusion settings')
   const source = imageSource(user, input.source_image_id)
-  const settings = imageSettings(user)
   const uploadName = `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}`
   const workflow = upscaleWorkflow(source, input, uploadName)
   // Use the small upscale-only catalog: missing diffusion loaders must not block image upscaling.
@@ -607,21 +894,26 @@ async function planUpscale(user: User, input: ImageInput, signal: AbortSignal): 
   validateUpscaleGraph(workflow.graph, schemas)
   return { settings, source, uploadName, workflow, parameters: { operation: 'upscale', upscale_model: input.upscale_model as string, width: workflow.width, height: workflow.height, input_width: workflow.input_width, input_height: workflow.input_height, source: { id: source.id, name: source.name, url: source.url, width: source.width, height: source.height, resize: 'lanczos' } } }
 }
-export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false) {
-  const plan = await planImageGeneration(user, thread, input, signal, exact)
+export async function prepareImageGeneration(user: User, thread: string, input: ImageInput, signal: AbortSignal, exact = false, prefer?: string) {
+  const plan = await planImageGeneration(user, thread, input, signal, exact, prefer)
   const p = plan.parameters
+  // With several hosts the card says which one runs it, and which ones could not.
+  const hostRow: [string, string][] = imageHosts(user).length > 1 ? [['ComfyUI host', `${plan.settings.hostName}${plan.fallbackFrom?.length ? ` · ${plan.fallbackFrom.map((f) => `“${f.host.name}” could not: ${f.error}`).join(' · ')}`.slice(0, 600) : ''}`]] : []
   if (p.operation === 'remove') return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Remove masked area · LaMa', rows: [
     ['Source', `${p.source.name} · ${p.source.id} · ${p.source.width} × ${p.source.height}`], ['Mask', `${p.mask.id} · white is removed and filled from its surroundings · ${p.mask.url}`], ['Output', `${p.width} × ${p.height} · full size, no prompt or sampler`],
+    ...hostRow,
   ] as [string, string][], body: '', image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
   if (p.operation === 'upscale') return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: 'Upscale image · review resolved settings', rows: [
-    ['Source', `${p.source.name} · ${p.source.width} × ${p.source.height}`], ['Upscale model', p.upscale_model], ['Model input', `${p.input_width} × ${p.input_height}`], ['Output', `${p.width} × ${p.height} · Lanczos final resize`], ['Resources', UPSCALE_RESOURCE_NOTE],
+    ['Source', `${p.source.name} · ${p.source.width} × ${p.source.height}`], ['Upscale model', p.upscale_model], ['Model input', `${p.input_width} × ${p.input_height}`], ['Output', `${p.width} × ${p.height} · Lanczos final resize`], ['Resources', UPSCALE_RESOURCE_NOTE], ...hostRow,
   ] as [string, string][], body: '', image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
-  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || p.checkpoint_vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise ${p.denoise}${p.clip_skip ? ` · clip skip ${p.clip_skip}` : ''}${p.v_prediction ? ' · v-prediction' : ''}`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.']]
+  const rows: [string, string][] = [['Style profile', p.profile_id ? `#${p.profile_id} · ${p.profile_reason || 'Selected profile'}` : 'None'], ['Workflow', p.preset], ['Model', p.model], ['LoRAs', p.loras.map((l) => `${l.name} (${l.weight})`).join(', ') || '(none)'], ['Text encoder', p.clip || 'Built into checkpoint'], ['VAE', p.vae || p.checkpoint_vae || 'Built into checkpoint'], ['Size', `${p.width} × ${p.height} · one image`], ['Sampling', `${p.steps} steps · CFG ${p.cfg} · ${p.sampler} / ${p.scheduler} · denoise ${p.denoise}${p.clip_skip ? ` · clip skip ${p.clip_skip}` : ''}${p.v_prediction ? ' · v-prediction' : ''}`], ['Seed', String(p.seed)], ['Negative prompt', p.negative_prompt || '(none)'], ['Compatibility', 'Catalog/name checks cannot verify custom weights. Keep matching model, encoder and VAE.'], ...hostRow]
+  if (p.enable_prompt_enhancer) rows.push(['Prompt enhancement', `ComfyUI TextGenerate on the model's text encoder · enhancer seed ${p.prompt_enhancer_seed}; the negative prompt is not enhanced`])
   if (p.operation === 'refine') rows.unshift(['Operation', 'Refine existing image'], ...(p.upscale_model ? [['Upscale model', p.upscale_model], ['Resources', UPSCALE_RESOURCE_NOTE]] as [string, string][] : []))
   if (p.hires) rows.unshift(['Hires', `${p.hires.base_width} × ${p.hires.base_height} → ${p.hires.width} × ${p.hires.height} · ${p.hires.steps} steps · CFG ${p.hires.cfg} · ${p.hires.sampler}/${p.hires.scheduler} · denoise ${p.hires.denoise} · seed ${p.hires.seed}`], ['Hires upscale model', p.hires.upscale_model ?? 'Lanczos resize only'])
   return { parameters: p, backendScope: imageBackendScope(user, plan.settings), dimensions: { width: p.width, height: p.height }, summary: { title: p.operation === 'inpaint' ? 'Inpaint image · review resolved settings' : p.operation === 'refine' ? 'Refine image · review resolved settings' : p.hires ? 'Generate with hires · review resolved settings' : p.source ? 'Edit image · review resolved settings' : 'Generate image · review resolved settings', rows: [...(p.source ? [['Source', `${p.source.name} · ${p.source.id} · ${p.source.width} × ${p.source.height}`], ['Resize', p.mask ? 'Source and mask use matching Lanczos/center crop. Black working-mask pixels preserve the working source through final compositing; output is working size.' : 'Lanczos resize with center crop; no stretching. Whole-image edit, no mask.'], ...(p.mask ? [['Mask', `${p.mask.id} · ${p.mask.width} × ${p.mask.height} · white edits, black preserves · ${p.mask.url}`]] : [])] as [string, string][] : []), ...rows], body: p.prompt, ...(p.source ? { image: { name: p.source.name, url: p.source.url, size: plan.source!.bytes.length } } : {}) }, run: async (onProgress?: (p: ImageProgress) => void) => JSON.stringify(await executeImagePlan(user, thread, plan, signal, onProgress)) }
 }
 export async function generateImage(user: User, thread: string, input: ImageInput, signal: AbortSignal, onProgress?: (p: ImageProgress) => void) {
+  // The whole job, from upload to download and cleanup, stays on the host it was planned for.
   return executeImagePlan(user, thread, await planImageGeneration(user, thread, input, signal), signal, onProgress)
 }
 /** ComfyUI has no standard input-delete API. Unique input names are retained for queued/running jobs. */
@@ -713,8 +1005,9 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
   ownImageThread(user, thread)
   await waitForVideo(user.id, signal, () => onProgress?.({ phase: 'queued' }))
   if (active.has(user.id)) throw new HttpError(409, 'An image is already generating for this account')
-  const current = imageSettings(user), { settings: s, workflow, parameters } = plan
-  if (current.url !== s.url || current.token !== s.token) throw new HttpError(409, 'Image backend changed after planning; request a new generation approval')
+  const { settings: s, workflow, parameters } = plan
+  // A default switch keeps a plan valid; an edited or removed host does not (and nothing is replayed elsewhere).
+  if (!sameImageHost(user, s)) throw new HttpError(409, `Image backend changed after planning${s.hostName && imageHosts(user).length ? ` (ComfyUI host “${s.hostName}” was edited or removed)` : ''}; request a new generation approval`)
   checkRoom(user, 1024 * 1024)
   const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
   active.set(user.id, 'image')
@@ -763,7 +1056,7 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
         const id = randomUUID(), name = `generated-${id}.png`
         checkRoom(user, bytes.length + Buffer.byteLength(JSON.stringify(parameters)))
         database().prepare('INSERT INTO agent_images (id, thread_id, name, body, created_at, metadata, backend_scope) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, thread, name, bytes, Date.now(), JSON.stringify(parameters), imageBackendScope(user, s))
-        return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, ...(parameters.operation === 'upscale' || parameters.operation === 'remove' ? {} : { seed: parameters.seed, preset: parameters.preset }), settings: parameters }, message: 'Image saved privately to this thread. Show its link to the user.' }
+        return { image: { id, name, url: `/api/agents/images/${id}`, size: bytes.length, width: workflow.width, height: workflow.height, ...(parameters.operation === 'upscale' || parameters.operation === 'remove' ? {} : { seed: parameters.seed, preset: parameters.preset }), settings: parameters }, ...(s.hostId ? { host: hostLabel(s) } : {}), ...(plan.fallbackFrom?.length ? { fallback_from: plan.fallbackFrom } : {}), message: 'Image saved privately to this thread. Show its link to the user.' }
       }
       if (job?.status?.completed) throw new HttpError(502, 'ComfyUI finished without an image')
       // The socket saying the prompt is done ends the wait early; the next /history read has it.
@@ -777,6 +1070,8 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
     // Delete only our queued prompt. Never use /interrupt: it can stop another client's GPU job.
     if (promptId) await cancelQueuedPrompt(user, s, promptId)
     if (limit.aborted) throw new HttpError(signal.aborted ? 499 : 504, signal.aborted ? 'Image generation cancelled. An already running ComfyUI job may finish, but its output will not be saved here.' : 'Image generation timed out after 10 minutes')
+    // Never resubmitted elsewhere (the prompt may already run there): the agent may retry with an explicit host.
+    if (imageHosts(user).length > 1 && error instanceof HttpError) throw new HttpError(error.status, `On ComfyUI host “${s.hostName}”: ${hostMessage(s, error)}${promptId ? ' The job was not moved to another host, because it was already queued there.' : ''}`)
     throw error
   } finally {
     active.delete(user.id)
@@ -790,11 +1085,11 @@ async function executeImagePlan(user: User, thread: string, plan: ImagePlan, sig
 const modelPreviews = new Map<string, { owner: number; settings: ImageSettings; path: string; expires: number }>()
 const normalizedPath = (value: string) => value.replaceAll('\\', '/')
 const safeModelName = (value: string) => value.length > 0 && value.length <= 2048 && !/[\x00-\x1f?#:]/.test(value) && !normalizedPath(value).startsWith('/') && normalizedPath(value).split('/').every((part) => part && part !== '.' && part !== '..')
-async function modelMetadata(user: User, category: string, name: string) {
+async function modelMetadata(user: User, category: string, name: string, host?: string | null) {
   const categories = { checkpoints: ['CheckpointLoaderSimple', 'ckpt_name'], diffusion_models: ['UNETLoader', 'unet_name'], text_encoders: ['CLIPLoader', 'clip_name'], vae: ['VAELoader', 'vae_name'], upscale_models: ['UpscaleModelLoader', 'model_name'] } as const
   if (!Object.hasOwn(categories, category) || !safeModelName(name)) throw new HttpError(400, 'Choose a valid catalog category and model identifier')
   const [node, field] = categories[category as keyof typeof categories]
-  const settings = imageSettings(user), signal = AbortSignal.timeout(10_000)
+  const settings = host ? imageHostSettings(user, host) : imageSettings(user), signal = AbortSignal.timeout(10_000)
   const bytes = await readCapped(await request(user, settings, `/object_info/${node}`, signal), 1024 * 1024)
   let info: NodeInfo
   try { info = JSON.parse(bytes.toString()) } catch { throw new HttpError(502, 'ComfyUI returned invalid model metadata') }
@@ -834,8 +1129,9 @@ async function modelMetadata(user: User, category: string, name: string) {
   return metadata
 }
 async function sendModelPreview(user: User, id: string, res: ServerResponse) {
-  const preview = modelPreviews.get(id), current = imageSettings(user)
-  if (!preview || preview.owner !== user.id || preview.expires < Date.now() || preview.settings.url !== current.url || preview.settings.token !== current.token) throw new HttpError(404, 'No such model preview')
+  // Bound to the host it came from: still configured with the same address and credentials.
+  const preview = modelPreviews.get(id)
+  if (!preview || preview.owner !== user.id || preview.expires < Date.now() || !sameImageHost(user, preview.settings)) throw new HttpError(404, 'No such model preview')
   const response = await request(user, preview.settings, preview.path, AbortSignal.timeout(10_000))
   const mime = response.headers.get('content-type')?.split(';')[0]
   if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime ?? '')) { await response.body?.cancel(); throw new HttpError(502, 'Model preview must be PNG, JPEG or WebP') }
@@ -869,12 +1165,16 @@ function generatedPreviewSource(user: User, id: string): PreviewSource {
 }
 
 export async function handleImageApi(req: IncomingMessage, res: ServerResponse, url: URL, method: string, user: User): Promise<boolean> {
+  // ?host= (an id or name of one of the account's hosts) reads that host; without it, the default.
+  const hostParam = url.searchParams.get('host')
+  const chosen = () => hostParam ? imageHostSettings(user, hostParam) : imageSettings(user)
+  if (url.pathname === '/api/agents/images/hosts' && method === 'GET') return json(res, 200, await imageHostsOverview(user, AbortSignal.timeout(30_000))), true
   if (url.pathname === '/api/agents/images/loras' && method === 'GET') {
-    const catalog = await imageCatalog(user)
+    const catalog = await imageCatalog(user, undefined, chosen())
     const loras = catalog.loras.slice(0, 2000).map((name) => catalog.loraHints.find((h) => h.name === name) ?? { name, baseModel: '', triggers: [] })
     return json(res, 200, { loras, total: catalog.loras.length, truncated: catalog.loras.length > loras.length }), true
   }
-  if (url.pathname === '/api/agents/images/model-metadata' && method === 'GET') return json(res, 200, await modelMetadata(user, url.searchParams.get('category') ?? '', url.searchParams.get('name') ?? '')), true
+  if (url.pathname === '/api/agents/images/model-metadata' && method === 'GET') return json(res, 200, await modelMetadata(user, url.searchParams.get('category') ?? '', url.searchParams.get('name') ?? '', hostParam)), true
   const preview = /^\/api\/agents\/images\/model-previews\/([0-9a-f-]{36})$/.exec(url.pathname)
   if (preview && method === 'GET') return await sendModelPreview(user, preview[1], res), true
   const session = /^\/api\/agents\/images\/threads\/([0-9a-f-]{36})$/.exec(url.pathname)
@@ -884,20 +1184,20 @@ export async function handleImageApi(req: IncomingMessage, res: ServerResponse, 
     if (method === 'DELETE') return json(res, 200, await saveThreadImageSettings(user, session[1], {})), true
   }
   if (url.pathname === '/api/agents/images/settings') {
-    if (method === 'GET') return json(res, 200, view(imageSettings(user))), true
+    if (method === 'GET') return json(res, 200, view(storedFor(user.id))), true
     if (method === 'PUT') {
       const body = await readJson(req, 16 * 1024) as Record<string, unknown>
-      // A Prediction setting names an installed checkpoint: component (diffusion model) workflows never apply v-prediction.
+      // A Prediction setting names an installed checkpoint (on any of the hosts): component (diffusion model) workflows never apply v-prediction.
       const p = body?.prediction as { model?: unknown; value?: unknown } | undefined
-      if (p && typeof p === 'object' && p.value !== 'auto' && !(await imageCatalog(user)).checkpoints.includes(p.model as string)) throw new HttpError(400, 'Prediction can be set only for an installed checkpoint; diffusion-model workflows do not use it')
+      if (p && typeof p === 'object' && p.value !== 'auto' && !(await installedCheckpointAnywhere(user, p.model))) throw new HttpError(400, 'Prediction can be set only for an installed checkpoint; diffusion-model workflows do not use it')
       return json(res, 200, saveImageSettings(user, body)), true
     }
     if (method === 'DELETE') {
       database().prepare('DELETE FROM integrations WHERE user_id = ? AND name = ?').run(user.id, NAME)
-      return json(res, 200, view(defaults())), true
+      return json(res, 200, view({ ...globalDefaults(), hosts: [], defaultHost: '' })), true
     }
   }
-  if (url.pathname === '/api/agents/images/catalog' && method === 'GET') return json(res, 200, await imageCatalog(user)), true
+  if (url.pathname === '/api/agents/images/catalog' && method === 'GET') { const s = chosen(); return json(res, 200, { ...await imageCatalog(user, undefined, s), host: hostLabel(s) }), true }
   const metadata = /^\/api\/agents\/images\/([0-9a-f-]{36})\/metadata$/.exec(url.pathname)
   if (metadata && method === 'GET') {
     const row = database().prepare('SELECT i.metadata FROM agent_images i JOIN agent_threads t ON t.id = i.thread_id WHERE i.id = ? AND t.user_id = ?').get(metadata[1], user.id) as { metadata: string | null } | undefined
@@ -985,24 +1285,28 @@ const percentOf = (share: number) => Math.round(share * 1000) / 10
  * attempt can be listed and shown). Reports what each phrase caught. The mask works with
  * generate_image remove/inpaint unchanged. Same egress, credentials, quota and one-job lock as generation.
  */
-export async function makeImageMask(user: User, thread: string, input: AutoMaskInput, signal: AbortSignal) {
+export async function makeImageMask(user: User, thread: string, input: AutoMaskInput & { host?: unknown }, signal: AbortSignal) {
   ownImageThread(user, thread)
-  const options = autoMaskOptions(input)
+  const { host, ...rest } = input && typeof input === 'object' && !Array.isArray(input) ? input : { host: undefined }
+  const options = autoMaskOptions(rest as AutoMaskInput)
   const source = imageSource(user, input.source_image_id)
-  const s = imageSettings(user)
-  if (!s.url) throw new HttpError(409, 'Configure ComfyUI in Settings → Apps → Image & Video Studio first')
   // The first run may download the segmentation weights, so allow as long as a generation.
   const limit = AbortSignal.any([signal, AbortSignal.timeout(10 * 60_000)])
-  const schemas = await nodeSchemas(user, s, AUTO_MASK_NODES, AbortSignal.any([limit, AbortSignal.timeout(30_000)]))
-  const missing = missingNodes(schemas as SegmentNodeInfo, AUTO_MASK_NODES)
-  if (missing) throw new HttpError(409, `Automatic masks are unavailable: ${missing}. Ask the user to paint the area with Edit selected area instead.`)
   const uploadName = `agents-source-${randomUUID()}.${source.mime === 'image/png' ? 'png' : source.mime === 'image/jpeg' ? 'jpg' : 'webp'}`
-  // Built (and validated) for every available segmenter before anything is uploaded.
-  const { plans: graphs, problems } = autoMaskPlans(options, uploadName, schemas as SegmentNodeInfo)
-  if (!graphs.length) throw new HttpError(409, `Automatic masks are unavailable: ${problems.join('; ')}. Ask the user to paint the area with Edit selected area instead.`)
+  // The segmenter nodes decide the host (read only): the named one, or the first of the route that has them.
+  const { value: graphs, host: s } = await onImageHost(user, imageHostRoute(user, host, threadImageHost(user, thread)?.hostId), signal, async (on, attempt) => {
+    const schemas = await nodeSchemas(user, on, AUTO_MASK_NODES, attempt)
+    const missing = missingNodes(schemas as SegmentNodeInfo, AUTO_MASK_NODES)
+    if (missing) throw new HttpError(409, `Automatic masks are unavailable: ${missing}. Ask the user to paint the area with Edit selected area instead.`)
+    // Built (and validated) for every available segmenter before anything is uploaded.
+    const { plans, problems } = autoMaskPlans(options, uploadName, schemas as SegmentNodeInfo)
+    if (!plans.length) throw new HttpError(409, `Automatic masks are unavailable: ${problems.join('; ')}. Ask the user to paint the area with Edit selected area instead.`)
+    return plans
+  })
   await waitForVideo(user.id, signal)
   if (active.has(user.id)) throw new HttpError(409, 'An image job is already running for this account')
   checkRoom(user, 256 * 1024)
+  if (!sameImageHost(user, s)) throw new HttpError(409, 'Image backend changed while preparing the mask; try again')
   active.set(user.id, 'image')
   let result: { outputs: Map<string, Buffer>; plan: (typeof graphs)[number] } | undefined
   const failures: string[] = []

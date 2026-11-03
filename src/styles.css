@@ -9808,8 +9808,9 @@ kbd {
     bottom: calc(8px + var(--sab));
     gap: 2px;
   }
+  /* 4 apps, All apps, Trash and More (the default dock) fit down to ~360px wide screens. */
   .dock-item {
-    width: 48px;
+    width: min(48px, calc((calc(100vw / var(--ui-scale, 1)) - 56px) / 7));
   }
   .dock .app-icon {
     width: 42px !important;
@@ -9828,6 +9829,10 @@ kbd {
   .dock-stack {
     --stack-cols: 2;
     bottom: calc(100% + 12px);
+    /* Many apps scroll inside the pop-up, never off the top of the screen. */
+    max-height: calc(calc(100dvh / var(--ui-scale, 1)) - var(--top) - 150px - var(--sab));
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .dock-label {
     position: static;

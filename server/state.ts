@@ -10,6 +10,14 @@ import { checkRoom } from './quota.ts'
 const KEY = /^[a-z][a-z0-9:._-]{0,63}$/
 const MAX_KEYS = 64
 
+/** The widget envelope only moves forward: a tab still running an older version would drop what a
+ * newer schema added (widget trust and its revocations), so its write is refused, not merged away. */
+const WIDGET_STATE = 'widgets:state:v2'
+const schemaOf = (value: unknown) => {
+  const schema = value && typeof value === 'object' ? (value as { schema?: unknown }).schema : undefined
+  return typeof schema === 'number' && Number.isSafeInteger(schema) ? schema : 0
+}
+
 export type StateEntry = { value: unknown; updatedAt: number }
 
 export function readState(user: User): Record<string, StateEntry> {
@@ -26,6 +34,7 @@ export function writeState(user: User, key: string, body: { value?: unknown; bas
   if (current && typeof body.base === 'number' && current.updated_at > body.base) {
     return { value: JSON.parse(current.value), updatedAt: current.updated_at, conflict: true }
   }
+  if (current && key === WIDGET_STATE && schemaOf(body.value) < schemaOf(JSON.parse(current.value))) throw new HttpError(409, 'Widget state was saved by a newer version of MvL OS; reload this tab')
   if (!current) {
     const { n } = db.prepare('SELECT COUNT(*) AS n FROM state WHERE user_id = ?').get(user.id) as { n: number }
     if (n >= MAX_KEYS) throw new HttpError(400, 'Too many keys')

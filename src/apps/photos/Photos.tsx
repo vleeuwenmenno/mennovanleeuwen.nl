@@ -92,7 +92,7 @@ export function Photos({ win }: { win: WinState }) {
   }, [toast])
 
   useBackButton(win.pid, {
-    back: () => (open ? setOpen(null) : selecting ? setSel(NONE) : album ? setAlbum(null) : view !== 'timeline' ? setView('timeline') : undefined),
+    back: () => (open ? setOpen(null) : selecting ? setSel(NONE) : album ? setAlbum(null) : view !== 'timeline' ? setView('timeline') : false),
   })
   useEffect(() => {
     if (wm.focusedPid === win.pid && !open && !root.current?.contains(document.activeElement)) root.current?.focus({ preventScroll: true })

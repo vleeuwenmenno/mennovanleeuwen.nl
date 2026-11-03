@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer, type ServerResponse } from 'node:http'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { deflateSync } from 'node:zlib'
+import { readFileSync } from 'node:fs'
 import { Server } from './empires-harness.ts'
 import { asPage } from './as-page.ts'
 import type { InpaintNodeInfo } from '../server/agentImageInpaint.ts'
@@ -158,6 +159,27 @@ try {
   assert.notEqual(repeated.image.seed, result.image.seed)
   assert.equal(toolResult(await events(`/api/agents/threads/${t.id}/retry`, {})).image.settings.operation, 'inpaint')
   console.log('PASS owned mask storage, binary/empty/dimension validation, final-composite graph, metadata, Again and Retry')
+  // Server tool path must inherit enhancement without relying on Studio input fields.
+  {
+    schemas.UNETLoader = { input: { required: { unet_name: [['moss.safetensors']] } } }
+    schemas.CLIPLoader = { input: { required: { clip_name: [['qwen.safetensors']], type: [['moss_image']] } } }
+    schemas.VAELoader = { input: { required: { vae_name: [['flux2.safetensors']] } } }
+    schemas.TextGenerate = JSON.parse(readFileSync(new URL('./fixtures/comfyui-0.43.0-object_info-TextGenerate.json', import.meta.url), 'utf8')).TextGenerate
+    database().prepare('UPDATE agent_images SET metadata = ? WHERE id = ?').run(JSON.stringify({ ...result.image.settings, enable_prompt_enhancer: true, prompt_enhancer_seed: 77 }), source)
+    const originalArgs = args
+    for (const enabled of [undefined, false]) {
+      args = { ...originalArgs, preset: 'moss_image', model: 'moss.safetensors', clip: 'qwen.safetensors', vae: 'flux2.safetensors', steps: 25, cfg: 2.5, sampler: 'euler', scheduler: 'normal', ...(enabled === false ? { enable_prompt_enhancer: false } : {}) }
+      const generated = toolResult(await events(`/api/agents/threads/${t.id}/messages`, { text: 'Inpaint the fixture' }))
+      assert.ok(generated.image, JSON.stringify(generated))
+      assert.equal(generated.image.settings.enable_prompt_enhancer, enabled === false ? undefined : true)
+      assert.equal(generated.image.settings.prompt_enhancer_seed, enabled === false ? undefined : 77)
+      assert.equal(Boolean(graphs.at(-1).enhance), enabled !== false)
+    }
+    args = originalArgs
+    database().prepare('UPDATE agent_images SET metadata = NULL WHERE id = ?').run(source)
+    for (const key of ['UNETLoader', 'CLIPLoader', 'VAELoader', 'TextGenerate']) delete schemas[key]
+  }
+
   const u0 = uploads, s0 = submissions
   for (const bad of [{ mask_id: foreignMask.id }, { source_image_id: foreign }, { source_image_id: alternate }, { mask_id: undefined }, { mask_id: 'https://example.test/mask.png' }, { graph: {} }, { hires: { scale: 1.5 } }, { denoise: 0 }, { width: 2048 }]) assert.ok(toolResult(await events(direct, { ...args, ...bad })).error)
   missing = 'ImageCompositeMasked'

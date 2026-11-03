@@ -4,7 +4,7 @@ import { bindResponse, type User } from './auth.ts'
 import { database } from './db.ts'
 import { HttpError, json, readJson, SECURITY } from './http.ts'
 import { checkRoom } from './quota.ts'
-import { holdComfyForImages, imageSettings, prepareImageGeneration, type ImageInput } from './agentImages.ts'
+import { holdComfyForImages, imageHostSettings, imageSettings, prepareImageGeneration, type ImageInput } from './agentImages.ts'
 import { installedEmbeddings } from './agentModelIntel.ts'
 import { sourceRaster } from './agentImageSources.ts'
 import { applyPresetRules } from '../src/data/modelFamilies.ts'
@@ -124,9 +124,12 @@ export async function studioRun(req: IncomingMessage, res: ServerResponse, user:
   res.on('close', () => { if (!res.writableEnded) ctl.abort() })
   const mine = runs.get(user.id) ?? new Set<AbortController>()
   runs.set(user.id, mine.add(ctl))
-  const runInput = (i: number): ImageInput => (typeof seed === 'number' && i > 0 ? { ...input, seed: seed + i } : input)
+  const enhancerSeed = input.prompt_enhancer_seed
   let plan: Awaited<ReturnType<typeof prepareImageGeneration>>
-  try { plan = await prepareImageGeneration(user, thread, runInput(0), ctl.signal) } catch (e) { forget(user.id, ctl); throw e }
+  try { plan = await prepareImageGeneration(user, thread, input, ctl.signal) } catch (e) { forget(user.id, ctl); throw e }
+  // A batch stays on the host its first picture was planned for, even if the default changes meanwhile.
+  const pinned = plan.parameters.host?.id
+  const runInput = (i: number): ImageInput => ({ ...input, ...(typeof seed === 'number' && i > 0 ? { seed: seed + i } : {}), ...(typeof enhancerSeed === 'number' && i > 0 ? { prompt_enhancer_seed: enhancerSeed + i } : {}), ...(pinned ? { host: pinned } : {}) })
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', ...SECURITY })
   // Commit point: planning only reads, running uploads, queues a job and saves. The session that
   // asked must still be good after the planning, and again before each picture of a batch.
@@ -164,7 +167,8 @@ export async function handleStudioApi(req: IncomingMessage, res: ServerResponse,
   if (path === '/api/agents/images/studio' && method === 'GET') return json(res, 200, { thread: studioThread(user), configured: !!imageSettings(user).url, batchMax: STUDIO_BATCH_MAX }), true
   if (path === '/api/agents/images/studio/images' && method === 'GET') return json(res, 200, studioImages(user, url.searchParams)), true
   if (path === '/api/agents/images/studio/embeddings' && method === 'GET') {
-    const s = imageSettings(user)
+    const host = url.searchParams.get('host')
+    const s = host ? imageHostSettings(user, host) : imageSettings(user)
     return json(res, 200, { embeddings: s.url ? await installedEmbeddings(user, s, AbortSignal.timeout(10_000)) : [] }), true
   }
   if (path === '/api/agents/images/studio/upload' && method === 'POST') return json(res, 200, studioUpload(user, await readJson(req, Math.ceil(UPLOAD_MAX * 4 / 3) + 4096))), true

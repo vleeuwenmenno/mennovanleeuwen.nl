@@ -61,6 +61,8 @@ export function toolTitle(call: ToolCall): [string, string] {
     case 'list_image_attachments': return ['Image attachments', 'Source images']
     case 'list_image_models':
       return ['Image models', 'ComfyUI']
+    case 'list_image_hosts':
+      return ['ComfyUI hosts', s(call, 'query') || 'All hosts']
     case 'model_details':
       return ['Model details', s(call, 'name') || `${s(call, 'kind')}: ${s(call, 'query')}`]
     case 'read_file':
@@ -220,7 +222,7 @@ export function toolLines(call: ToolCall, result: string, w: number, verbose: bo
         const label = image.settings?.operation === 'inpaint' ? 'Inpainted image' : image.settings?.operation === 'refine' ? 'Refined image' : image.settings?.hires ? 'Generated image with hires refinement' : 'Generated image'
         const hires = image.settings?.hires
         const stages = hires ? `\n  Hires: ${hires.base_width} × ${hires.base_height} to ${hires.width} × ${hires.height} · strength ${hires.denoise} · ${hires.steps} steps · CFG ${hires.cfg} · ${hires.sampler}/${hires.scheduler} · seed ${hires.seed}${hires.upscale_model ? ` · ${hires.upscale_model}` : ''}` : ''
-        return ok([under(`${label} · ${image.width} × ${image.height}${image.seed === undefined ? '' : ` · seed ${image.seed}`}${qualityNote(result)}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler} · denoise ${image.settings.denoise}${image.settings.source ? `\n  Source: ${image.settings.source.name} (${new URL(image.settings.source.url, location.origin).href})` : ''}${image.settings.mask ? `\n  Mask: ${image.settings.mask.id} · white edits, black preserves working source` : ''}\n  Model: ${image.settings.model}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}${image.settings.upscale_model ? `\n  Upscaler: ${image.settings.upscale_model}` : ''}${stages}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
+        return ok([under(`${label} · ${image.width} × ${image.height}${image.seed === undefined ? '' : ` · seed ${image.seed}`}${qualityNote(result)}`), ...(image.settings ? wrap([seg(`  ${image.settings.preset} · ${image.settings.steps} steps · CFG ${image.settings.cfg} · ${image.settings.sampler}/${image.settings.scheduler} · denoise ${image.settings.denoise}${image.settings.source ? `\n  Source: ${image.settings.source.name} (${new URL(image.settings.source.url, location.origin).href})` : ''}${image.settings.mask ? `\n  Mask: ${image.settings.mask.id} · white edits, black preserves working source` : ''}\n  Model: ${image.settings.model}${image.settings.host ? ` · host ${image.settings.host.name}` : ''}\n  Encoder: ${image.settings.clip || 'checkpoint'} · VAE: ${image.settings.vae || 'checkpoint'}${image.settings.upscale_model ? `\n  Upscaler: ${image.settings.upscale_model}` : ''}${stages}\n  Settings: ${new URL(image.url + '/metadata', location.origin).href}`)], w) : []), ...wrap([{ t: url, link: url }], w, [seg('  ⎿  ', 'muted')], [seg('     ')])])
       }
       return ok([under(oneLine(result))])
     }

@@ -1016,7 +1016,7 @@ export function Files({ win }: { win: WinState }) {
 
   const goBack = () => {
     const prev = back[back.length - 1]
-    if (prev === undefined) return
+    if (prev === undefined) return false
     setBack(back.slice(0, -1))
     setFwd([toPosix(path) ?? path, ...fwd])
     navigate(prev, false)

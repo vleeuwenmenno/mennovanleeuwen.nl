@@ -31,6 +31,8 @@ export type WidgetPlace = {
   phone?: boolean
   /** Independent mobile grid coordinates; absent on legacy column layouts. */
   homeGrid?: boolean
+  /** Phone home screen the widget is on (x is then its place on that page); absent on older saves, which are one long column. */
+  page?: number
   vw: number
   vh: number
   /** Its place in the phone layout's column, once moved there by hand. */
@@ -58,6 +60,7 @@ function place(id: string, raw: Partial<WidgetPlace>): WidgetPlace {
     ...(raw.screenUnknown ? { screenUnknown: true } : {}),
     ...(typeof raw.phone === 'boolean' ? { phone: raw.phone } : {}),
     ...(raw.homeGrid ? { homeGrid: true } : {}),
+    ...(typeof raw.page === 'number' && Number.isInteger(raw.page) && raw.page >= 0 && raw.page < 12 ? { page: raw.page } : {}),
     vw: num(raw.vw),
     vh: num(raw.vh),
     ...(typeof raw.stack === 'number' ? { stack: raw.stack } : {}),
@@ -115,6 +118,18 @@ export const liveWidgets = (set: WidgetSet) =>
   Object.keys(set.places)
     .sort()
     .map((k) => set.places[k])
+
+/**
+ * The order the phone counts its widgets in (the old column's rows and, from them, pages): the
+ * ones moved by hand by their place (`stack`), then by id, and entries that tie (the same widget
+ * under two keys, put back by two devices at once) by key. The same list the display projects and
+ * the first phone edit freezes from, whatever order the entries were added in.
+ */
+export function phoneOrder(set: WidgetSet): [string, WidgetPlace][] {
+  return Object.entries(set.places)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(([, a], [, b]) => (a.stack ?? Infinity) - (b.stack ?? Infinity) || a.id.localeCompare(b.id))
+}
 
 /** The entries of a widget on the desktop (one, unless two devices put it back at once), first key first. */
 export const entriesOf = (set: WidgetSet, id: string) =>

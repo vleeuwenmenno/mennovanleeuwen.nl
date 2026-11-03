@@ -731,6 +731,8 @@ export function toolLabel(call: ToolCall, result?: string): string {
       return 'Inspect generated image with vision'
     case 'list_image_models':
       return 'Discover image models'
+    case 'list_image_hosts':
+      return s('query') ? `Searched ComfyUI hosts for “${s('query').slice(0, 80)}”` : 'Listed ComfyUI hosts'
     case 'model_details':
       return modelDetailsLabel(a, result)
     case 'web_search':

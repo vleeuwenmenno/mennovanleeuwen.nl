@@ -365,6 +365,14 @@ window back, switching to that window's workspace; clicking again minimizes it, 
 windows brings the next one forward. Right-click (or long-press) an app for its windows by title,
 with their workspace. Its item goes when its last window closes. Notes and widgets never get one.
 
+**Phone dock.** Settings → Dock → *Phone dock* → *Apps shown in the dock* (1 to 8, default 4, on this
+device only) is how many pinned or open apps the dock shows on a phone-sized screen before the rest
+go under **More**. *All apps*, *Trash* and *More* itself are extra and do not count, so the default
+is four apps plus those three. The width still decides first: fewer show on a narrow screen (or
+with an open app that adds a divider), and a higher number never makes the dock wider than the
+screen. The More pop-up scrolls inside itself when there are many apps. Open apps keep their place;
+pinned ones move under More first. The desktop dock is unchanged.
+
 Settings → Dock → *Show the dock* picks when the dock shows (always, auto-hide when a window covers
 it, or always auto-hide). Windows snapped left, right or to a corner keep room for the dock unless
 it always auto-hides; turning off *Reserve dock space for snapped windows* (on this device only,
@@ -2684,8 +2692,14 @@ Documents. Right-click a Seafile folder's empty space for New (folder, text file
 spreadsheet, presentation), Upload, View, Sort, and Seafile (copy a share link, open it in
 Seafile's own web interface, the library's trash, lock now).
 
-The mouse's Back and Forward buttons, and the browser's own Back, go back in the focused window
-(Files a folder, Preview a picture, Archive up a folder) instead of leaving the site.
+The mouse's Back and Forward buttons, and the browser's own Back (a phone's Back button or gesture),
+go back in the focused window (Files a folder, Archive up a folder; Preview a picture with the mouse
+button) instead of leaving the site. First, whatever sits on top of the page closes: a context menu,
+a dialog, Spotlight or All apps, the notification list, the dock's More and the home editor
+([`src/os/backLayers.ts`](src/os/backLayers.ts); each closes only itself). A window with nothing left
+to go back to (a handler returns `false`), and on a phone, then lets Back minimize the app window,
+which stays running in the dock, and after that return from a later home screen to the first. App
+content is never intercepted: only what an app registers itself with `useBackButton` is asked.
 
 Questions (delete this? empty the trash?) are the desktop's own dialogs, never the browser's.
 
@@ -3291,6 +3305,60 @@ stored encrypted and are never returned to the browser or model. Internal/LAN Co
 are allowed only for admins, using the same DNS-pinned network guard as other integrations for
 non-admin accounts. The server must be able to reach ComfyUI; browsers never connect to it directly.
 
+**Several ComfyUI hosts.** The same settings hold up to 8 named hosts, each with its own URL and
+optional bearer token (empty keeps the saved token, **Remove saved token** clears it), and one marked
+**Default**. **Add host**, edit or **Remove** them and press **Save & discover models**; removing the
+default makes the first remaining host the default, and removing the last one disconnects. Each
+host shows whether it answers and how many models and LoRAs it has, checked on its own, so an
+offline host shows its error while the others still list. Hosts have stable opaque ids: renaming
+one, changing its URL or switching the default keeps its id. A single URL saved before hosts
+existed becomes a host called “ComfyUI” with the same token, so existing setups keep working, and
+older clients that send one `url` and `token` edit the default host.
+
+Each host keeps its own catalog, nodes, LoRA Manager facts and image observations (an
+observation belongs to the host's address and credentials, so switching the default does not
+orphan it); catalogs are never merged. The default is a preference, not a limit:
+
+- **Choosing a host.** With several hosts, `list_image_models`, `model_details`, `make_image_mask`,
+  `generate_image` and `render_video` take an optional `host` (an id or name of one of the
+  account's hosts; never an address), and `list_image_hosts` lists every host with its status,
+  counts and capabilities, or with `query` the installed files on each host whose names match,
+  per host. A thread can prefer a host in its **Session image settings** (the model lists there are
+  that host's). The agent is told to look on the other hosts when a requested model, LoRA or
+  upscaler is not on the default one, to use exact identifiers only on a host that lists them, and
+  never to swap a requested file for another.
+- **Fallback.** A call without `host` plans on the thread's host (or, for Generate another, the
+  host the picture was made on), then the default, then the other hosts, at most 3, and uses the
+  first one that answers and has everything the call needs (the exact model, LoRAs, nodes,
+  upscaler). Planning only reads catalogs and node schemas, so trying the next host is safe; an
+  input error (a bad size, a missing source) stops at once. A call with `host` uses only that host
+  and its error names the other hosts, so the agent can retry with one of them. The approval card
+  and the result say which host ran the job, and which hosts could not.
+- **Pinned jobs.** Once planned, a job stays on its host for everything: uploads, the prompt, the
+  progress socket, queue and history polling, the download, cleanup and cancellation. It is never
+  moved or resubmitted to another host, not even when that host fails after accepting the prompt
+  (that could run the same job twice); the agent may retry it on another host explicitly. An Image
+  Studio batch keeps the host of its first picture. A video render stores its host's scope: it runs
+  there even when the default changes before it starts, and fails (render again) when that host is
+  edited or removed. A planned picture likewise still runs after a default switch, but asks for a new
+  plan when its host's URL or token changed or the host was removed. One ComfyUI job at a time per
+  account still holds across all hosts.
+- **Same guards per host.** Every request to every host goes through the same egress check
+  (DNS-pinned for non-admins, LAN hosts for admins only). Tokens stay encrypted and never reach the
+  browser, a tool result or an error message, and errors name a host, not its address. The Image
+  Studio, the Video Studio's model lists and the account's default models use the default host's
+  catalog; `GET /api/agents/images/catalog?host=<id>` reads another one, and
+  `GET /api/agents/images/hosts` checks them all.
+
+```sh
+pnpm check:agents-image-hosts   # legacy migration, save/default/removal, token redaction, offline default, a model only on the second host, explicit host errors, separate catalogs and credentials, no resubmit after a prompt is accepted, default switch mid-job, video jobs, unknown hosts, non-admin LAN refusal
+```
+
+Host discovery allows eight seconds per attempt when trying multiple hosts, leaving time
+for fallback within a discovery request. Cancellation still stops all attempts. Session model
+artwork, model details, and the composer's LoRA picker follow the session's selected host;
+changing account or session host settings refreshes the picker.
+
 **Image Studio.** Generating by hand, without an agent, is an app of its own: see
 [Image Studio](#image-studio). **Image Studio** in the Agents sidebar (the rail icon, the
 sidebar's right-click menu) opens it.
@@ -3694,11 +3762,36 @@ templates: the model, a `moss_image` CLIPLoader with the Qwen3.5 9B encoder, `Em
 KSampler at 25 steps, CFG 2.5, `er_sde`/`simple`, and the FLUX.2 small VAE. Negative prompts are
 supported; prompts can be long (about 4K tokens). MOSS files in `models/checkpoints` hold the
 diffusion model only, so `CheckpointLoaderSimple` supplies just MODEL and the encoder and VAE always
-come from CLIPLoader and VAELoader. Its LoRAs are model-only (`LoraLoaderModelOnly`); clip skip and
-embeddings do not apply. The Studio's hires pass defaults to 0.6 strength for MOSS. Not yet built:
-the template's TextGenerate prompt enhancer, SkipLayerGuidanceDiTSimple, MOSSImageLayoutPrompt
-boxes, TextEncodeMOSSImageEdit and MOSSImageControl.
-Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; prompt enhancement, image-to-image and LoRAs are not included. Matching model, encoder and VAE files must be installed and resolved automatically or selected manually; filenames alone do not establish compatibility. Discovery reads only the ten required classes via ComfyUI's
+come from CLIPLoader and VAELoader. Its LoRAs are model-only (`LoraLoaderModelOnly`) and must be made
+for MOSS Image: ComfyUI skips a LoRA whose layers do not match without any error (a Krea 2 LoRA renders
+pixel-identical to none), so when LoRA Manager names a different model-only family (MOSS Image,
+Krea 2, Z-Image) as the LoRA's base model, generating is refused (HTTP 409) and the Studio blocks
+Generate with the reason. Clip skip and embeddings do not apply. The Studio's hires pass defaults to 0.6 strength for MOSS. Not yet built:
+SkipLayerGuidanceDiTSimple, MOSSImageLayoutPrompt boxes, TextEncodeMOSSImageEdit and
+MOSSImageControl.
+
+**Prompt enhancement (MOSS Image, Krea2 Raw, Krea2 Turbo).** Optional and off by default: a
+request, tool call or saved Studio form that does not mention it runs the exact graph it always did.
+When switched on (Studio: *Enhance prompt* under the prompt; tool: `enable_prompt_enhancer: true`),
+the positive prompt goes through ComfyUI's native `TextGenerate` node on the model's own text encoder,
+and its `generated_text` feeds the positive `CLIPTextEncode`. The negative prompt is never enhanced.
+The enhancer has its own seed (`prompt_enhancer_seed`, the Studio's *Enhancer seed*; random when
+omitted; -1 is the Studio’s random-seed choice, not a tool argument), independent of the image
+seed. A fixed seed requests repeatable caption sampling with the same prompt and backend. Recipes and system prompts are copied from the official templates in
+Comfy-Org/workflow_templates (`image_moss_image_t2i`, `image_krea2_turbo_t2i`; the node schema is
+`comfy_extras/nodes_textgen.py` in ComfyUI): MOSS sends the template's caption-writer system prompt
+as `system_prompt` with 4096 max tokens, temperature 0.7, top-k 64, top-p 0.95, min-p 0.05,
+repetition penalty 1 and no thinking; Krea2 prepends its template's system prompt to the prompt
+with 512 max tokens, repetition penalty 1.05 and thinking on. ComfyUI ships no enhancer template
+for Krea2 Raw; it shares the Krea2 text encoder and template recipe with Turbo, so it uses the same
+step. Other presets refuse it (HTTP 400). Support is checked against the installed `TextGenerate`
+schema (`list_image_models` → `prompt_enhancement`, and the Studio blocks Generate with the reason);
+an older ComfyUI without the node or its `sampling_mode`/`system_prompt` inputs gets a clear 409.
+It adds an LLM pass (extra time and memory) before sampling. The recorded settings keep
+`enable_prompt_enhancer` and `prompt_enhancer_seed` only when it was on (absent means off);
+Use these settings restores both, Refine and inpaint inherit them, and Generate another draws a new
+enhancer seed along with the new image seed. The expanded caption itself is not stored or returned.
+Krea2 Raw uses a separate diffusion model, `krea2` text encoder and VAE with 52 Euler/simple steps and CFG 3.5. Krea2 Turbo uses the same loader types with 8 Euler ancestral/beta steps, CFG 1 and zeroed negative conditioning (positive prompt only). These are text-to-image workflows; image-to-image and LoRAs are not included here, and prompt enhancement is optional (see above). Matching model, encoder and VAE files must be installed and resolved automatically or selected manually; filenames alone do not establish compatibility. Discovery reads only the required classes (plus `TextGenerate` for the optional enhancer) via ComfyUI's
 `/object_info/{node_class}`, avoiding unrelated custom-node catalogs. Responses are limited to
 1 MiB per node and 4 MiB total, with a 30-second discovery deadline and specific errors for
 oversized metadata. Required models, nodes and sampler options are checked before submission. Flux, custom workflows,
@@ -3851,8 +3944,9 @@ scheduler options and up to 40 filenames per category (queryable, maximum 100). 
 to discover once, prefer recommended defaults, preserve explicit user choices and tune only when
 requested or clearly needed. Steps are integers from 1 to 80; CFG is finite from 0 to 20, with CFG
 fixed at 1 for both Turbo workflows. Only the listed KSampler options are accepted. Denoise stays
-1 for text-to-image; arbitrary graphs, backend settings, model downloads, batch generation,
-prompt enhancement, LoRAs and upscaling are not tool options.
+1 for text-to-image; `enable_prompt_enhancer` and `prompt_enhancer_seed` are the only enhancer
+options; arbitrary graphs, backend settings, model downloads, batch generation
+and custom enhancer prompts are not tool options.
 
 **Model details (`model_details`)** give the agent a recipe per model instead of one per preset.
 It is a read-only Images tool, with no approval card: `name` (an exact installed identifier) returns
@@ -4938,7 +5032,7 @@ part of the digest). Only then does the host run and show the widget on a phone-
 **active** revision decides: a fork that says false (or nothing) stays hidden on a phone even when
 the built-in it came from says true. The Sticky note, Weather, Agenda, Code inbox, Status, Minecraft
 server and Clock are phone-compatible (checked at 390 px wide: no sideways overflow), and the custom
-widget template says `phone: true`. On a phone they share the scrollable Home grid with icons;
+widget template says `phone: true`. On a phone they share the home screens (fixed pages) with icons;
 drag their top strip to choose a snapped x/y position. Their selection and coordinates save
 independently from desktop. *Show notes and widgets
 on the desktop* in Settings still puts them all away. **Add widget** (desktop menu, All apps,
@@ -5000,11 +5094,82 @@ at most 4 KiB, read as `input.custom.state` and replaced only by a button event 
 `{type:'custom.replace', state, expectedRevision}` (refused if the state changed meanwhile or is too
 large). Every package also sees the clock (`input.custom.now`, `input.custom.today`). There is no
 network, notes, other widget data or DOM. As for any fork, a revision never runs until you grant that
-exact revision for that instance in this session; after a reload the widget asks again
-(*Allow this revision…*) and **Pause access** withdraws it. **Reset saved state** in the Workshop
-clears the state. `pnpm check:widget-custom` covers manifest rules, the starter in the VM, the state
-limit and record merge/limits; `pnpm check:widget-custom-ui` runs the whole create, reload, use and remove
-flow in muted Chromium with scratch data.
+exact revision for that instance in this session, unless you chose **Trust always** for it (below);
+after a reload an untrusted widget asks again
+(*Allow this revision…*, which allows it once) and **Pause access** withdraws that session grant.
+**Reset saved state** in the Workshop clears the state. `pnpm check:widget-custom` covers manifest rules,
+the starter in the VM, the state limit and record merge/limits; `pnpm check:widget-custom-ui` runs the
+whole create, reload, use and remove flow in muted Chromium with scratch data.
+
+**Trust always.** A custom widget you made yourself can be trusted so it runs without asking, per
+account, on every device you sign in to. The Workshop offers *Trust this widget, so it runs without
+asking* next to the opt-in after a successful build (it applies when you activate), and the widget's
+own banner offers **Trust always** next to *Allow this revision…*. Both appear only when the build is
+eligible; otherwise the Workshop shows the box disabled with the reason and the banner offers Allow once
+only. Eligible means all of this, checked again on the click:
+
+- The folder is exactly `~/.local/share/mvlos/widgets/<manifest id>` (no `.`/`..`, nothing a path
+  resolver would rewrite) in home's own storage: the signed-in browser store on home, or a writable
+  Seafile library mounted on home. Not a bind mount, a read-only mount, another mount inside the
+  folder, `/mnt/browser`, a projected launcher entry, or a Seafile entry reported as anything other
+  than a plain file or folder (on the way to the folder or inside it). The browser store has no links
+  and Seafile libraries hold only files and folders, so an unknown entry type is refused rather than
+  resolved. A widget built anywhere else (`~/dev/…`, a folder an agent works in) always asks.
+- The build succeeds, the stored snapshot verifies, and its capabilities fit a custom widget.
+- It is the active revision of that installed custom widget, and rebuilding the folder now gives
+  the same digest.
+
+Trust is pinned to those exact bytes: it records the instance, package id, source identity, digest,
+installation identity and the time. Any edit is a new digest and asks again, so does recovering
+another revision or a different installation. A grant that does not match is ignored, never repaired.
+
+A recorded grant alone never runs a widget. Each device checks with its own storage that the folder
+is still exactly there (the same gate as above, rebuilt to the pinned digest) and keeps what it saw
+as evidence. The check always reads the folder from where it is stored (IndexedDB for browser files,
+Seafile itself), never from the tab's memory alone. The evidence counts only while the device sees the
+same thing: the mounts, the folder and every entry in it are compared on every render and before every
+run and button action. In browser files every write, removal or move gives the entry a new mutation
+number (so a same-size write, or a clock set back, still counts as a change). Another tab of the same
+browser announces the paths it changed; that makes this tab read the folder again from IndexedDB, and
+nothing runs until it has. Evidence also expires after 20 seconds on the monotonic clock (setting the
+clock back cannot stretch it), for browser files too, so a missed announcement or a Seafile change made
+elsewhere is caught then, and it is dropped when the tab is hidden, frozen, resumed or comes back online.
+It is checked again in the background after 10 seconds while the existing evidence still counts; a
+check that has not finished after 15 seconds fails. Without evidence that counts (first load, after
+something it saw changed, or after it ran out), the widget shows *Checking this trusted widget's
+folder…* and nothing runs until the check passes. A passing check only lets an existing grant count
+again; it never makes a new one. A device where the source is missing or
+different (another browser for a browser-files widget, a deleted or edited folder, a bind or
+read-only mount, an unknown entry type) falls back to asking, with the reason under *Allow this
+revision…*; putting the exact bytes back, or undoing the mount, runs it again. A folder deleted from
+its own storage revokes the trust for good (on every device, and the same bytes put back or a stale
+copy of the account state do not restore it). Seafile changes made elsewhere are noticed within the
+20 seconds. Trusting a newer revision of a widget retires the grants for its older installations
+(their installation generation can never come back; each widget keeps the highest generation it was
+trusted for, so this is the same whatever order devices merge in), so a widget can be edited and
+trusted any number of times; **Revoke trust** stays available while any earlier decision is left.
+The revocations of that widget you had seen at the moment of your click are what the grant records:
+if it is revoked (on another device, or with Revoke trust here) while the check after your click is
+still running, no grant is made and you are asked to decide again. Only your own click (a browser-trusted event) creates trust: activation, builds, recovery, sync and the
+agents' `widget` command cannot (their activation is always `trust: false`). **Revoke trust** in the
+widget's toolbar (next to *Pause access*) ends trust and every Allow once grant for that widget at once,
+here and on other devices as soon as they sync. It takes effect in this tab before it is saved: if the
+browser's storage is full or blocked, the widget still stops at once, nothing (a passing folder check, a
+stale copy of the account state) lets it run again here, and the banner says the revocation is not saved
+to your account yet, with *Retry saving the revocation* (Revoke trust again does the same). Until it is
+saved, other devices and a reload of this tab do not know about it. A deliberate **Trust always** click
+here meanwhile makes a new grant that carries the unsaved revocation, so saving that grant saves the
+revocation too. Removing the widget revokes too. Revocation is causal,
+not timed: every revocation has its own id, a grant lists the revocations its device had seen, and it
+counts only while it has seen all of them. A grant made on a device that had not seen a revocation
+(offline, a stale tab, a skewed clock) stays revoked, and a stale copy can never bring one back.
+Trusting again works after the device has seen every current revocation. Trust lives in the account's
+widget state (`widgets:state:v2`, schema 3; schema 2 data migrates with every config, placement and
+installation kept, and no trust). The server refuses a widget state written by an older version, so an
+old tab cannot drop revocations. `pnpm check:widget-trust` covers the grant predicate, causal merges,
+clock skew, the migration and the server refusal; `pnpm check:widget-trust-ui` runs the Workshop and
+banner flows, reloads, edits, refused folders and links, agent activation and two Seafile devices
+(including a stale and a concurrent revocation) in muted Chromium against a mock Seafile.
 
 **Sticky parity.** A Sticky shows the calendar events its note is linked to as the same chips the
 Notebook shows, under the package's own output: click one to open the event in Calendar, × to
@@ -5053,7 +5218,8 @@ their usual hash and read-before-edit rules:
   access being granted; Allow or Deny). Deny, Escape, a closed thread or no desktop to ask on: exit 1
   `activation requires approval` and nothing is written. On Allow the folder and the installation are checked
   again (changed source or a changed installation is refused as a conflict), then the same
-  `activate` + grant as the Workshop run. `--generation` makes a stale `widget list` a conflict. `--new` takes
+  `activate` + grant as the Workshop run, always with `trust: false`: there is no trust subcommand or
+  option, and an agent can never make a widget *Trust always* (only the user's own click can). `--generation` makes a stale `widget list` a conflict. `--new` takes
   its instance id from the folder and the digest, so retrying a call whose answer got lost says
   `already active` and changes nothing (no second widget, no second generation bump, no second dialog);
   edited source is a new digest, so update an installed widget with `--instance <id>`. Activation needs a
@@ -5091,7 +5257,8 @@ would otherwise straddle a byte boundary. All items remain reachable; the editor
 window, full source text and revision. Legacy `note.replace` is accepted only for a complete
 small projection. Native notes support 256 KiB UTF-8; existing larger notes remain readable and
 editable without truncation (up to 32 KiB growth per edit). Fork data grants bind account, backing identity, instance and source digest. They are local
-to the live session, never imported from build files or synced approval flags. **Pause access**
+to the live session, never imported from build files or synced approval flags (the one exception is a
+custom widget's explicit *Trust always*, see Custom widgets above). **Pause access**
 revokes the revision; logout cancels workers and denies stale writes. A reloaded fork needs a fresh local grant. A browser-backed fork arriving on a different browser
 is unavailable until cloned and rebuilt against that browser's own store; its imported UUID is not authority. Weather gets only a forecast projection for a host-selected place:
 search queries come from the trusted user-operated city picker, not package code. Preview uses
@@ -5446,8 +5613,24 @@ taking it off makes a new entry with a key of its own. `pnpm check:widgets-sync`
 these rules in memory. `pnpm check:widgets-sync-ui` checks migration,
 cross-device display, phone layout and delayed sticky contents in muted Chromium with scratch
 accounts and data; it starts and stops its own server.
-A big screen puts a widget where it was put, moved along when its own screen is another size (a
-widget near the right edge stays near the right edge) and fitted onto a smaller one; a widget
+A big screen puts a widget where it was put on the screen it was put on, and shows its **share of
+the room it can travel** on this one: the position is worked out as `(x - minX) / (maxX - minX)` and
+the same for y, with the range taken from the widget's real (fitted) width, the top bar, the dock
+and the rotated grip ([`projectWidget` and `widgetBounds` in `widgetLayout.ts`](src/os/widgetLayout.ts)),
+in page pixels, so the UI scale counts like any other resize. A widget exactly in the middle stays
+in the middle, one at an edge stays at that edge, in a browser resized live, after a reload and
+after a UI scale change alike. The place that is saved never changes by resizing: what is shown is
+worked out again from it every time (asking for the first size back gives it back exactly, through
+any number of sizes), nothing is written (no sync traffic) and a collision nudge is only drawn. Only
+a drag or a resize by hand saves a new place, tagged with the screen it was made on (`vw`/`vh`); an
+edit that is not a move (minimizing, say) keeps the screen the place was put on. A place from an
+older save that does not know its screen is used as it is and only kept on screen, not guessed; a
+screen with no room to travel (a widget wider than the page, a tiny window) carries no share, so the
+widget is kept on screen and the share comes back when there is room. A desktop widget with
+nothing in its way is drawn exactly where it is; only a colliding one looks for a free cell on the
+lattice. Notes in the window layout carry no screen, so they are only kept on screen.
+`pnpm check:widget-geometry` (pure) and `pnpm check:widget-resize` (muted Chromium) check centre,
+edges, shrink and expand, reload, UI scale, collisions and explicit drags. A widget
 added on a phone gets the usual spot for a new widget there. Phones initially inherit the existing widgets. Their first addition, removal, minimization or
 move saves an independent mobile set (`widgets:placed:mobile`). If account hydration is still
 pending, edits remain optimistic and the first snapshot waits for canonical hydration, then
@@ -5467,19 +5650,72 @@ On desktop, turning avoidance off preserves manual widget overlaps; icons still 
 Automatic fitting never overwrites synced preferred widget positions. The last manually moved
 widget retains local priority, separately for each account, including after reload.
 
-Mobile home has **Home** and **Icons** views, with labelled page controls above the dock.
-Home places widgets and icons together on the same grid. Swipe left on empty home space for
-Icons, right for Home; vertical movement on empty space still scrolls. Drag icons to move them (dropping on another swaps cells); taps open them.
+**Phone home screens.** The phone home is a row of fixed pages that you swipe sideways
+([`src/os/homePages.ts`](src/os/homePages.ts), [`src/os/homePager.ts`](src/os/homePager.ts),
+[`src/os/HomePager.tsx`](src/os/HomePager.tsx)); it never scrolls down. The browser's own
+horizontal scrolling with snapping turns the pages, so a swipe works from anywhere (an icon, a
+widget, empty space) and an app's own scrolling (a widget's body, a list) keeps vertical moves.
+Android's edge gestures are not taken: nothing listens at the screen edge except while you carry
+something. Small dots above the dock show the pages (named *Page 2 of 3*, the current one marked,
+44 px-wide targets); a pencil next to them opens **Edit home screen**, as does the empty home's long
+press menu.
+
+The pages use all the room above the dots. What is kept free at the bottom is measured, not
+guessed ([`src/os/bottomReserve.ts`](src/os/bottomReserve.ts)): the dock's real height and its distance
+from the edge (which includes a phone's safe area and follows the dock's size and the UI scale), the
+28 px pill of the dots 6 px above it (their buttons keep a 40 px tap target, reaching 6 px over the
+pill's edges), and 6 px to the lowest row. The lowest row of icons needs only its 112 px icon, not the
+8 px gap below it. Nothing else is reserved; nothing scrolls down. A change of dock, screen,
+rotation or UI scale only re-lays out what is shown: the saved places are not rewritten. On the
+desktop the same measurement replaces the fixed 100 px below the icons (4 px above the dock, or 4 px
+when the dock always hides and there is a mouse).
+
+- **Lift and move.** Hold an icon or a widget's top strip still for about 0.4 s (a buzz): it lifts,
+  the page stops following the finger and the item does. Hold it at the left or right edge for half
+  a second and the screen turns to the next page (on the last page, if it holds something, a new
+  one is made). Let go, and it takes the nearest free cell there; nothing swaps, nothing else
+  moves, nothing overlaps, and an item never hangs between two pages. A lift never opens a menu.
+- **Two holds for the menu.** Lift the item, let go without dragging, then hold the same item again
+  within 3 seconds (`SECOND_HOLD_MS` in [`ContextMenu.tsx`](src/os/ContextMenu.tsx)): its menu opens
+  once, with a second buzz where the device has a vibration motor (best effort: iOS Safari has none, and
+  nothing is promised there). The menu has **Move to page** (the alternative to dragging) and, for
+  widgets, Move up, down and to top. The wait starts over when the second hold takes too long, the
+  finger moves or is cancelled, a second finger joins, another item or empty space is touched, or
+  the first hold was dragged and dropped. A drag or drop never opens a menu, and neither does the
+  browser's own long-press menu for a held finger (it is dropped for these items). The same menu is
+  one right-click, or the keyboard's context-menu key / Shift+F10 on the focused icon, away; and
+  with *Edit home screen* open the hint under the dots says how to reach it.
+- **Edit mode** has *Add page*, *Remove page* and *Done*. Only an empty page can be removed (the
+  button says so); later pages move down one and nothing is deleted. At most 12 pages. Back leaves
+  the editor.
+- **Older homes** (one tall page, icons with rows below the screen, widgets in a long column) are
+  cut into pages when shown, by row and by the height the widget was saved at, without saving
+  anything: until you change something, the old data is untouched and every device keeps showing it.
+  The first page change or removal saves explicit page and cell for what it touches (icons: `page`
+  in `mobilePositions`; widgets: `page` in the independent mobile set; the number of pages:
+  `mobilePages` in the desktop state). The desktop layouts are never changed by any of this.
+  Turning the phone or a smaller screen keeps every item on its page (a widget's `x` counts the
+  page, 1000 px per page); one that no longer fits goes to the next page with room and comes back
+  when the screen is big enough again (the saved place is not rewritten).
+- With **Notes and widgets** put away (Settings → Windows) the home shows icons only, on the
+  same pages; icons keep clear of their widgets' places either way, so nothing moves when they come
+  back.
+- With storage blocked the pages and placements work until the page closes.
+
 Mobile icon positions save separately in the account's desktop state and initially inherit
-existing positions. Drag a widget by its grip to move it in both axes, snapped every 20 px; its mobile x/y coordinates
-save independently. Move up/down/top menu controls move it spatially on this grid. Readable
-widgets can span most or all phone columns; crowded homes scroll vertically. Old mobile column
-layouts migrate in their saved order to grid rows without saving automatic positions or changing
-the desktop. The first manual mobile edit freezes those initial rows in the independent mobile set, so later
-removals cannot change untouched widgets' starting coordinates on reload.
-`pnpm check:desktop-layout` covers crowded placement, resize overflow, independent mobile grid
-coordinates, reload/migration, touch widget/icon movement, native swipes in both directions, and
-app control reachability while the home content scrolls.
+existing positions. Widgets move in both axes on the same snapped grid (20 px) and their mobile
+coordinates save independently. Old mobile column layouts migrate in their saved order to
+pages without saving automatic positions or changing the desktop. The first manual mobile edit
+freezes those initial rows in the independent mobile set, so later removals cannot change
+untouched widgets' starting coordinates on reload.
+`pnpm check:home-hold` covers the two-hold menu (single hold: no menu; second hold: exactly one;
+moved, cancelled, expired, two-finger and other-item sequences start over; drag and drop never open
+one; right-click and keyboard menus) and the bottom edge (lowest row clear of dots and dock on short,
+tall and landscape phones, UI scales, a safe area and a taller dock). `pnpm check:home-pages` (pure layout, migration, drops), `pnpm check:mobile-home` (real touch in a
+muted phone-sized Chromium: swipes, long press, dragging between pages, dots, edit mode, dock cap,
+Back, resize, blocked storage, desktop) and `pnpm check:desktop-layout` (crowded placement, independent
+mobile coordinates, reload and migration, touch widget and icon moves, app control reachability) cover this.
+Browser emulation is not a physical phone: gesture feel and Android's system gestures still need a real device.
 
 Widgets stay through *Start over* and a reboot, and show whatever Settings → Windows starts the desktop with. Widgets kept in a window
 layout by an earlier release move into the canonical set during the one-time, complete account
@@ -5513,19 +5749,22 @@ flags, held game buttons and game canvases. Anything else can opt out with `data
 On coarse pointers the menu's items are taller, and the OS chrome (bar, dock, title bars, sidebars)
 does not select its labels or show the browser's callout (see *Selecting text* above).
 
-On phones, notes, phone-compatible widgets and icons share a scrollable grid. Drag a note or widget by its top strip
-in either axis; long-press for *Move up*, *Move down* and *Move to top*. Widget selection and grid
-coordinates belong to the independent synced mobile set; desktop placement stays intact.
+On phones, notes, phone-compatible widgets and icons sit on fixed home screens you swipe sideways
+(see *Phone home screens* above). Hold a note or widget's top strip, or an icon, until it lifts, then
+drag it, to the screen edge to change page; let go and hold again for *Move to page*, *Move up*,
+*Move down* and *Move to top*. Widget selection and grid coordinates belong to the independent synced mobile
+set; desktop placement stays intact.
 
 The MvL OS menu (top left) opens the About app (*About this system*), Settings, and the Changelog
 (*Release notes*), and reboots or shuts down. Putting the notes and widgets away to see the desktop
 itself is Settings → Windows → *Notes and widgets* under *Right now* (per browser; adding a note
-brings them back). On a phone, this switches the shared Home grid to the Icons view: tap one to open it, long-press for its menu.
+brings them back). On a phone, this leaves the icons on the home screens: tap one to open it, long-press for its menu.
 
 Dragging works with a finger too: drag a desktop icon directly, or hold a row in Files still
 until it lifts with a buzz, then move it, to
-the same places a mouse drags to. Holding on without moving opens its menu as before, and moving
-after that closes the menu and drags.
+the same places a mouse drags to. Items that lift (phone icons, phone widgets, Files rows) take
+two holds for their menu, so it never opens on top of a drag: hold to lift, let go, hold the same
+item again within 3 seconds (see *Phone home screens*). Everything else keeps the single long press.
 
 On phones and touch devices, **Maximize** fills all four edges, including after rotation.
 The title bar, OS bar and dock disappear, with no window border, margin or shadow. Notch and

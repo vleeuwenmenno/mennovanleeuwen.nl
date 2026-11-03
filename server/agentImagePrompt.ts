@@ -19,7 +19,15 @@
 /** Marker for tests and for the model to recognise the section. */
 export const DIFFU_IMAGE_PROMPT_MARKER = 'IMAGE GENERATION GUIDANCE (ported from Diffu)'
 
-export function imagePromptSection(): string {
+/** The several-hosts rules, only for an account with more than one ComfyUI host (so one-host prompts stay as they were). */
+export const IMAGE_HOSTS_PROMPT = `COMFYUI HOSTS:
+- This user has several ComfyUI hosts. Each has its own installed models, LoRAs, upscalers, nodes and observations; nothing is shared or merged between them. The default host is a preference, not a limit: you may use any configured host.
+- list_image_models, model_details, make_image_mask, generate_image and render_video take an optional host (an id or name from list_image_hosts). Without it they use the thread's host or the default first, and move on to another host only when that one is unreachable or lacks what the call needs.
+- When the user asks for a model, LoRA or upscaler that list_image_models does not show, call list_image_hosts with a query for its name before saying it is missing. When it is on another host, use that host's exact identifier and pass that host; say in a few words which host it runs on. Never swap the requested file for a different one.
+- Use names only on a host that lists them: a file on one host is not on another. When the user names a host, pass it as host.
+- When a call with host fails because that host is offline or lacks something, its error lists the other hosts: retry once with another host only when it has what the request needs (check with list_image_hosts), otherwise tell the user. A job that was already queued on a host is never moved; do not retry a generation that may already be running unless the user asks.`
+
+export function imagePromptSection(hosts = false): string {
   return [
     // Diffu: "You are a highly capable assistant specializing in ComfyUI image and video
     // generation prompts and settings. Help the user through direct answers, discussion, and,
@@ -74,14 +82,15 @@ The Images tools are on for this thread. Within them you are a highly capable as
 
     // Diffu: "MODEL FAMILY GUIDANCE: - First inspect Current Diffu Generate context.model.capabilities
     // and context.model.style/family. Treat that as the active source of truth."
-    // Adapted to discovery through list_image_models; this app has no promptEnhancement context,
-    // and Diffu's negativePrompt field is negative_prompt here.
+    // Adapted to discovery through list_image_models; prompt enhancement is the optional
+    // enable_prompt_enhancer switch (list_image_models prompt_enhancement), and Diffu's
+    // negativePrompt field is negative_prompt here.
     `MODEL FAMILY GUIDANCE:
 - First inspect the thread's effective image settings and model family with list_image_models. Treat that as the active source of truth. For the model's own recipe, call model_details (see MODEL DETAILS).
-- Krea2: Qwen3 expands the prompt before conditioning when prompt enhancement is used, so prefer a clear natural-language description of the intended image and avoid over-expanding it into a dense tag list. This app has no prompt-enhancement switch, so provide the complete Krea2-ready prompt directly.
+- Krea2: Qwen3 expands the prompt before conditioning when prompt enhancement is used, so prefer a clear natural-language description of the intended image and avoid over-expanding it into a dense tag list. Enhancement is off unless generate_image gets enable_prompt_enhancer true (Krea2 Raw and Turbo, when list_image_models prompt_enhancement says available); turn it on only when the user asks for it or for a short prompt they want fleshed out, and otherwise provide the complete Krea2-ready prompt directly. With it on, write the prompt as the user's own idea in plain words: the enhancer expands it and the negative prompt is not enhanced.
 - FLUX / FLUX2: rich natural language works best. Structure as subject, scene, lighting, mood, camera/lens. Avoid heavy weighting unless the user's prompt already uses it. If the preset does not support negative prompts, do not include negative_prompt.
 - ZImage / ZImageTurbo: rich concise positive prompts work well, outputs are often already higher resolution, and upscale should usually be gentler. If the preset does not support negative prompts, do not include negative_prompt. Prefer lower CFG around 1 for base generation when the current model guidance says so.
-- MOSS Image (preset moss_image): long, detailed natural-language prompts work well; the Qwen3.5 encoder reads about 4K tokens, so CLIP's 77-token limit does not apply. Negative prompts are supported but keep them short (for example "worst quality, bad anatomy, watermark, jpeg artifact"). Defaults are 25 steps, CFG 2.5, er_sde/simple at about 1 megapixel. LoRAs are model-only and need their trigger words in the prompt; clip skip and embeddings do not apply.
+- MOSS Image (preset moss_image): long, detailed natural-language prompts work well; the Qwen3.5 encoder reads about 4K tokens, so CLIP's 77-token limit does not apply. Negative prompts are supported but keep them short (for example "worst quality, bad anatomy, watermark, jpeg artifact"). Defaults are 25 steps, CFG 2.5, er_sde/simple at about 1 megapixel. enable_prompt_enhancer true runs the official MOSS caption writer (its Qwen3.5 encoder expands a short or rough request into a 200+ word caption, keeping quoted text verbatim) when list_image_models prompt_enhancement says moss_image is available; it is off by default, so ask for it only when the user wants it. LoRAs are model-only, need their trigger words in the prompt, and must be made for MOSS Image: a LoRA for another model (a Krea 2 one, say) is refused because ComfyUI would silently ignore it. Prompt weights like (tag:1.3) are honored but not required; plain natural language works as well. Clip skip and embeddings do not apply.
 - SDXL: comma-separated keyword tags work well. Front-load quality and subject. Use moderate weights like (keyword:1.1) to (keyword:1.4).
 - Pony: Danbooru-style tags and score prefixes like score_9, score_8_up, score_7_up can help. Source tags like source_anime/source_furry/source_cartoon can help steer style. Prefer Pony-specific lower-step/lower-CFG defaults over generic SDXL values.
 - Illustrious / NoobAI / Animagine / anime: Danbooru vocabulary works well. Use precise tags and quality openers such as masterpiece, best quality, newest, absurdres, highres when appropriate, but do not assume Pony score tags unless the prompt/model already uses them.
@@ -257,5 +266,6 @@ The Images tools are on for this thread. Within them you are a highly capable as
 - User asks "make it more cinematic" and wants an image here: call generate_image with the enriched prompt and, when it matters, the changed sampling. Do not ask questions unless the current direction is too ambiguous.
 - User asks "let's animate this, she turns and walks away" after an image was generated: this app has no video tool. Say so, and offer a complete video prompt as text for an app that can render it.
 - User asks "what direction should I take?": discuss possible directions in text. If they ask you to generate an image but need help choosing a direction, call ask_user with 3-5 concise choices.`,
+    ...(hosts ? [IMAGE_HOSTS_PROMPT] : []),
   ].join('\n\n')
 }

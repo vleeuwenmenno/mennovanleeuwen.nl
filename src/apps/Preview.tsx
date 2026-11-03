@@ -179,7 +179,8 @@ export function Preview({ win }: { win: WinState }) {
     [siblings, index],
   )
 
-  useBackButton(win.pid, { back: () => go(-1), forward: () => go(1) })
+  // On a phone Back leaves the window (the mouse's Back button steps to the previous picture).
+  useBackButton(win.pid, { back: () => (window.innerWidth < 720 ? false : go(-1)), forward: () => go(1) })
 
   // The pictures either side load ahead, so the arrow keys feel instant.
   useEffect(() => {

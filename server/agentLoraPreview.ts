@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { User } from './auth.ts'
-import { imageBackendScope, imageCatalog, imageSettings } from './agentImages.ts'
+import { imageBackendScope, imageCatalog, imageSettings, imageHostSettings, threadImageHost } from './agentImages.ts'
 import { guardedFetch, readCapped } from './egress.ts'
 import { HttpError, json, SECURITY, UNTRUSTED } from './http.ts'
 
@@ -11,7 +11,7 @@ import { HttpError, json, SECURITY, UNTRUSTED } from './http.ts'
 // generate; LoRA Manager only adds facts to the ones it can match exactly by folder and file.
 // Without LoRA Manager every LoRA still shows, with the facts its name gives.
 
-export type LoraDetail = { name: string; title: string; baseModel: string; triggers: string[]; tags: string[]; folder: string; size: number | null; hasPreview: boolean }
+export type LoraDetail = { host?: string; name: string; title: string; baseModel: string; triggers: string[]; tags: string[]; folder: string; size: number | null; hasPreview: boolean }
 
 /** LoRA Manager's first page: the bound on how many LoRAs get facts and previews. */
 const MANAGER_PAGE = 50
@@ -66,7 +66,7 @@ export function managerDetail(item: unknown, installed: ReadonlyMap<string, stri
 }
 
 // Where each account's previews are on its backend (from its last list), and the bytes fetched.
-const paths = new Map<number, { scope: string; expires: number; byName: Map<string, string> }>()
+const paths = new Map<string, { scope: string; expires: number; byName: Map<string, string> }>()
 const bytes = new Map<string, { mime: string; body: Buffer; expires: number }>()
 let cached = 0
 const drop = (key: string) => { const hit = bytes.get(key); if (hit) { cached -= hit.body.length; bytes.delete(key) } }
@@ -81,11 +81,10 @@ function keep(key: string, value: { mime: string; body: Buffer; expires: number 
 }
 export const previewCacheBytes = () => cached
 
-export async function loraDetails(user: User): Promise<{ loras: LoraDetail[]; total: number; truncated: boolean; manager: boolean }> {
-  const catalog = await imageCatalog(user)
+export async function loraDetails(user: User, s = imageSettings(user)): Promise<{ loras: LoraDetail[]; total: number; truncated: boolean; manager: boolean }> {
+  const catalog = await imageCatalog(user, undefined, s)
   const names = catalog.loras.slice(0, INSTALLED_LIMIT)
   const installed = new Map(names.map((n) => [normalized(n), n]))
-  const s = imageSettings(user)
   const found = new Map<string, { detail: LoraDetail; preview: string | null }>()
   const duplicate = new Set<string>()
   let manager = false
@@ -106,18 +105,19 @@ export async function loraDetails(user: User): Promise<{ loras: LoraDetail[]; to
   } catch { /* LoRA Manager is optional: the names alone still list */ }
   for (const name of duplicate) found.delete(name)
   // Remember only this backend's preview paths, for this account, for a while.
-  paths.delete(user.id)
+  const scope = imageBackendScope(user, s)
+  paths.delete(scope)
   while (paths.size >= ACCOUNTS_MAX) paths.delete(paths.keys().next().value!)
-  paths.set(user.id, { scope: imageBackendScope(user, s), expires: Date.now() + PATHS_TTL, byName: new Map([...found].flatMap(([n, h]) => (h.preview ? [[n, h.preview] as const] : []))) })
-  return { loras: names.map((n) => found.get(n)?.detail ?? fromName(n)), total: catalog.loras.length, truncated: catalog.loras.length > names.length, manager }
+  paths.set(scope, { scope, expires: Date.now() + PATHS_TTL, byName: new Map([...found].flatMap(([n, h]) => (h.preview ? [[n, h.preview] as const] : []))) })
+  return { loras: names.map((n) => ({ ...(found.get(n)?.detail ?? fromName(n)), host: s.hostId })), total: catalog.loras.length, truncated: catalog.loras.length > names.length, manager }
 }
 
 const signature = (b: Buffer) => (b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'image/png' : b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? 'image/jpeg' : b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : null)
 
 /** A LoRA's preview bytes, for its owner only: from the cache, else from their backend. */
-export async function loraPreview(user: User, name: string): Promise<{ mime: string; body: Buffer }> {
-  const s = imageSettings(user), scope = imageBackendScope(user, s)
-  const known = paths.get(user.id)
+export async function loraPreview(user: User, name: string, s = imageSettings(user)): Promise<{ mime: string; body: Buffer }> {
+  const scope = imageBackendScope(user, s)
+  const known = paths.get(scope)
   const path = known && known.expires > Date.now() && known.scope === scope ? known.byName.get(name) : undefined
   if (!path) throw new HttpError(404, 'No preview for that LoRA')
   const key = `${user.id}:${scope}:${name}`
@@ -142,11 +142,15 @@ export async function loraPreview(user: User, name: string): Promise<{ mime: str
 
 export async function handleLoraPreviewApi(req: IncomingMessage, res: ServerResponse, url: URL, user: User): Promise<boolean> {
   if (req.method !== 'GET') return false
-  if (url.pathname === '/api/agents/images/lora-details') return json(res, 200, await loraDetails(user)), true
+  if (url.pathname === '/api/agents/images/lora-details') {
+    const thread = url.searchParams.get('thread'), host = url.searchParams.get('host')
+    const s = host ? imageHostSettings(user, host) : thread ? threadImageHost(user, thread) ?? imageSettings(user) : imageSettings(user)
+    return json(res, 200, await loraDetails(user, s)), true
+  }
   if (url.pathname === '/api/agents/images/lora-preview') {
     const name = url.searchParams.get('name') ?? ''
     if (!name || name.length > 2048) throw new HttpError(400, 'Name a LoRA')
-    const { mime, body } = await loraPreview(user, name)
+    const { mime, body } = await loraPreview(user, name, url.searchParams.has('host') ? imageHostSettings(user, url.searchParams.get('host')) : imageSettings(user))
     res.writeHead(200, { ...SECURITY, ...UNTRUSTED, 'Content-Type': mime, 'Content-Length': body.length, 'Cache-Control': 'private, no-store' }).end(body)
     return true
   }
