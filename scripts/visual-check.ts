@@ -382,7 +382,12 @@ const bad = (name: string, src: string, path: string | RegExp, message?: RegExp)
     const r = parseVisual(e)
     check(`prompt example is valid: ${e.slice(0, 50)}…`, r.ok && !r.warnings.length, r.ok ? r.warnings : r.errors)
   }
-  check('prompt: short (under 4000 characters)', VISUAL_PROMPT.length < 4000, VISUAL_PROMPT.length)
+  // The list example is the shopping-list shape (its image id is a placeholder, so no picture): a quantity field and a checkbox that starts unticked.
+  const listExample = examples.map((e) => parseVisual(e)).find((r) => r.ok && r.visuals[0]?.type === 'list')
+  const listVisual = listExample?.ok ? listExample.visuals[0] : undefined
+  const firstItem = listVisual?.type === 'list' ? listVisual.items[0] : undefined
+  check('prompt: list example has quantity field and checked:false', !!firstItem?.fields.find(([k]) => k === 'Quantity') && firstItem.checked === false, firstItem)
+  check('prompt: short (under 4700 characters)', VISUAL_PROMPT.length < 4700, VISUAL_PROMPT.length)
 }
 
 console.log(`${passed} passed, ${failed} failed`)

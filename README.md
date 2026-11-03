@@ -569,6 +569,8 @@ and SVG are passed over, and product pages (by their JSON-LD, `og:type` or addre
 With SearXNG (`categories=images`) or Brave Search as the provider, their image search goes first
 and the pages are the fallback.
 
+A shopping or wish list gets one call per item, before the list is drawn; a row without a result is shown without a picture.
+
 The server downloads the picture, keeps it per account (`agent_found_images`, counted in the
 storage quota) and serves it at `GET /api/agents/images/<id>` to that account only, with its own
 type, `nosniff`, a sandboxing CSP and `private, no-cache` with an ETag (so a copy cached by the
@@ -2713,7 +2715,14 @@ asks about them or is changing them, so swapping the model or the LoRA is one sh
 than a tour of the settings, and nothing ends with an offer of further work. When a diagram, recipe,
 chart or comparison says it better, the model draws one with a `visual` block (see *Visual blocks*
 above; the prompt's short guide is [`src/data/visual/prompt.ts`](src/data/visual/prompt.ts)), making
-the icons it needs first with `gpt_image` (`mode=icon`, after checking `list_icons`) and naming them `icon:<slug>`. The
+the icons it needs first with `gpt_image` (`mode=icon`, after checking `list_icons`) and naming them `icon:<slug>`. Lists of things (to buy, pack, try)
+get a `visual` list by default, without the user asking for one (not when they ask for plain text): a
+picture from `find_image` per item (none: the row without one), the user's own quantity or "To decide",
+descriptions and checkboxes (preserving any bought/done states), never an invented variant, size or quantity. A note the user
+asks for holds the same block, so the Notebook draws it too, and the answer is the visual plus one
+line on what was saved. Memory holds a short pointer to the note, not the visual JSON. Ticks are kept in the open view only, not saved. This is prompt guidance: a
+model can still ignore it, and `pnpm check:visual` and `pnpm check:agents-find-image` only check the
+example and that the prompt reaches the model, not a live model's behaviour. The
 composer holds the mode, the model, which tools the thread may use (the Web and Skills tools are always on in chat threads and are not in the Tools menu; a task's policy still allows, asks or blocks them per task) and attachments: text files, PDFs (their text, read in the browser with
 pdf.js) and pictures, from Seafile, Photos, this computer, a drop (from the computer, Files or the desktop) or a paste.
 **From Photos…** opens a read-only picker for connected Seafile and Immich libraries: browse albums
