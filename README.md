@@ -2704,9 +2704,9 @@ above; the prompt's short guide is [`src/data/visual/prompt.ts`](src/data/visual
 the icons it needs first with `gpt_image` (`mode=icon`, after checking `list_icons`) and naming them `icon:<slug>`. Lists of things (to buy, pack, try)
 get a `visual` list by default, without the user asking for one (not when they ask for plain text): a
 picture from `find_image` per item (none: the row without one), the user's own quantity or "To decide",
-descriptions and an unticked checkbox, never an invented variant, size or quantity. A note the user
+descriptions and checkboxes (preserving any bought/done states), never an invented variant, size or quantity. A note the user
 asks for holds the same block, so the Notebook draws it too, and the answer is the visual plus one
-line on what was saved. Ticks are kept in the open view only, not saved. This is prompt guidance: a
+line on what was saved. Memory holds a short pointer to the note, not the visual JSON. Ticks are kept in the open view only, not saved. This is prompt guidance: a
 model can still ignore it, and `pnpm check:visual` and `pnpm check:agents-find-image` only check the
 example and that the prompt reaches the model, not a live model's behaviour. The
 composer holds the mode, the model, which tools the thread may use (the Web and Skills tools are always on in chat threads and are not in the Tools menu; a task's policy still allows, asks or blocks them per task) and attachments: text files, PDFs (their text, read in the browser with
