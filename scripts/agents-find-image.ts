@@ -228,6 +228,7 @@ const CALLS: Record<string, Record<string, unknown>> = {
   matcha: { query: 'matcha' },
 }
 let lastTools: string[] = []
+let lastSystem = ''
 const ollama = createServer((req, res) => {
   let raw = ''
   req.on('data', (d) => (raw += d))
@@ -248,6 +249,7 @@ const ollama = createServer((req, res) => {
     const body = JSON.parse(raw) as { messages: Message[]; stream?: boolean; tools?: { function: { name: string } }[] }
     if (body.stream === false) return send(res, 200, { model: MODEL, message: { role: 'assistant', content: '{"title":"Find image check"}' }, done: true })
     lastTools = (body.tools ?? []).map((t) => t.function.name)
+    lastSystem = body.messages.find((m) => m.role === 'system')?.content ?? ''
     const at = body.messages.map((m) => m.role === 'user' && m.content.startsWith('SCENARIO ')).lastIndexOf(true)
     const scenario = body.messages[at]?.content.slice('SCENARIO '.length).split(/\s/)[0] ?? ''
     const round = body.messages.slice(at + 1).filter((m) => m.role === 'assistant').length
@@ -309,6 +311,8 @@ try {
   // 1. Offered with the web tools; a product page's og:image, downloaded, scaled down, served.
   const a = await scenario('jagabee')
   check('find_image is offered with the web tools', lastTools.includes('find_image') && lastTools.includes('web_search'))
+  // What the model is actually sent: the assembled system prompt carries the visual-list guide, which names find_image and keeps a list's checkboxes honest.
+  check('the assembled prompt carries the visual list guide with find_image', lastSystem.includes('```visual') && lastSystem.includes('"checked":false') && lastSystem.includes('find_image'))
   check(`og:image found and kept (${JSON.stringify(a).slice(0, 160)})`, a.images.length === 1 && /^image:w[0-9a-f]{24}$/.test(a.images[0].reference) && a.images[0].site === 'shop-a.test' && a.images[0].page === 'https://shop-a.test/products/jagabee')
   check('the 1000 × 800 PNG is scaled down to 768 × 614', a.images[0]?.width === 768 && a.images[0]?.height === 614)
   check('the logo was not downloaded', !hits.some((h) => h.path.includes('logo')))
