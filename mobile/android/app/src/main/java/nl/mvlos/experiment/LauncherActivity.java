@@ -84,6 +84,8 @@ public class LauncherActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Revocations that could not reach the server earlier are tried again (a durable, network-constrained job).
+        PushController.retryPending(this);
         if (savedInstanceState != null) {
             pendingAction = savedInstanceState.getString("pendingAction");
             pendingServer = savedInstanceState.getString("pendingServer");
@@ -206,7 +208,16 @@ public class LauncherActivity extends AppCompatActivity {
     private void resetCloud(String origin, String action, String next) {
         pendingAction = action;
         pendingServer = next;
-        reset.launch(new Intent(this, CloudResetActivity.class).putExtra(CloudResetActivity.EXTRA_ORIGIN, origin));
+        // Push stops first, here in the process that owns it (off the UI thread: storage and the
+        // Keystore are involved): nothing arrives or shows after Disconnect begins.
+        new Thread(() -> {
+            try {
+                PushController.revokeLocal(this);
+            } catch (RuntimeException ignored) {
+                // The reset still revokes through the owner and waits for its acknowledgement.
+            }
+            runOnUiThread(() -> reset.launch(new Intent(this, CloudResetActivity.class).putExtra(CloudResetActivity.EXTRA_ORIGIN, origin)));
+        }).start();
     }
 
     private void openCloud() {

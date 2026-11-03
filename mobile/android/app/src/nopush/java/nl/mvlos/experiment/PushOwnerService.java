@@ -1,0 +1,19 @@
+package nl.mvlos.experiment;
+
+import android.app.Service;
+import android.content.Intent;
+import android.os.IBinder;
+
+/** Not part of this build (no -PmvlosPush). */
+public class PushOwnerService extends Service {
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        stopSelf(startId);
+        return START_NOT_STICKY;
+    }
+}

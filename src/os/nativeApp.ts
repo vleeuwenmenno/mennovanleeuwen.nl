@@ -24,7 +24,13 @@ export const inNativeApp = () => plugin() !== null
 export const openAppChooser = () => plugin()?.openChooser().catch(() => {})
 
 /** Whether this page is a server's desktop inside the Android app's cloud mode (hints only, see above). */
-export const inCloudApp = () => typeof navigator !== 'undefined' && / MvLOSApp\/[\w.-]+$/.test(navigator.userAgent)
+export const inCloudApp = () => typeof navigator !== 'undefined' && / MvLOSApp\/[\w.-]+( MvLOSPush\/1)?$/.test(navigator.userAgent)
+
+/** In the cloud app of a build that can show push notifications for this server (a hint, like the above: the app decides). */
+export const appPushOffered = () => typeof navigator !== 'undefined' && / MvLOSApp\/[\w.-]+ MvLOSPush\/1$/.test(navigator.userAgent)
+
+/** In the app's cloud mode: the app's own screen for turning push notifications on (the app asks and decides, not this page). */
+export const APP_PUSH_SETTINGS = 'mvlosapp://push'
 
 /** In the app's cloud mode: back to its on-device / cloud chooser. */
 export const CLOUD_APP_CHOOSER = 'mvlosapp://chooser'

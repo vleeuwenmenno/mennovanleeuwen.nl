@@ -45,6 +45,7 @@ import { archiveFile, cancelExtract, extractStatus, listArchive, startExtract } 
 import { removeUpdownKey, setUpdownKey, updownChecks, updownSource } from './updown.ts'
 import { cachePurge, HttpError, json, mergeHeaders, readJson, redirect, sameOrigin, SECURITY, UNTRUSTED } from './http.ts'
 import { pushPublicKey, pushToUser, subscribe, unsubscribe } from './webpush.ts'
+import { allowTest as allowNativeTest, activate as activateNative, nativeConfig, nativeDevices, prepare as prepareNative, pushNative, removeOwned as removeNative, revoke as revokeNative, setToken as setNativeToken, takeContent as takeNativeContent } from './nativepush.ts'
 import { changeEntries, listEntries, noticeFromPage, openStream, presence } from './notifier.ts'
 import { minecraftAdmin, minecraftOverview, minecraftStatus, rconConfigured } from './minecraft.ts'
 import { search, clearSearchCache, orgAccess } from './search.ts'
@@ -150,6 +151,17 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     // check; its sealed ticket and OnlyOffice's signature are checked instead (server/office.ts).
     if (path === '/api/office/callback' && method === 'POST') return json(res, 200, await officeCallback(req, url.searchParams.get('t'), await readJson(req, 64 * 1024))), true
 
+    // The Android app's own push calls (server/nativepush.ts): no cookie, a bearer capability or
+    // revocation key of one registration, which each handler checks itself (session alive, account
+    // not banned) before and after anything awaited. Not a browser: no same-origin check, and no
+    // account header (there is no page of another account to refuse).
+    {
+      const noStore = { 'Cache-Control': 'private, no-store' }
+      if (path === '/api/push/native/token' && method === 'PUT') return await setNativeToken(req), res.writeHead(204, noStore).end(), true
+      const content = /^\/api\/push\/native\/notification\/([A-Za-z0-9_-]{1,64})$/.exec(path)
+      if (content && read) return json(res, 200, takeNativeContent(req, content[1]), noStore), true
+      if (path === '/api/push/native' && method === 'DELETE' && req.headers.authorization) return revokeNative(req), res.writeHead(204, noStore).end(), true
+    }
     // Everything below changes something or reads private data.
     if (!read && !sameOrigin(req)) throw new HttpError(403, 'Cross-site request')
     // A page of another account than the session's is refused (server/auth.ts accountMismatch).
@@ -561,7 +573,20 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/push/key' && read) return requireUser(req), json(res, 200, pushPublicKey()), true
     if (path === '/api/push/subscription' && method === 'POST') return json(res, 200, subscribe(requireUser(req), sessionKey(req)!, await readJson(req, 8 * 1024))), true
     if (path === '/api/push/subscription' && method === 'DELETE') return json(res, 200, unsubscribe(requireUser(req), await readJson(req, 8 * 1024))), true
-    if (path === '/api/push/test' && method === 'POST') return json(res, 200, await pushToUser(requireUser(req), { title: 'MvL OS', body: 'Push notifications work on this device.', tag: 'push-test', url: '/' })), true
+    // The Android app (server/nativepush.ts): the account's registered phones (Settings), the two steps
+    // of registering (the app's cloud process, signed in), and a phone removed by its owner.
+    if (path === '/api/push/native' && read) return json(res, 200, nativeConfig(requireUser(req))), true
+    if (path === '/api/push/native/prepare' && method === 'POST') return json(res, 200, prepareNative(req, requireUser(req), sessionKey(req)!, await readJson(req, 2 * 1024))), true
+    if (path === '/api/push/native/activate' && method === 'POST') return json(res, 200, activateNative(req, requireUser(req), sessionKey(req)!, await readJson(req, 2 * 1024))), true
+    if (path === '/api/push/native' && method === 'DELETE') return json(res, 200, removeNative(requireUser(req), (await readJson<{ rid?: unknown }>(req, 2 * 1024)).rid)), true
+    if (path === '/api/push/test' && method === 'POST') {
+      const user = requireUser(req)
+      allowNativeTest(user.id)
+      const test = { title: 'MvL OS', body: 'Push notifications work on this device.' }
+      const web = await pushToUser(user, { ...test, tag: 'push-test', url: '/' })
+      const app = nativeDevices(user.id) ? await pushNative(user, { source: 'test', ...test }) : { sent: 0, failed: 0 }
+      return json(res, 200, { sent: web.sent + app.sent, failed: web.failed + app.failed, app }), true
+    }
     if (path === '/api/preview' && read) {
       requireUser(req) // fetches other sites on request: the signed-in user only
       const res2 = await linkPreview(url.searchParams.get('url') ?? '')

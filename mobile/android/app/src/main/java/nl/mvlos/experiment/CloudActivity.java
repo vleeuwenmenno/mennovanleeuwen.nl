@@ -44,6 +44,11 @@ public class CloudActivity extends AppCompatActivity {
     static final String ACTION_RETURN = "nl.mvlos.experiment.cloud.RETURN";
     /** The server to open, from the launcher (this activity is not exported, so only the app sets it). */
     static final String EXTRA_ORIGIN = "origin";
+    /** A notification's address (validated again here): opened on the saved origin, nothing else. */
+    static final String EXTRA_PUSH_PATH = "pushPath";
+    /** With the path: the registration and generation it was tapped under (checked with the owner before anything loads). */
+    static final String EXTRA_PUSH_GEN = "pushGen";
+    static final String EXTRA_PUSH_RID = "pushRid";
     static final String EXTRA_STATE = "state";
     static final String EXTRA_CODE = "code";
     static final String EXTRA_ERROR = "error";
@@ -120,7 +125,7 @@ public class CloudActivity extends AppCompatActivity {
         s.setGeolocationEnabled(false);
         s.setMediaPlaybackRequiresUserGesture(true);
         // Lets the site show app hints (Settings → Account); it grants nothing.
-        s.setUserAgentString(s.getUserAgentString() + " MvLOSApp/" + BuildConfig.VERSION_NAME);
+        s.setUserAgentString(s.getUserAgentString() + " MvLOSApp/" + BuildConfig.VERSION_NAME + PushController.userAgentSuffix(this, origin));
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
         web.setWebViewClient(new Client());
@@ -137,7 +142,10 @@ public class CloudActivity extends AppCompatActivity {
         });
 
         if (state != null) web.restoreState(state);
-        if (state == null || web.getUrl() == null) web.loadUrl(origin + "/");
+        if (state == null || web.getUrl() == null) {
+            if (getIntent().hasExtra(EXTRA_PUSH_PATH)) openPushed(getIntent());
+            else web.loadUrl(origin + "/");
+        }
         handleReturn(getIntent());
     }
 
@@ -158,7 +166,30 @@ public class CloudActivity extends AppCompatActivity {
             freshStart = true;
             web.loadUrl(origin + "/");
         }
+        if (intent.hasExtra(EXTRA_PUSH_PATH) && next != null && next.equals(origin)) openPushed(intent);
         handleReturn(intent);
+    }
+
+    /**
+     * A notification's address: only after the owner says the registration it was tapped under is
+     * still current for this origin (a Disconnect in between makes it stale), and only a path that
+     * passes the validator. Otherwise nothing opens from it (the chooser, if there is no desktop yet).
+     */
+    private void openPushed(Intent intent) {
+        final String path = PushDeepLink.validate(intent.getStringExtra(EXTRA_PUSH_PATH));
+        final long gen = intent.getLongExtra(EXTRA_PUSH_GEN, -1);
+        final String rid = intent.getStringExtra(EXTRA_PUSH_RID);
+        final String server = origin;
+        progress.setVisibility(View.VISIBLE);
+        new Thread(() -> {
+            boolean ok = path != null && PushController.stillCurrent(this, server, gen, rid);
+            runOnUiThread(() -> {
+                if (!server.equals(origin)) return;
+                if (ok) web.loadUrl(server + path);
+                else if (web.getUrl() == null) LauncherActivity.showChooser(this);
+                else progress.setVisibility(View.GONE);
+            });
+        }).start();
     }
 
     @Override
@@ -324,6 +355,11 @@ public class CloudActivity extends AppCompatActivity {
     private void redeemNative(int op, String server, String challenge, String idToken) {
         final String oldCookie = CookieManager.getInstance().getCookie(server + "/");
         new Thread(() -> {
+            // A new sign-in replaces the session: push for the old one is revoked and acknowledged first.
+            if (!PushController.revokeBlocking(this)) {
+                runOnUiThread(() -> message(R.string.login_failed_title, getString(R.string.login_error)));
+                return;
+            }
             NativeGoogle.Result r = NativeGoogle.redeem(server, challenge, idToken, oldCookie);
             runOnUiThread(() -> {
                 if (!current(op, server)) {
@@ -404,6 +440,8 @@ public class CloudActivity extends AppCompatActivity {
         super.onResume();
         resumed = true;
         showNotice();
+        // Push stays only while this session is the one it was enabled for (PushController.checkSession).
+        if (origin != null) PushController.checkSession(this, origin, CookieManager.getInstance().getCookie(origin + "/"));
     }
 
     @Override
@@ -476,6 +514,13 @@ public class CloudActivity extends AppCompatActivity {
         final String oldCookie = CookieManager.getInstance().getCookie(server + "/");
         progress.setVisibility(View.VISIBLE);
         new Thread(() -> {
+            if (!PushController.revokeBlocking(this)) {
+                runOnUiThread(() -> {
+                    progress.setVisibility(View.GONE);
+                    message(R.string.login_failed_title, getString(R.string.login_error));
+                });
+                return;
+            }
             java.util.List<String> cookies = CloudLogin.redeem(server, code, verifier, oldCookie);
             runOnUiThread(() -> {
                 // Nothing late lands: the desktop closed, moved to another server or started another sign-in meanwhile.
@@ -593,6 +638,10 @@ public class CloudActivity extends AppCompatActivity {
                     return true;
                 case CHOOSER:
                     if (request.hasGesture()) LauncherActivity.showChooser(CloudActivity.this);
+                    return true;
+                case PUSH:
+                    // Only a tap, only straight (no redirect), only on the desktop's own page.
+                    if (request.hasGesture() && !request.isRedirect()) PushController.startOptIn(CloudActivity.this, origin);
                     return true;
                 case PROVIDER_PAGE:
                     message(R.string.provider_page_title, getString(R.string.provider_page_body, origin));
