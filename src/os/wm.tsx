@@ -1133,23 +1133,26 @@ export function WindowManagerProvider({
  * A window manager with one window that is the whole page: a game opened by its direct link
  * (/play/<game>, src/apps/games/Play.tsx), without the desktop around it. The game sees the window
  * manager it expects (its window always focused, so its keys work), and the page has no other
- * windows to move, close or switch to, so those do nothing. Opening an app leaves for MvL OS.
+ * windows to move, close or switch to, so those do nothing. Opening an app leaves for MvL OS. The
+ * Agents page (/agents, src/apps/agentsPage/AgentsPage.tsx) uses it too, with its own `open` (other
+ * apps in a new tab of MvL OS) and `setProps` (its window's props are the page's state).
  */
-export function SoloWindowProvider({ win, children }: { win: WinState; children: ReactNode }) {
+export function SoloWindowProvider({ win, children, open, setProps }: { win: WinState; children: ReactNode; /** Where opening an app goes (default: the game's link, or MvL OS) */ open?: (app: AppId, props?: WinState['props']) => void; /** Props the page keeps for its one window (default: none) */ setProps?: (props: WinState['props']) => void }) {
   const value = useMemo<WM>(() => {
     const none = () => {}
+    const go = open ?? ((app: AppId, props?: WinState['props']) => location.assign(app === 'games' && props?.game ? `/play/${encodeURIComponent(props.game)}` : '/'))
     return {
       windows: [win],
       focusedPid: win.pid,
-      open: (app, props) => location.assign(app === 'games' && props?.game ? `/play/${encodeURIComponent(props.game)}` : '/'),
-      openNew: (app, props) => location.assign(app === 'games' && props?.game ? `/play/${encodeURIComponent(props.game)}` : '/'),
+      open: go,
+      openNew: go,
       close: none,
       focus: none,
       minimize: none,
       toggleMax: none,
       setGeometry: none,
       shiftPagesAfter: none,
-      setProps: none,
+      setProps: setProps ? (pid, props) => pid === win.pid && setProps(props) : none,
       restack: none,
       reset: none,
       refit: none,
@@ -1160,7 +1163,7 @@ export function SoloWindowProvider({ win, children }: { win: WinState; children:
       workspaces: false,
       elsewhere: [],
     }
-  }, [win])
+  }, [win, open, setProps])
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
 

@@ -154,6 +154,8 @@ import type { TaskSpec } from '../data/agentTaskPolicy'
 import { accountStorage } from '../os/accountSpace'
 import { localPref } from '../os/localPref'
 import { favouriteKey, favouriteModels, ModelPicker } from './AgentsModelPicker'
+import { agentsPagePath, agentsPageUrl, threadInPath } from '../os/agentsPageMode'
+import { AgentsPageLayout, PageLead, pageGreeting, pageSuggestions, type PageChrome } from './agentsPage/PageLayout'
 import { makerOf, modelName } from '../data/agentModelNames'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
@@ -163,7 +165,8 @@ import { makerOf, modelName } from '../data/agentModelNames'
 
 type Live = { content: string; thinking: string }
 
-export function Agents({ win }: { win: WinState }) {
+/** The Agents app: in its window, or with `page` as the Agents page (/agents, src/apps/agentsPage/AgentsPage.tsx), the same app laid out like a chat website. */
+export function Agents({ win, page = false }: { win: WinState; page?: boolean }) {
   const account = useAccount()
   const wm = useWM()
   // The Image Studio has its own window now: a window restored with the old view asks for that.
@@ -199,7 +202,7 @@ export function Agents({ win }: { win: WinState }) {
         </button>
       </div>
     )
-  return <AgentsApp win={win} />
+  return <AgentsApp win={win} page={page} />
 }
 
 /** What the main pane shows: a conversation, the settings, the memory (the user's or a project's), or the background tasks (a task or run in focus). */
@@ -213,7 +216,7 @@ const readFolded = (): number[] => {
     return []
   }
 }
-function AgentsApp({ win }: { win: WinState }) {
+function AgentsApp({ win, page }: { win: WinState; page: boolean }) {
   const wm = useWM()
   const [archived, setArchived] = useState(false)
   const [threads, setThreads] = useState<Thread[]>([])
@@ -229,12 +232,15 @@ function AgentsApp({ win }: { win: WinState }) {
   // In a narrow window only one side shows: the list, or the conversation.
   const [pane, setPane] = useState<'list' | 'chat'>(win.props.thread ? 'chat' : 'list')
   const [main, setMain] = useState<Main>({ kind: 'thread' })
+  // The Agents page on a phone: the sidebar is a drawer, closed again by going somewhere from it.
+  const [drawer, setDrawer] = useState(false)
   const open = (id: string | null, project: number | null = null) => {
     setMain({ kind: 'thread' })
     setSelected(id)
     setDraftProject(id ? null : project)
     setView(id ?? `new-${Date.now()}`)
     setPane('chat')
+    setDrawer(false)
   }
   // Spotlight's "Ask Agents": a new thread that sends the question straight away. The question is
   // taken off the window's props once read, since the window (and its props) outlive a reload.
@@ -276,6 +282,8 @@ function AgentsApp({ win }: { win: WinState }) {
     // A task's notification (or /?open=agents&tab=tasks&task=…&run=…): the Tasks tab, at that run.
     else if (t === 'tasks') setMain({ kind: 'tasks', focus: { task: win.props.task || undefined, run: win.props.run || undefined } }), setPane('chat')
     else if (t === 'archived') setArchived(true), setPane('list')
+    // Settings → Agents asked for on the Agents page, where there is no Settings app (src/apps/agentsPage/AgentsPage.tsx).
+    else if (t === 'settings') setMain({ kind: 'settings' }), setPane('chat')
     else return
     wm.setProps(win.pid, { tab: '', task: '', run: '' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -283,9 +291,38 @@ function AgentsApp({ win }: { win: WinState }) {
 
   usePromptLocation()
 
+  // The Agents page keeps the open thread in its address (/agents/<thread>, src/os/agentsPageMode.ts):
+  // going to another thread is a step Back can undo, a new thread getting its id from its first
+  // message only replaces the address of the chat it already was.
+  const shownView = useRef(view)
+  useEffect(() => {
+    if (!page) return
+    const path = agentsPagePath(selected)
+    if (location.pathname !== path) {
+      if (shownView.current === view) history.replaceState(null, '', path)
+      else history.pushState(null, '', path)
+    }
+    shownView.current = view
+  }, [page, selected, view])
+  const selectedNow = useRef(selected)
+  selectedNow.current = selected
+  useEffect(() => {
+    if (!page) return
+    const onPop = () => {
+      const id = threadInPath()
+      if (id !== selectedNow.current) open(id)
+      else setMain({ kind: 'thread' })
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page])
+
   // Closing while threads are answering: stop them, or let them go on on the server (they are
   // announced when done, and found again here later).
   useEffect(() => {
+    // The page has no window to close: threads keep answering on the server when the tab goes.
+    if (page) return
     return setCloseGuard(win.pid, async () => {
       const busy = (await listThreads(false).catch(() => [] as Thread[])).filter((t) => t.running)
       if (!busy.length) return true
@@ -307,7 +344,7 @@ function AgentsApp({ win }: { win: WinState }) {
       void allowNotifications()
       return true
     })
-  }, [win.pid])
+  }, [win.pid, page])
 
   const refresh = useCallback(() => {
     listThreads(archived).then(
@@ -499,18 +536,21 @@ function AgentsApp({ win }: { win: WinState }) {
   const root = useRef<HTMLDivElement>(null)
   /** Ctrl+F asked for the thread search before that field was on screen. */
   const findFocus = useRef(false)
-  const [narrow, setNarrow] = useState(false)
+  const [narrowWindow, setNarrow] = useState(false)
   useEffect(() => {
     const el = root.current
-    if (!el) return
+    if (!el || page) return
     const ro = new ResizeObserver(([e]) => setNarrow(e.contentRect.width <= 620))
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [page])
+  // On the page, phones get the sidebar as a drawer over the conversation instead.
+  const phone = useIsMobile()
+  const narrow = page ? phone : narrowWindow
 
   const [collapsed, setCollapsed] = useState(() => {
     try {
-      return accountStorage.get(SIDEBAR_KEY) === 'collapsed'
+      return accountStorage.get(page ? PAGE_SIDEBAR_KEY : SIDEBAR_KEY) === 'collapsed'
     } catch {
       return false
     }
@@ -518,14 +558,14 @@ function AgentsApp({ win }: { win: WinState }) {
   const fold = (c: boolean) => {
     setCollapsed(c)
     try {
-      accountStorage.set(SIDEBAR_KEY, c ? 'collapsed' : 'open')
+      accountStorage.set(page ? PAGE_SIDEBAR_KEY : SIDEBAR_KEY, c ? 'collapsed' : 'open')
     } catch {
       /* not remembered */
     }
   }
   const rail = collapsed && !narrow
   // Threads with an answer nobody looked at yet (this browser's memory): the sidebar styles show them.
-  const isUnread = useUnread(threads, main.kind === 'thread' && (!narrow || pane === 'chat') ? selected : null)
+  const isUnread = useUnread(threads, main.kind === 'thread' && (page || !narrow || pane === 'chat') ? selected : null)
   const { sidebarStyle } = useAgentSettings()
 
   // Ctrl+F never reaches the app (the desktop takes the keypress itself), so it arrives as
@@ -605,16 +645,19 @@ function AgentsApp({ win }: { win: WinState }) {
   const openSettings = () => {
     setMain({ kind: 'settings' })
     setPane('chat')
+    setDrawer(false)
   }
   const openMemory = (scope: number | null = null) => {
     setMain({ kind: 'memory', scope })
     setPane('chat')
+    setDrawer(false)
   }
   // The Image Studio is an app of its own.
   const openStudio = () => wm.open('imagestudio', { t: String(Date.now()) })
   const openTasks = () => {
     setMain({ kind: 'tasks', focus: null })
     setPane('chat')
+    setDrawer(false)
   }
   // Runs going and runs waiting for an answer, for the Tasks tab's badge.
   const taskBadge = useTaskBadge()
@@ -629,6 +672,9 @@ function AgentsApp({ win }: { win: WinState }) {
     setPane('list')
     setAddingProject(true)
   }
+
+  // The Agents page (/agents), at the thread on screen, in a new tab.
+  const openFullPage = () => void window.open(agentsPageUrl(main.kind === 'thread' ? selected : null), '_blank', 'noopener')
 
   // Right-clicks nobody nearer handled: text fields get cut/copy/paste, a selection or a link its
   // own items, and the rest no browser menu.
@@ -657,6 +703,7 @@ function AgentsApp({ win }: { win: WinState }) {
         { label: 'Tasks', onSelect: openTasks },
         { label: 'Image Studio', onSelect: openStudio },
         { label: 'Settings…', onSelect: openSettings },
+        ...(page ? [] : [{ label: 'Open in full page', hint: 'Agents on a page of its own, in a new tab', onSelect: openFullPage }]),
         { separator: true },
         { label: 'Sidebar style', submenu: SIDEBAR_STYLES.map((s) => ({ label: s.label, checked: sidebarStyle === s.id, onSelect: () => setAgentSettings({ sidebarStyle: s.id }) })) },
         ...(narrow ? [] : [{ separator: true as const }, { label: rail ? 'Show the sidebar' : 'Hide the sidebar', onSelect: () => fold(!rail) }]),
@@ -718,6 +765,50 @@ function AgentsApp({ win }: { win: WinState }) {
     },
   }
 
+  // The Agents page: a chat website's layout around the same app (src/apps/agentsPage/PageLayout.tsx).
+  const pageChrome: PageChrome | undefined = page
+    ? { lead: <PageLead phone={phone} collapsed={collapsed} onMenu={() => setDrawer(true)} onShow={() => fold(false)} onNew={newThread} /> }
+    : undefined
+  const mainView = (
+    <>
+      {main.kind === 'settings' ? (
+        <SettingsPane onBack={() => (setMain({ kind: 'thread' }), setPane('list'), page && phone && setDrawer(true))} />
+      ) : main.kind === 'tasks' ? (
+        <TasksView focus={main.focus} fromThread={selected} onBack={() => (setMain({ kind: 'thread' }), setPane('list'), page && phone && setDrawer(true))} onOpenThread={(id) => (setArchived(false), open(id), refresh())} />
+      ) : main.kind === 'memory' ? (
+        <MemoryView scope={main.scope} projects={projects} onScope={(scope) => setMain({ kind: 'memory', scope })} onBack={() => (setMain({ kind: 'thread' }), setPane('list'), page && phone && setDrawer(true))} />
+      ) : (
+        <Conversation
+          key={view}
+          listThread={threads.find((t) => t.id === selected)}
+          id={selected}
+          draftProject={draftProject}
+          projects={projects}
+          ask={view.startsWith('new') ? question : null}
+          onAsked={() => setQuestion(null)}
+          onBack={() => (page ? setDrawer(true) : setPane('list'))}
+          onCreated={(t) => {
+            setArchived(false)
+            setSelected(t.id)
+          }}
+          onChanged={refresh}
+          onArchive={archive}
+          onDelete={remove}
+          onOpenRun={(focus) => (setMain({ kind: 'tasks', focus }), setPane('chat'))}
+          onOpenThread={(id) => (setArchived(false), open(id), refresh())}
+          onFullPage={page ? undefined : openFullPage}
+          page={pageChrome}
+        />
+      )}
+    </>
+  )
+
+  if (page)
+    return (
+      <AgentsPageLayout ref={root} ctx={sideCtx} phone={phone} collapsed={collapsed} drawer={drawer} onDrawer={setDrawer} onContextMenu={rootMenu} onSideMenu={sideMenu}>
+        {mainView}
+      </AgentsPageLayout>
+    )
   return (
     <div ref={root} className={`nb agt is-${pane} ${rail ? 'is-rail' : ''}`} style={rail || narrow ? undefined : ({ '--agt-side-w': `min(${sideWidth}px, 50%)` } as React.CSSProperties)} onContextMenu={rootMenu}>
       {rail ? (
@@ -743,33 +834,7 @@ function AgentsApp({ win }: { win: WinState }) {
         </aside>
       )}
       <section className="nb-main">
-        {main.kind === 'settings' ? (
-          <SettingsPane onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} />
-        ) : main.kind === 'tasks' ? (
-          <TasksView focus={main.focus} fromThread={selected} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} onOpenThread={(id) => (setArchived(false), open(id), refresh())} />
-        ) : main.kind === 'memory' ? (
-          <MemoryView scope={main.scope} projects={projects} onScope={(scope) => setMain({ kind: 'memory', scope })} onBack={() => (setMain({ kind: 'thread' }), setPane('list'))} />
-        ) : (
-          <Conversation
-            key={view}
-            listThread={threads.find((t) => t.id === selected)}
-            id={selected}
-            draftProject={draftProject}
-            projects={projects}
-            ask={view.startsWith('new') ? question : null}
-            onAsked={() => setQuestion(null)}
-            onBack={() => setPane('list')}
-            onCreated={(t) => {
-              setArchived(false)
-              setSelected(t.id)
-            }}
-            onChanged={refresh}
-            onArchive={archive}
-            onDelete={remove}
-            onOpenRun={(focus) => (setMain({ kind: 'tasks', focus }), setPane('chat'))}
-            onOpenThread={(id) => (setArchived(false), open(id), refresh())}
-          />
-        )}
+        {mainView}
       </section>
     </div>
   )
@@ -1099,9 +1164,13 @@ type ConversationProps = {
   onOpenRun: (focus: TasksFocus) => void
   /** Opens another thread (a subagent's work, branched) */
   onOpenThread: (id: string) => void
+  /** The window's "Open in full page": this thread on the Agents page, in a new tab */
+  onFullPage?: () => void
+  /** On the Agents page: its chrome (the sidebar button), a greeting over the message box while the thread is empty */
+  page?: PageChrome
 }
 
-export function Conversation({ embedded, id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete, onOpenRun, onOpenThread }: ConversationProps) {
+export function Conversation({ embedded, id, draftProject, projects, listThread, ask, onAsked, onBack, onCreated, onChanged, onArchive, onDelete, onOpenRun, onOpenThread, onFullPage, page }: ConversationProps) {
   const [thread, setThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([])
   // The currencies the answers mention, offered when you open an amount in one (src/os/MoneyAmount.tsx).
@@ -2244,7 +2313,7 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
     } catch (e) { setError((e as Error).message) } finally { setOpeningImages(false) }
   }
 
-  return (
+  const body = (
     <>
       {photoPicker && <PhotoPicker limit={Math.max(0, 10 - files.length)} onClose={() => setPhotoPicker(false)} onAttach={(added) => {
         const combined = [...latestFiles.current, ...added]
@@ -2255,9 +2324,9 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
       }} />}
       <div className="agt-bar">
       <div className="nb-toolbar agt-toolbar" onContextMenu={(e) => thread && !e.shiftKey && !isField(e.target as Element) && openContextMenu(e, tidyMenu(threadItems()))}>
-        {!embedded && <><button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
+        {!embedded && <>{page ? page.lead : <button className="btn btn-small agt-back" onClick={onBack} aria-label="Back to threads">
           ‹
-        </button>
+        </button>}
         {projectName && <span className="agt-crumb" title={`In the project ${projectName}`}>{projectName}</span>}
         {thread && renaming ? (
           <RenameBox thread={thread} onSave={rename} onCancel={() => setRenaming(false)} />
@@ -2280,6 +2349,16 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
         </button>
         </div>
         {thread && <ContextMeter thread={thread} models={models} open={ctxOpen} panelId={ctxId} onToggle={() => (setCtxOpen((o) => !o), setCtxTab('context'))} />}
+        {page && thread && hasAnswer && (
+          <button type="button" className="agt-chip agp-share" onClick={() => void openShareDialog(thread)} title="Share this thread as a link">
+            <Icon name="share" size={13} /> <span className="agt-chip-label">Share</span>
+          </button>
+        )}
+        {onFullPage && !thread && (
+          <button type="button" className="agt-icon agt-more" onClick={onFullPage} aria-label="Open in full page" title="Open Agents on a page of its own, in a new tab">
+            <Icon name="expand" />
+          </button>
+        )}
         {thread && (
           <button
             className="agt-icon agt-more"
@@ -2291,6 +2370,7 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
                 { label: 'Share thread…', disabled: !hasAnswer, onSelect: () => void openShareDialog(thread) },
                 { label: 'Compact conversation…', hint: 'Summarise it so far, to free up the context window', disabled: !hasConversation, onSelect: () => void compactDialog() },
                 { label: 'Thread stats', hint: 'Model and tool time, speed, cache hits and tokens', onSelect: () => (setCtxTab('stats'), setCtxOpen(true)) },
+                ...(onFullPage ? [{ label: 'Open in full page', hint: 'This thread on a page of its own, in a new tab', onSelect: onFullPage }] : []),
                 thread.archived ? { label: 'Move back to threads', onSelect: () => onArchive(thread, false) } : { label: 'Archive', onSelect: () => onArchive(thread, true) },
                 { separator: true },
                 { label: 'Delete…', danger: true, onSelect: () => onDelete(thread) },
@@ -2315,7 +2395,12 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
           setScrolledUp(!pinned.current)
         }}
       >
-        {!messages.length && !live && (
+        {!messages.length && !live && page && (
+          <div className="agt-empty agp-hello">
+            <h1 className="agp-greeting">{pageGreeting(account.user?.name ?? account.user?.login ?? null, mode)}</h1>
+          </div>
+        )}
+        {!messages.length && !live && !page && (
           <div className="agt-empty">
             <p className="agt-empty-title">{mode === 'deep' ? 'What should it research?' : 'What do you want to know?'}</p>
             <p className="muted">{MODE_HELP[mode]}</p>
@@ -2569,6 +2654,15 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
           </div>
         </div>
         {visionless && <p className="agt-warn">{pretty?.name ?? model} can't see pictures: pick a model that sees, or the pictures go as names only.</p>}
+        {page && !messages.length && !live && !answering && !text && (
+          <div className="agp-suggest" aria-label="Ideas to start with">
+            {pageSuggestions(mode).map((sug) => (
+              <button key={sug.label} type="button" className="agp-suggest-chip" onClick={() => (setText(sug.prompt), requestAnimationFrame(() => input.current?.focus()))}>
+                {sug.label}
+              </button>
+            ))}
+          </div>
+        )}
         <input
           ref={pcFiles}
           type="file"
@@ -2582,6 +2676,10 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
       </form>
     </>
   )
+  // On the Agents page an empty thread is a greeting with the message box under it, in the middle;
+  // once it has messages, the box sits at the bottom (src/apps/agentsPage/page.css).
+  if (!page) return body
+  return <div className={`agp-conv ${!messages.length && !live ? 'is-empty' : ''}`}>{body}</div>
 }
 
 /** The conversation, with each assistant step's tool calls shown as cards beside their results. */
@@ -3205,6 +3303,8 @@ function threadMarkdown(title: string, messages: AgentMessage[]): string {
 // --- the sidebar's pieces ---------------------------------------------------------------------
 
 const SIDEBAR_KEY = 'mvlos.agents.sidebar'
+/** The Agents page's sidebar, hidden or shown on its own: the window's rail is another thing. */
+const PAGE_SIDEBAR_KEY = 'mvlos.agents.pageSidebar'
 const SIDE_DEFAULT = 270
 const SIDE_MIN = 180
 // Per browser, not synced: how wide the sidebar is. Anything unreadable falls back to the default.

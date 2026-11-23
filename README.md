@@ -2730,6 +2730,39 @@ and months, search album names, select photos, then Attach. It reads the origina
 GIF, camera raw or HEIC through the authenticated Photos proxy, not the thumbnail. Images keep the normal 5 MB per-file,
 10-attachment and combined payload limits (measured after the conversions below); videos show an error.
 
+**The Agents page.** Agents also has a page of its own at **`/agents`**, laid out like a chat
+website: no boot log, desktop, top bar or dock ([`src/os/agentsPageMode.ts`](src/os/agentsPageMode.ts),
+[`src/apps/agentsPage/`](src/apps/agentsPage)). **`/agents/<thread id>`** opens a thread, so a thread
+can be bookmarked or opened in another tab; the address follows the thread on screen, and the
+browser's Back and Forward move between threads (a new thread getting its id from its first message
+replaces the address rather than adding a step). It is the same app as the window, not a copy:
+[`Agents.tsx`](src/apps/Agents.tsx) with `page` owns all the state, and only the layout differs
+([`PageLayout.tsx`](src/apps/agentsPage/PageLayout.tsx), styled in
+[`page.css`](src/apps/agentsPage/page.css) from the theme's colours only). Everything the window
+does works there: threads, projects, the queue, approvals and permission modes, todos, subagents,
+tasks, memory, settings, sharing, the model and effort pickers, attachments and mail chips.
+- The sidebar has the app's name, New chat, Search chats, Tasks, Images, Memory, Archived and
+  Settings, then Projects and Recents (pinned first), with the account at the bottom (light or dark
+  theme, MvL OS, sign out). On a desktop it hides (the top bar's buttons bring it back); on a phone
+  it is a drawer behind the ☰ button. It is built from the same parts as the window's sidebar
+  styles, so renaming, menus, selecting many threads and dragging into projects work the same.
+- The conversation is a centred column: answers as full-width prose, your messages as bubbles on
+  the right. An empty thread is a greeting with the message box under it and a few ideas to start
+  from; once it has messages, the box sits at the bottom. The thin top bar has the title, the
+  thread's chips (folder, images, mail reads, permission), the context ring, Share and the menu.
+- Signed out, the page is a sign-in screen (GitHub, or Google where the server offers it), and
+  signing in comes back to the same address. What an account may use is decided by the server, as in
+  the window. Notifications, dialogs, menus and the Seafile file picker are the OS's own, drawn on
+  the page; the browser's zoom applies instead of Settings → UI scale.
+- What lives in another app opens MvL OS at that app in a new tab: the Image Studio (Images), the
+  Video Studio, Xed, Settings → Integrations and the like; a picture's Preview opens the picture
+  itself. Settings → Agents and a thread asked for by a notification or a subagent's link stay on
+  the page.
+- In the window, the conversation's ⋯ menu (an expand button in its top bar while the thread is
+  still new) and the sidebar's right-click menu have **Open in full page**, which opens the thread on
+  screen at `/agents/<thread>` (or `/agents`) in a new tab.
+
+
 The **Tools** menu lists four categories (Context, Images, Personal, Files & code), each with its on/total count. A category opens a submenu with each tool's toggle and description; **Turn all on/off** sits below them. The categories are `TOOL_CATEGORIES` in [`src/data/agents.ts`](src/data/agents.ts).
 
 **Camera raws, HEIC and multi-picture JPEGs** are turned into one still JPEG in the browser before
@@ -7541,7 +7574,7 @@ HTTPS; browsers ignore it over plain HTTP) and a general `Content-Security-Polic
 object-src 'none'; base-uri 'none'; frame-ancestors 'self'`. That blocks injected script and plugins
 and nothing else: there is no `default-src`, `connect-src`, `img-src` or `style-src`, because the
 site uses third-party fonts, public APIs, blob and data media, inline styles and framed content.
-The app's own HTML pages (`/`, `/cv`, `/play/...` and the fallback for unknown paths) send a stricter
+The app's own HTML pages (`/`, `/cv`, `/play/...`, `/agents/...` and the fallback for unknown paths) send a stricter
 script policy instead (`documentCsp` in `server/http.ts`): `script-src 'nonce-<random>'
 'strict-dynamic' 'self'`, with the same `object-src`, `base-uri` and `frame-ancestors`. The server
 puts a fresh nonce on every response, on the boot `<script>` and the `modulepreload` links, and

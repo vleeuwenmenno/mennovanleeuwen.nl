@@ -127,6 +127,21 @@ function playHead(path: string): { key: string; meta: string; noscript: string }
   }
 }
 
+// mennovanleeuwen.nl/agents is the Agents app on a page of its own (src/os/agentsPageMode.ts), and
+// /agents/<thread> a thread on it: a shared link says what the page is, never what the thread holds
+// (threads are private to their account).
+const AGENTS_PATH = /^\/agents(?:\/[^/]+)?\/?$/
+const AGENTS_META = `<title>Agents · MvL OS</title>
+    <meta name="description" content="A research assistant that searches, reads and works for you. Part of MvL OS." />
+    <meta property="og:title" content="Agents · MvL OS" />
+    <meta property="og:description" content="A research assistant that searches, reads and works for you. Part of MvL OS." />`
+const AGENTS_NOSCRIPT = `<noscript>
+      <main style="font-family:sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#ddd">
+        <h1>Agents</h1>
+        <p>This page needs JavaScript. It is part of <a href="/">MvL OS</a>.</p>
+      </main>
+    </noscript>`
+
 const NONCE = '__CSP_NONCE__'
 /** index.html with another page's title, description, link preview and noscript text (or as built, for
  * `meta` undefined), made once per page. Scripts and modulepreload links carry a nonce placeholder
@@ -169,7 +184,7 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
 
   let found = await file(path).catch(() => null)
   let served = path
-  // Unknown paths get the app: its own pages (/cv, /play/<game>) and stray links, which shouldn't 404.
+  // Unknown paths get the app: its own pages (/cv, /play/<game>, /agents) and stray links, which shouldn't 404.
   if (!found && !extname(path)) {
     found = await file('/index.html')
     served = '/index.html'
@@ -184,7 +199,9 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
       ? await indexTemplate(found.full, play.key, play.meta, play.noscript)
       : /^\/cv\/?$/.test(path)
         ? await indexTemplate(found.full, 'cv', CV_META, CV_NOSCRIPT)
-        : await indexTemplate(found.full, 'app')
+        : AGENTS_PATH.test(path)
+          ? await indexTemplate(found.full, 'agents', AGENTS_META, AGENTS_NOSCRIPT)
+          : await indexTemplate(found.full, 'app')
     // A fresh nonce for every response, so the page is made and compressed per request (a few
     // kilobytes, so cheap at a lower setting than the build's own copies).
     const nonce = randomBytes(16).toString('base64')
