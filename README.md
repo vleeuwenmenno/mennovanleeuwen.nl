@@ -2775,6 +2775,42 @@ tasks, memory, settings, sharing, the model and effort pickers, attachments and 
   still new) and the sidebar's right-click menu have **Open in full page**, which opens the thread on
   screen at `/agents/<thread>` (or `/agents`) in a new tab.
 
+**Agents as an app of its own.** The Agents page installs separately from MvL OS, with its own
+name, icon (a chat bubble in MvL OS's colours) and window: its pages link
+[`public/agents.webmanifest`](public/agents.webmanifest) (id, start and scope `/agents`, standalone,
+New chat and Tasks shortcuts) instead of MvL OS's manifest, and their Apple home-screen title and
+icon are Agents' (`AGENTS_HEAD` in [`server/index.ts`](server/index.ts); `agentsHead()` in
+[`agentsPageMode.ts`](src/os/agentsPageMode.ts) does the same on the development server). MvL OS's
+pages keep theirs, so both can be installed side by side, and each opens its own.
+- **Installing:** on an Android phone, Chrome's menu → **Install app** (or **Add to Home screen**)
+  while on `/agents`; on a desktop, Chrome's or Edge's install button in the address bar. On an
+  iPhone or iPad, Safari's Share → **Add to Home Screen** on `/agents`. Firefox on a desktop cannot
+  install sites.
+- **Sharing to it:** the installed app is a share target. From another app's Share sheet (Android, and
+  ChromeOS; Windows, macOS and Linux desktops don't offer web apps there), share a page, text or files (pictures, PDFs, text files)
+  to **Agents**: it opens a new chat with the title, text and link in the message box (each once)
+  and the files attached, as if attached by hand, so the composer's limits apply (10 files, 5 MB a
+  picture, 40 MB a PDF, 1 MB a text file). Nothing is sent until you send it. Signed out, the
+  sign-in screen says a share is waiting; it waits an hour, and signing in picks it up. iOS has no
+  share targets for web apps, so on an iPhone copy and paste instead.
+- **How a share travels:** the share sheet POSTs the share (`multipart/form-data`) to
+  `/agents/share`. That POST is cross-site, so the session cookie (`SameSite=Lax`) does not come
+  with it, and the server could not tell whose share it is. The service worker
+  ([`pwa/sw.js`](pwa/sw.js) `receiveShare`) takes the POST instead: it keeps the share in a cache of
+  its own (`mvlos-share`, one share at a time) and opens `/agents?share=1`; the page
+  ([`share.ts`](src/apps/agentsPage/share.ts)) reads it once, drops it, and fills the new chat. It
+  never reaches the server, so it cannot act for anyone; sending stays the account's normal,
+  signed-in request. A share older than an hour is dropped unused, and signing out drops it. Without
+  a worker (the app not opened since it was installed, or storage blocked) the POST reaches the
+  server, which keeps nothing and answers `303` to `/agents?share=missed`, where the page says the
+  share did not arrive.
+
+`pnpm build && pnpm check:agents-pwa` checks this against the real server with a scratch
+`DATA_DIR` (port 5266, `PORT` to change): the manifest links on `/agents`, `/`, `/cv` and `/play`,
+both manifests and their icons, both installable in headless Chromium with their own app ids, a
+share through the worker signed out and then signed in (message box filled, picture attached,
+nothing sent, single use), an expired share, and the server's answer without a worker.
+
 **Dictation.** The message box (in the window, on the Agents page and in Xed's Agents panel) has a
 microphone button ([`src/data/dictation.ts`](src/data/dictation.ts)). Where the browser recognises
 speech itself (Chrome, Edge, Safari: the Web Speech API), the words appear in the box as they are
@@ -7559,6 +7595,10 @@ still fills the available page, but cannot remove browser controls. Offline star
 successful online visit to a production build and completion of the service worker's shell cache.
 Cached apps can open offline; sign-in, sync and other live services still need a connection.
 Browsers that block service workers or storage require a connection to reopen the site.
+
+The Agents page (`/agents`) is a second installable app with its own manifest and share target:
+see "Agents as an app of its own" under Agents. The same worker serves both; it precaches `/agents`
+too, and an `/agents` address offline falls back to that page rather than the desktop.
 
 Run `pnpm build && pnpm check:pwa-mobile` to check phone Notes navigation, maximize/rotation/restore
 and production offline startup in isolated Chromium. The static test server uses port 5296

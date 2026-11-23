@@ -12,6 +12,7 @@ import { REFUSED } from '../../os/Shell'
 import { SignInButtons } from '../../os/SignInButtons'
 import { SoloWindowProvider, type AppId, type WinState } from '../../os/wm'
 import { Agents } from '../Agents'
+import { shareWaiting, takeShare } from './share'
 
 // The Agents page (/agents and /agents/<thread>, src/os/agentsPageMode.ts): the Agents app on a page
 // of its own, laid out like a chat website (Agents.tsx with `page`, agentsPage/PageLayout.tsx). The
@@ -71,9 +72,10 @@ export function AgentsPage() {
   useEffect(() => {
     if (signedIn) startNotifyStream(), startAgentWatch()
   }, [signedIn])
+  const shareTaken = useShare(signedIn)
   return (
     <>
-      {account.status === 'loading' ? <div className="agp-blank" aria-busy /> : account.status === 'user' ? <AgentsOnPage /> : <SignInScreen off={account.status !== 'anon'} />}
+      {account.status === 'loading' || (signedIn && !shareTaken) ? <div className="agp-blank" aria-busy /> : signedIn ? <AgentsOnPage /> : <SignInScreen off={account.status !== 'anon'} />}
       <ContextMenuHost />
       <Notifications />
       <Dialogs />
@@ -82,12 +84,50 @@ export function AgentsPage() {
   )
 }
 
+/**
+ * A share to the installed app (./share.ts): ?share=1 from the service worker, ?share=missed when it
+ * reached the server instead (no worker yet), ?share=failed when the worker could not read it. A
+ * share waiting from before signing in is taken too. Resolves once the new chat's draft holds it.
+ */
+function useShare(signedIn: boolean): boolean {
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    if (!signedIn) return
+    const param = new URLSearchParams(location.search).get('share')
+    if (param !== null) history.replaceState(null, '', location.pathname)
+    if (param === 'missed' || param === 'failed')
+      setTimeout(
+        () =>
+          void tell({
+            title: 'The share did not arrive',
+            body: param === 'missed' ? 'Agents was not ready to take it yet. Open Agents once, then share again.' : 'What was shared could not be read. Try sharing it again.',
+          }),
+        300,
+      )
+    takeShare()
+      .then((got) => {
+        if (!got) return
+        // A share opens a new chat, whatever the address was.
+        if (location.pathname !== '/agents') history.replaceState(null, '', '/agents')
+        if (got.errors.length) notify({ title: got.errors.length > 1 ? 'Some shared files were not attached' : 'A shared file was not attached', body: got.errors.join(' · ') })
+      })
+      .catch(() => {})
+      .finally(() => setReady(true))
+  }, [signedIn])
+  return ready
+}
+
 function SignInScreen({ off }: { off: boolean }) {
+  const [waiting, setWaiting] = useState(false)
+  useEffect(() => void shareWaiting().then(setWaiting), [])
+  const missed = /[?&]share=(missed|failed)\b/.test(location.search)
   return (
     <div className="agp-signin">
       <div className="agp-signin-card">
         <h1>Agents</h1>
         <p className="muted">A research assistant that searches the web, reads what it finds and works in your files, with a memory of its own.</p>
+        {missed && <p className="agp-signin-share">The share did not arrive. Sign in, then share again.</p>}
+        {waiting && <p className="agp-signin-share">Sign in to finish sharing. What you shared waits here for an hour, and opens in a new chat once you are in.</p>}
         {off ? (
           <p className="muted">Signing in is not available on this server right now.</p>
         ) : (

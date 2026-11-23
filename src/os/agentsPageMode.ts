@@ -63,3 +63,16 @@ export const agentsPagePath = (thread: string | null) => pathOf({ kind: 'thread'
 
 /** The full address, to open in a new tab from the window ("Open in full page"). */
 export const agentsPageUrl = (thread: string | null) => `${location.origin}${agentsPagePath(thread)}`
+
+/**
+ * The page's head as the installed Agents app's (public/agents.webmanifest, its icon and name).
+ * The server already sends it so (server/index.ts AGENTS_HEAD); this covers the development server,
+ * whose index.html is MvL OS's.
+ */
+export function agentsHead() {
+  const set = (sel: string, attr: string, value: string) => document.querySelector(sel)?.setAttribute(attr, value)
+  set('link[rel="manifest"]', 'href', '/agents.webmanifest')
+  set('link[rel="apple-touch-icon"]', 'href', '/icons/agents-apple-touch-icon.png')
+  set('link[rel="icon"]', 'href', '/icons/agents.svg')
+  set('meta[name="apple-mobile-web-app-title"]', 'content', 'Agents')
+}

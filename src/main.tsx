@@ -6,7 +6,7 @@ import { loadAccount } from './os/account'
 import { installContextMenuFallback, installTouchContextMenu } from './os/ContextMenu'
 import { playMode } from './os/playMode'
 import { PlayPage } from './apps/games/Play'
-import { agentsPageMode } from './os/agentsPageMode'
+import { agentsHead, agentsPageMode } from './os/agentsPageMode'
 import { AgentsPage } from './apps/agentsPage/AgentsPage'
 import { initialLayout, placement, Shell, winTitle } from './os/Shell'
 import { applyDockReserve } from './os/dockPrefs'
@@ -37,6 +37,7 @@ const play = playMode()
 // but no desktop, dock or the desktop's links between apps.
 const agentsPage = !play && agentsPageMode()
 const solo = play || agentsPage
+if (agentsPage) agentsHead()
 
 initTheme()
 // Settings → Appearance → UI scale, and Ctrl + / − / 0 for it (src/os/uiScale.ts). Not on a

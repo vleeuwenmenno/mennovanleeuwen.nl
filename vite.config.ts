@@ -59,7 +59,7 @@ const serviceWorker = (): Plugin => ({
     const built = Object.keys(bundle)
       .filter((f) => !f.endsWith('.map') && f !== 'index.html' && !/(^|\/)pdf(\.worker\.min)?[-.]/.test(f))
       .map((f) => `/${f}`)
-    const statics = ['/', '/favicon.svg', '/manifest.webmanifest', '/icons/app.svg', '/icons/app-192.png', '/icons/boltwarden.svg', '/recents.json', '/contributions.json']
+    const statics = ['/', '/favicon.svg', '/manifest.webmanifest', '/icons/app.svg', '/icons/app-192.png', '/icons/boltwarden.svg', '/agents', '/agents.webmanifest', '/icons/agents.svg', '/icons/agents-192.png', '/recents.json', '/contributions.json']
     const precache = [...statics, ...built]
     const template = readFileSync(new URL('./pwa/sw.js', import.meta.url), 'utf8')
     // The worker's own code counts too, so a change to it alone still gets a fresh shell cache.
