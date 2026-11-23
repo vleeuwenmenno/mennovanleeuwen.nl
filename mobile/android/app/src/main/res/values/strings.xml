@@ -73,4 +73,15 @@
     <!-- Launcher shortcut -->
     <string name="shortcut_choose_short">Choose mode</string>
     <string name="shortcut_choose_long">Choose device or cloud</string>
+    <string name="push_channel">Notifications</string>
+    <string name="push_public">New notification</string>
+    <string name="push_title">Notifications on this phone</string>
+    <string name="push_body">Allow MvL OS to show notifications on this phone from %1$s for the account %2$s? You can turn this off in Settings on the site, or by disconnecting this server.</string>
+    <string name="push_allow">Allow</string>
+    <string name="push_unavailable">Notifications are not available for this server in this version of the app.</string>
+    <string name="push_server_off">This server is not set up to send notifications to the app.</string>
+    <string name="push_need_signin">Sign in first, then try again.</string>
+    <string name="push_blocked">Android is blocking notifications for this app. Turn them on in the phone\'s settings for MvL OS, then try again.</string>
+    <string name="push_done">Notifications are on for this phone.</string>
+    <string name="push_failed">Could not turn notifications on. Try again.</string>
 </resources>
