@@ -111,6 +111,11 @@ export const ICONS: Record<string, ReactNode> = {
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
   trash: <path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13M10 11v6M14 11v6" />,
   chat: <path d="M4 5h16v11H9l-5 4z" />,
+  share: <path d="M12 15V3M7 8l5-5 5 5M5 13v7h14v-7" />,
+  expand: <path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" />,
+  menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+  compose: <path d="M12 4H5v15h15v-7M18 3l3 3-9 9H9v-3z" />,
+  mic: <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3" />,
   more: (
     <>
       <circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none" />

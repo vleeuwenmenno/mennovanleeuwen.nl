@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { cvMode } from './cvMode'
 import { playMode } from './playMode'
+import { agentsPageMode } from './agentsPageMode'
 import { loginCookie, setLoginCookie } from './identity'
 import { accountGuard, clearAccountSpace, cookieUid, freezeAccount, TAB_ACCOUNT, TAB_UID, waitAccountSpace } from './accountSpace'
 import type { OrgsResponse } from '../data/code'
@@ -141,8 +142,8 @@ export async function loadAccount() {
   }
 }
 
-/** Where sign-in comes back to: this page when it's the CV or a game's direct link, else the desktop (server/auth.ts). */
-const back = () => (cvMode() ? '/cv' : playMode() ? location.pathname.replace(/(.)\/$/, '$1') : null)
+/** Where sign-in comes back to: this page when it's the CV, a game's direct link or the Agents page, else the desktop (server/auth.ts). */
+const back = () => (cvMode() ? '/cv' : playMode() || agentsPageMode() ? location.pathname.replace(/(.)\/$/, '$1') : null)
 
 const signInWith = (provider: 'github' | 'google') => {
   const to = back()

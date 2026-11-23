@@ -6,6 +6,8 @@ import { loadAccount } from './os/account'
 import { installContextMenuFallback, installTouchContextMenu } from './os/ContextMenu'
 import { playMode } from './os/playMode'
 import { PlayPage } from './apps/games/Play'
+import { agentsPageMode } from './os/agentsPageMode'
+import { AgentsPage } from './apps/agentsPage/AgentsPage'
 import { initialLayout, placement, Shell, winTitle } from './os/Shell'
 import { applyDockReserve } from './os/dockPrefs'
 import { startNoteEventLinks } from './os/noteEventLinks'
@@ -30,24 +32,29 @@ import { installApiGuard } from './os/accountSpace'
 // installed app, menus and long presses, and the account and syncing (high scores and saves follow
 // a signed-in player), but no desktop, dock or browser files.
 const play = playMode()
+// The Agents page (/agents, src/os/agentsPageMode.ts) is the Agents app alone, like a chat website:
+// the theme, the account and syncing, and the browser's files (an agent's terminal works on them),
+// but no desktop, dock or the desktop's links between apps.
+const agentsPage = !play && agentsPageMode()
+const solo = play || agentsPage
 
 initTheme()
 // Settings → Appearance → UI scale, and Ctrl + / − / 0 for it (src/os/uiScale.ts). Not on a
-// game's own page: there the browser's zoom is the one to use.
-if (!play) initUiScale()
-if (!play) installUiScaleKeys()
+// game's own page or the Agents page: there the browser's zoom is the one to use.
+if (!solo) initUiScale()
+if (!solo) installUiScaleKeys()
 initFurigana()
 initHomeCurrency()
-if (!play) applyDockReserve()
+if (!solo) applyDockReserve()
 registerServiceWorker()
 stopIosFocusZoom()
 trackVisualViewport()
 startSync()
 if (!play) startBrowserFiles()
 // Mail, Contacts, Calendar and Tasks plugged into each other (src/os/pimLinks.tsx).
-if (!play) startPimLinks()
+if (!solo) startPimLinks()
 // Notes linked to calendar events: meeting notes (src/os/noteEventLinks.tsx).
-if (!play) startNoteEventLinks()
+if (!solo) startNoteEventLinks()
 installContextMenuFallback()
 installTouchContextMenu()
 // Only text meant to be read can be selected; Ctrl+A and dragged pictures follow (src/os/selection.ts).
@@ -66,6 +73,8 @@ createRoot(document.getElementById('root')!).render(
     <PerformanceOverlay />
     {play ? (
       <PlayPage />
+    ) : agentsPage ? (
+      <AgentsPage />
     ) : (
       <WindowManagerProvider initial={initialLayout} placement={placement} isApp={isApp} nameOf={winTitle} knownWidget={(kind) => !!widgetDef(kind)}>
         <Shell />

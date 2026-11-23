@@ -2016,6 +2016,8 @@ textarea.agt-q-input {
 
 /* The composer: one box holding the attachments, the message and a row of small controls. */
 .agt-box {
+  /* The pills' labels give way by the box's own width (the narrow rule below), in a window or a page. */
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2114,6 +2116,34 @@ textarea.agt-q-input {
 @media (pointer: coarse) {
   .agt-model-pill {
     min-height: 32px;
+  }
+}
+/* The last level: the short name (or "Auto") truncates rather than leaving the arrow alone. */
+.agt-model-pill {
+  min-width: 0;
+}
+.agt-model-pill[data-level='2'] .agt-model-short {
+  min-width: 3ch;
+}
+
+/* Dictation (src/data/dictation.ts): red and pulsing while it listens, tap again to stop. */
+.agt-mic.is-listening {
+  color: var(--bg);
+  background: var(--red);
+  border-radius: 50%;
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+.agt-mic.is-listening:hover:not(:disabled) {
+  color: var(--bg);
+  background: var(--red);
+}
+.agt-mic.is-transcribing {
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agt-mic.is-listening,
+  .agt-mic.is-transcribing {
+    animation: none;
   }
 }
 .agt-model-name {
@@ -2919,6 +2949,16 @@ textarea.agt-q-input {
   }
   .agt-effort-short {
     display: inline;
+  }
+}
+/* Very narrow (a phone's message box): the mode and effort pills drop their arrows, so the model's
+   name keeps room to be read. */
+@container (max-width: 340px) {
+  .agt-box-bar > .agt-pill:not(.agt-model-pill) > .agt-svg:last-child {
+    display: none;
+  }
+  .agt-model-pill[data-level='2'] .agt-model-short {
+    min-width: 4ch;
   }
 }
 

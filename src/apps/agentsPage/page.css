@@ -1,0 +1,755 @@
+/* The Agents page (/agents, PageLayout.tsx): the Agents app laid out like a chat website. Everything
+   is scoped to .agp, so the window keeps its own look. Colours come from the theme's variables
+   only (styles.css, src/os/theme.ts); the page sets its own type and roundness, since a page of
+   reading wants a proportional face and room to breathe, not the desktop's dense monospace. */
+
+.agp-root {
+  height: 100%;
+  min-height: 0;
+}
+.agp-blank {
+  height: 100%;
+  background: var(--bg);
+}
+
+.agp {
+  --agp-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --agp-col: 760px;
+  --agp-side-w: 268px;
+  --agp-round: 12px;
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--agp-sans);
+  font-size: 15px;
+  line-height: 1.6;
+}
+.agp :is(input, textarea, select) {
+  font-family: inherit;
+}
+
+/* ---------- Sidebar ---------- */
+
+.agp-side {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: var(--agp-side-w);
+  min-height: 0;
+  background: var(--bg-dark);
+  border-right: 1px solid var(--line);
+  font-size: 14px;
+}
+.agp-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 10px 8px 4px 16px;
+}
+.agp-brand {
+  color: var(--fg-bright);
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.agp-brand:hover {
+  text-decoration: none;
+}
+.agp-side .agt-icon,
+.agp-main .agt-icon {
+  border-radius: 8px;
+}
+.agp-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px 4px;
+}
+.agp-nav > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--fg);
+  text-align: left;
+}
+.agp-nav > button:hover {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  color: var(--fg-bright);
+}
+.agp-nav > button.is-on {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg-bright);
+}
+.agp-nav > button > span:first-of-type {
+  flex: 1;
+}
+.agp-search .agt-search {
+  margin: 2px 0 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.agp-side .agt-side-title {
+  padding: 8px 10px 4px 8px;
+}
+.agp-side .agt-list {
+  padding: 0 8px 8px;
+}
+.agp-side .agt-group {
+  margin: 16px 10px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.agp-side .agt-project-head {
+  border-radius: 8px;
+}
+.agp-side .agt-item {
+  min-height: 36px;
+  padding: 6px 30px 6px 10px;
+  border-radius: 8px;
+  color: var(--fg);
+}
+.agp-side .agt-item:hover {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.agp-side .agt-item.is-active {
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--fg-bright);
+}
+.agp-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agp-running,
+.agp-unread {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.agp-running {
+  animation: agt-pulse 1.2s ease-in-out infinite;
+}
+.agp-side .agt-pin {
+  color: var(--muted);
+}
+.agp-side .agt-item-more {
+  border-radius: 6px;
+}
+.agp-account {
+  padding: 8px;
+  border-top: 1px solid var(--line);
+}
+.agp-account-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  color: var(--fg-bright);
+  text-align: left;
+}
+.agp-account-chip:hover {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.agp-account-chip > .agt-svg {
+  color: var(--muted);
+}
+.agp-avatar {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.agp-avatar.is-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  font-size: 14px;
+}
+.agp-account-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A phone: the sidebar is a drawer over the conversation. */
+.agp.is-phone .agp-side {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 3;
+  width: min(86vw, 320px);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-shadow: 0 0 40px color-mix(in srgb, var(--bg-darker) 60%, transparent);
+  animation: agp-drawer 0.18s ease-out;
+}
+.agp-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: color-mix(in srgb, var(--bg-darker) 55%, transparent);
+  animation: agp-fade 0.18s ease-out;
+}
+@keyframes agp-drawer {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes agp-fade {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agp.is-phone .agp-side,
+  .agp-scrim {
+    animation: none;
+  }
+}
+@media (pointer: coarse) {
+  .agp-nav > button,
+  .agp-side .agt-item {
+    min-height: 44px;
+  }
+}
+
+/* ---------- Main column ---------- */
+
+.agp-main {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+/* Settings, Memory and Tasks keep their back button where the sidebar is out of sight (a phone, or
+   hidden on a desktop): on a phone it opens the drawer, on a desktop it goes back to the chat. */
+.agp.is-phone .agp-main .agt-back,
+.agp:not(.has-side) .agp-main .agt-back {
+  display: inline-flex;
+}
+
+.agp-conv {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* The column: content keeps to --agp-col, the rest is margin, so scrollbars stay at the edge. */
+  --agp-pad: max(16px, calc((100% - var(--agp-col)) / 2));
+}
+
+/* The top bar: thin, title on the left, share and the menu on the right. */
+.agp-conv .agt-bar {
+  padding-top: env(safe-area-inset-top);
+}
+.agp-conv .agt-toolbar {
+  min-height: 52px;
+  padding: 6px 12px;
+  gap: 8px;
+  border-bottom: 0;
+  background: transparent;
+}
+.agp-conv .agt-title {
+  font-size: 15px;
+  font-weight: 550;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+.agp-conv .agt-title:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.agp-conv .agt-crumb {
+  color: var(--muted);
+}
+.agp-conv .agt-chip {
+  padding: 4px 10px;
+  font-size: 12.5px;
+}
+.agp-share {
+  color: var(--fg-bright);
+}
+.agp-lead {
+  color: var(--fg);
+}
+/* An empty thread has no title to show yet: the bar keeps only its buttons. */
+.agp-conv.is-empty .agt-title {
+  visibility: hidden;
+}
+
+/* The conversation. */
+.agp-conv .agt-scroll {
+  padding: 12px var(--agp-pad) 32px;
+  gap: 18px;
+}
+.agp-conv .agt-scroll > * {
+  width: 100%;
+  max-width: var(--agp-col);
+}
+.agp-conv .agt-scroll > .agt-user-wrap {
+  width: auto;
+  max-width: min(var(--agp-col), 85%);
+}
+.agp-conv .zed-preview {
+  font-family: var(--agp-sans);
+  font-size: 16px;
+  line-height: 1.7;
+}
+.agp-conv .zed-preview :is(code, pre, kbd, samp) {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+.agp-conv .zed-preview pre {
+  border-radius: 10px;
+}
+.agp-conv .agt-answer {
+  max-width: none;
+  color: var(--fg-bright);
+}
+/* An answer is prose across the whole column, however short its lines. */
+.agp-conv .agt-answer-wrap > .agt-answer {
+  align-self: stretch;
+}
+/* Your message: a rounded bubble on the right, no frame. */
+.agp-conv .agt-user {
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--fg) 10%, var(--bg));
+}
+.agp-conv .agt-user-text {
+  font-size: 16px;
+  line-height: 1.6;
+}
+.agp-conv :is(.agt-think, .agt-tool) {
+  max-width: none;
+  font-size: 13px;
+}
+.agp-conv .agt-tool {
+  border-radius: 0 8px 8px 0;
+}
+.agp-conv .agt-wait {
+  font-size: 14px;
+}
+
+/* What sits under the conversation (task runs, subagents, todos, skills, the queue), in the column. */
+.agp-conv > :is(.agt-sub-strip, .agt-todos, .agt-queue, .agt-always) {
+  margin-inline: var(--agp-pad);
+}
+
+/* The message box: a rounded pill at the bottom of the column. */
+.agp-conv .agt-composer {
+  padding: 4px var(--agp-pad) max(16px, env(safe-area-inset-bottom));
+  gap: 8px;
+}
+.agp-conv .agt-box {
+  padding: 10px 10px 8px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 26px;
+  background: var(--bg-light);
+  box-shadow: 0 2px 14px color-mix(in srgb, var(--bg-darker) 22%, transparent);
+}
+.agp-conv .agt-box:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line-strong));
+}
+.agp-conv .agt-box textarea {
+  font-size: 16px;
+  max-height: calc(8 * 1.5em + 4px);
+  padding: 4px 4px 4px 0;
+}
+.agp-conv .agt-box-bar {
+  gap: 4px;
+}
+.agp-conv .agt-pill {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 99px;
+  font-size: 13px;
+}
+.agp-conv .agt-box-bar .agt-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+.agp-conv .agt-send {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+}
+.agp-conv .agt-send.has-label {
+  width: auto;
+  padding: 0 14px;
+  border-radius: 99px;
+}
+.agp-conv .agt-warn,
+.agp-conv .agt-error {
+  border-radius: 8px;
+}
+
+/* An empty thread: the greeting and the message box together in the middle, ideas under it. */
+.agp-conv.is-empty {
+  justify-content: center;
+}
+.agp-conv.is-empty .agt-bar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+}
+.agp-conv.is-empty .agt-scroll {
+  flex: none;
+  overflow: visible;
+  padding-bottom: 8px;
+}
+.agp-hello {
+  margin: 0 auto;
+  max-width: none;
+  text-align: center;
+}
+.agp-greeting {
+  margin: 0;
+  color: var(--fg-bright);
+  font-family: var(--agp-sans);
+  font-size: clamp(24px, 4vw, 34px);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+.agp-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.agp-suggest-chip {
+  padding: 7px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  color: var(--fg);
+  font-size: 13.5px;
+}
+.agp-suggest-chip:hover {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  color: var(--fg-bright);
+}
+@media (pointer: coarse) {
+  .agp-suggest-chip {
+    min-height: 40px;
+  }
+}
+
+/* A phone: the column is the screen, the greeting sits a little above the middle. */
+.agp.is-phone .agp-conv {
+  --agp-pad: 12px;
+}
+.agp.is-phone .agp-conv.is-empty {
+  padding-bottom: 12vh;
+}
+.agp.is-phone .agp-conv .agt-toolbar {
+  padding: 6px 8px;
+}
+/* The title gets the room: the project and Share's word give way. */
+.agp.is-phone .agp-conv .agt-crumb,
+.agp.is-phone .agp-share .agt-chip-label {
+  display: none;
+}
+
+/* ---------- Signed out ---------- */
+
+.agp-signin {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+}
+.agp-signin-card {
+  width: min(420px, 100%);
+  padding: 32px 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-dark);
+  text-align: center;
+}
+.agp-signin-card h1 {
+  margin: 0 0 8px;
+  color: var(--fg-bright);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.agp-signin-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 24px 0 8px;
+}
+.agp-signin-btn {
+  min-height: 44px;
+  border-radius: 10px;
+  font-size: 15px;
+}
+.agp-signin-foot {
+  margin: 16px 0 0;
+  font-size: 13px;
+}
+
+/* ---------- Settings, Tasks and Memory ---------- */
+
+/* The app's own panes in a centred column with the conversation's type, roundness and room. Only
+   on the page (.agp-panel, Agents.tsx): the window keeps its dense look. */
+.agp-panel {
+  --agp-pad: max(16px, calc((100% - 900px) / 2));
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 15px;
+  line-height: 1.55;
+}
+.agp-panel > .agt-toolbar,
+.agp-panel > * > .agt-toolbar {
+  min-height: 56px;
+  padding: max(6px, env(safe-area-inset-top)) var(--agp-pad) 6px;
+  gap: 10px;
+  border-bottom: 0;
+  background: transparent;
+}
+.agp-panel .agt-toolbar .agt-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.agp-panel .agt-back {
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+  align-items: center;
+  border-radius: 10px;
+  font-size: 18px;
+}
+.agp-panel .agt-scroll {
+  padding: 8px var(--agp-pad) 48px;
+  gap: 12px;
+}
+.agp-panel :is(.muted, .set-help) {
+  line-height: 1.55;
+}
+.agp-panel h4 {
+  font-size: 13px;
+}
+/* Fields and buttons: rounded like the message box. */
+.agp-panel :is(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']), textarea, select) {
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.agp-panel .agt-search {
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+.agp-panel .agt-search input {
+  padding: 0;
+}
+.agp-panel .ui-select,
+.agp-panel .btn {
+  border-radius: 10px;
+}
+.agp-panel .btn {
+  min-height: 34px;
+  padding: 4px 14px;
+  font-size: 14px;
+}
+.agp-panel .btn.btn-small {
+  min-height: 30px;
+  padding: 3px 12px;
+  font-size: 13px;
+}
+.agp-panel .agt-back.btn {
+  padding: 0;
+}
+
+/* Settings: the sections as a soft list on the left, the section in a column beside it. */
+.agp-panel .agt-settings-host {
+  padding: 0 var(--agp-pad);
+}
+.agp-panel .agt-set.is-sidebar .agt-set-picker {
+  padding: 4px 0 14px;
+  border-bottom: 0;
+}
+.agp-panel .agt-set.is-sidebar .agt-set-nav {
+  padding: 4px 16px 24px 0;
+  border-right: 0;
+  background: transparent;
+}
+.agp-panel .agt-set-group-label {
+  padding: 0 12px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.agp-panel .agt-set-nav button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 14px;
+}
+.agp-panel .agt-set-nav button.is-on {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg-bright);
+}
+.agp-panel .agt-set.is-sidebar .agt-set-body {
+  padding: 4px 4px 48px;
+}
+.agp-panel .agt-set-body > * {
+  max-width: 720px;
+}
+.agp-panel .agt-set-title {
+  margin-bottom: 6px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.agp-panel .agt-set-title + .set-help {
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+.agp-panel .agt-ov {
+  gap: 10px;
+}
+.agp-panel .agt-ov-card {
+  min-height: 72px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-dark);
+}
+.agp-panel .agt-ov-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+/* A card that needs something done keeps its colour, as a ring rather than an edge. */
+.agp-panel .agt-ov-card:is(.is-warn, .is-error) {
+  border-color: var(--line);
+}
+.agp-panel .agt-ov-card.is-warn {
+  box-shadow: inset 3px 0 0 var(--yellow);
+}
+.agp-panel .agt-ov-card.is-error {
+  box-shadow: inset 3px 0 0 var(--red);
+}
+.agp-panel .agt-ov-card strong {
+  font-size: 15px;
+}
+.agp-panel .agt-ov-fix {
+  border-radius: 99px;
+}
+/* A list of settings: one rounded card, rows divided inside it; switches as pills. */
+.agp-panel .set-list {
+  border-radius: 14px;
+  background: var(--bg-dark);
+  overflow: hidden;
+}
+.agp-panel .set-row {
+  padding: 12px 16px;
+}
+.agp-panel .set-toggle {
+  width: 40px;
+  height: 24px;
+  border-radius: 99px;
+}
+.agp-panel .set-toggle::after {
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+.agp-panel .set-toggle.is-on::after {
+  transform: translateX(16px);
+}
+
+/* Tasks: the list as rounded cards. */
+.agp-panel .agt-tk-list {
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-dark);
+}
+.agp-panel .agt-tk-row {
+  padding: 12px 0;
+}
+.agp-panel .agt-tk-row:last-child {
+  border-bottom: 0;
+}
+.agp-panel :is(.agt-tk-group h4, .agt-tk-sub) {
+  margin: 20px 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.agp-panel :is(.agt-tk-banner, .agt-tk-empty) {
+  border-radius: 14px;
+}
+
+/* Memory: categories and memories as soft rows. */
+.agp-panel .agt-cat > summary {
+  padding: 8px 8px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+.agp-panel .agt-cat > summary:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.agp-panel .agt-mem {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+.agp-panel .agt-mem-text {
+  line-height: 1.55;
+}
+
+@media (pointer: coarse) {
+  .agp-panel .btn {
+    min-height: 40px;
+  }
+  .agp-panel .agt-set-nav button {
+    min-height: 44px;
+  }
+}
+.agp.is-phone .agp-panel {
+  --agp-pad: 12px;
+}
+
+/* A phone's message box: smaller pills so the model's name keeps room at 360 px. */
+.agp.is-phone .agp-conv .agt-pill {
+  padding: 0 7px;
+}
+.agp.is-phone .agp-conv .agt-box {
+  padding-left: 12px;
+}

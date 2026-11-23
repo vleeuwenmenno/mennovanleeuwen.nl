@@ -16,6 +16,7 @@ const PROPS: Partial<Record<AppId, string[]>> = {
   mail: ['account', 'email', 'message'],
   calendar: ['date', 'event'],
   contacts: ['contact'],
+  settings: ['section'],
 }
 
 /** Opens what the address asks for with `open` (wm.open); answers whether it asked for anything. */
@@ -37,6 +38,7 @@ export function openFromParams(params: URLSearchParams, open: (app: AppId, props
   // The Agents app's Tasks tab, at a task or run (an agent task's notification): ids only.
   for (const k of ['task', 'run'] as const) if (props[k] && !/^[0-9a-f-]{36}$/.test(props[k])) delete props[k]
   if (props.tab && !/^[a-z]{1,20}$/.test(props.tab)) delete props.tab
+  if (props.section && !/^[a-z]{1,20}$/.test(props.section)) delete props.section
   if (props.project && !/^[0-9a-f-]{36}$/.test(props.project)) delete props.project
   open(app, Object.keys(props).length ? { ...props, t: String(Date.now()) } : undefined)
   return true
