@@ -141,16 +141,25 @@ const AGENTS_NOSCRIPT = `<noscript>
         <p>This page needs JavaScript. It is part of <a href="/">MvL OS</a>.</p>
       </main>
     </noscript>`
+// The Agents page installs as an app of its own (public/agents.webmanifest), with its own icon and
+// name on the home screen, so its pages link that manifest instead of MvL OS's.
+const AGENTS_HEAD = (html: string) =>
+  html
+    .replace('href="/manifest.webmanifest"', 'href="/agents.webmanifest"')
+    .replace('href="/icons/apple-touch-icon.png"', 'href="/icons/agents-apple-touch-icon.png"')
+    .replace('<meta name="apple-mobile-web-app-title" content="MvL OS" />', '<meta name="apple-mobile-web-app-title" content="Agents" />')
+    .replace('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />', '<link rel="icon" href="/icons/agents.svg" type="image/svg+xml" />')
 
 const NONCE = '__CSP_NONCE__'
 /** index.html with another page's title, description, link preview and noscript text (or as built, for
  * `meta` undefined), made once per page. Scripts and modulepreload links carry a nonce placeholder
  * that serve() fills per response, see documentCsp. */
 const templates = new Map<string, Promise<string>>()
-function indexTemplate(full: string, key: string, meta?: string, noscript?: string): Promise<string> {
+function indexTemplate(full: string, key: string, meta?: string, noscript?: string, head?: (html: string) => string): Promise<string> {
   let t = templates.get(key)
   if (!t) {
     t = readFile(full, 'utf8').then((html) => {
+      if (head) html = head(html)
       if (meta !== undefined) html = html.replace(/<!-- meta[^>]*-->[\s\S]*?<!-- \/meta -->/, meta)
       if (noscript !== undefined) html = html.replace(/<!-- noscript -->[\s\S]*?<!-- \/noscript -->/, noscript)
       return html.replace(/<(script|link rel="modulepreload")(?=[\s>])/g, `<$1 nonce="${NONCE}"`)
@@ -172,6 +181,17 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
   }
 
   if (await handleApi(req, res)) return
+
+  // A share from the phone's share sheet to the installed Agents app (the share_target in
+  // public/agents.webmanifest). The service worker takes it (pwa/sw.js) and keeps it for the page,
+  // which never needs the session cookie a cross-site POST would not carry (it is SameSite=Lax).
+  // This is reached only without the worker (not installed yet, or blocked): nothing is kept or
+  // done, and the page says the share did not arrive.
+  if (req.method === 'POST' && /^\/agents\/share\/?$/.test(path)) {
+    req.resume()
+    res.writeHead(303, { Location: '/agents?share=missed', 'Cache-Control': 'no-store', ...SECURITY }).end()
+    return
+  }
 
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { Allow: 'GET, HEAD' }).end()
@@ -200,7 +220,7 @@ async function serve(req: IncomingMessage, res: ServerResponse) {
       : /^\/cv\/?$/.test(path)
         ? await indexTemplate(found.full, 'cv', CV_META, CV_NOSCRIPT)
         : AGENTS_PATH.test(path)
-          ? await indexTemplate(found.full, 'agents', AGENTS_META, AGENTS_NOSCRIPT)
+          ? await indexTemplate(found.full, 'agents', AGENTS_META, AGENTS_NOSCRIPT, AGENTS_HEAD)
           : await indexTemplate(found.full, 'app')
     // A fresh nonce for every response, so the page is made and compressed per request (a few
     // kilobytes, so cheap at a lower setting than the build's own copies).

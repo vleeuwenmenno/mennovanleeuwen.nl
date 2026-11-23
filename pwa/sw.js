@@ -10,6 +10,8 @@
 // - Data snapshots (*.json) and Google Fonts: network first / stale-while-revalidate.
 // - /api/*, Agents shared links (/s/*) and other sites: always the network, never cached (a link
 //   that was revoked must stop showing, offline too).
+// - A share to the installed Agents app (POST /agents/share, the share_target in
+//   public/agents.webmanifest) is kept here for the page, which opens a new chat with it.
 
 const VERSION = '__VERSION__'
 const PRECACHE = __PRECACHE__
@@ -127,6 +129,38 @@ self.addEventListener('message', (event) => {
   if (event.data === 'skip-waiting') self.skipWaiting()
 })
 
+// A share from the phone's share sheet (or the desktop's) to the installed Agents app. It is kept in
+// a cache of its own, one share at a time, and the page is opened at /agents?share=1: the page
+// (src/apps/agentsPage/share.ts) reads it once, drops it, and fills a new chat's message box with it.
+// Nothing is sent and nothing reaches the server here. The worker, not the server, takes the POST
+// because the share sheet's POST is cross-site, so the session cookie (SameSite=Lax) would not come
+// with it; the page uses the account as for anything else, and the composer's own limits apply.
+const SHARE = 'mvlos-share'
+// The most the composer attaches, and the largest file it reads (a PDF).
+const SHARE_FILES = 10
+const SHARE_FILE_SIZE = 40 * 1024 * 1024
+
+async function receiveShare(request) {
+  try {
+    const form = await request.formData()
+    const field = (k) => {
+      const v = form.get(k)
+      return typeof v === 'string' ? v.slice(0, 100_000) : ''
+    }
+    const all = form.getAll('files').filter((f) => f && typeof f !== 'string' && f.size > 0)
+    const kept = all.filter((f) => f.size <= SHARE_FILE_SIZE).slice(0, SHARE_FILES)
+    const left = all.filter((f) => !kept.includes(f)).map((f) => f.name || 'file')
+    await caches.delete(SHARE)
+    const cache = await caches.open(SHARE)
+    await Promise.all(kept.map((f, i) => cache.put(`/__share/${i}`, new Response(f, { headers: { 'Content-Type': f.type || 'application/octet-stream' } }))))
+    const meta = { at: Date.now(), title: field('title'), text: field('text'), url: field('url'), files: kept.map((f) => ({ name: f.name || 'file', type: f.type || '' })), left }
+    await cache.put('/__share/meta', new Response(JSON.stringify(meta), { headers: { 'Content-Type': 'application/json' } }))
+    return Response.redirect('/agents?share=1', 303)
+  } catch {
+    return Response.redirect('/agents?share=failed', 303)
+  }
+}
+
 async function networkFirst(request, cacheName, fallback) {
   try {
     const res = await fetch(request)
@@ -161,12 +195,15 @@ async function staleWhileRevalidate(request) {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event
-  if (request.method !== 'GET') return
   const url = new URL(request.url)
+  if (request.method === 'POST' && url.origin === self.location.origin && /^\/agents\/share\/?$/.test(url.pathname)) return event.respondWith(receiveShare(request))
+  if (request.method !== 'GET') return
 
   if (url.origin === self.location.origin) {
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/s/') || url.pathname === '/healthz') return
-    if (request.mode === 'navigate') return event.respondWith(networkFirst(request, SHELL, '/'))
+    // The Agents page offline (and the installed Agents app's start) falls back to its own page, which
+    // links its own manifest; everything else to the desktop.
+    if (request.mode === 'navigate') return event.respondWith(networkFirst(request, SHELL, /^\/agents(\/|$)/.test(url.pathname) ? '/agents' : '/'))
     if (url.pathname.startsWith('/assets/')) return event.respondWith(cacheFirst(request))
     if (url.pathname.endsWith('.json')) return event.respondWith(networkFirst(request, RUNTIME))
     return event.respondWith(staleWhileRevalidate(request))

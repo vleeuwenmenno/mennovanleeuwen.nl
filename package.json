@@ -86,6 +86,7 @@
     "check:find-image-cache": "node scripts/find-image-cache-check.ts",
     "check:agents-stats": "node scripts/agents-stats.ts",
     "check:agents-sidebar": "node scripts/agents-sidebar-e2e.ts",
+    "check:agents-pwa": "node scripts/agents-pwa-e2e.ts",
     "check:agents-chatgpt-models": "node scripts/agents-model-names.ts && node scripts/agents-chatgpt-models.ts",
     "check:agents-mail": "node scripts/agents-mail-check.ts",
     "check:money": "node scripts/money-check.ts",

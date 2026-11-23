@@ -1,0 +1,39 @@
+{
+  "name": "Agents",
+  "short_name": "Agents",
+  "description": "A research assistant that searches the web, reads what it finds and works in your files. Part of MvL OS.",
+  "id": "/agents",
+  "start_url": "/agents",
+  "scope": "/agents",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d0f14",
+  "theme_color": "#0d0f14",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    { "src": "/icons/agents.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icons/agents-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/agents-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/agents-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "New chat", "url": "/agents", "icons": [{ "src": "/icons/agents-192.png", "sizes": "192x192" }] },
+    { "name": "Tasks", "url": "/agents/tasks", "icons": [{ "src": "/icons/agents-192.png", "sizes": "192x192" }] }
+  ],
+  "share_target": {
+    "action": "/agents/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": ["image/*", "application/pdf", "text/*", "application/json", "application/xml", ".md", ".txt", ".csv", ".json", ".pdf", ".heic", ".heif", ".dng"]
+        }
+      ]
+    }
+  }
+}
