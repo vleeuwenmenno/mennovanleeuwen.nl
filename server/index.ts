@@ -128,9 +128,9 @@ function playHead(path: string): { key: string; meta: string; noscript: string }
 }
 
 // mennovanleeuwen.nl/agents is the Agents app on a page of its own (src/os/agentsPageMode.ts), and
-// /agents/<thread> a thread on it: a shared link says what the page is, never what the thread holds
-// (threads are private to their account).
-const AGENTS_PATH = /^\/agents(?:\/[^/]+)?\/?$/
+// /agents/<thread>, /agents/settings/<section> and the like places on it: a shared link says what the
+// page is, never what a thread holds (threads are private to their account).
+const AGENTS_PATH = /^\/agents(?:\/[^/]+){0,2}\/?$/
 const AGENTS_META = `<title>Agents · MvL OS</title>
     <meta name="description" content="A research assistant that searches, reads and works for you. Part of MvL OS." />
     <meta property="og:title" content="Agents · MvL OS" />

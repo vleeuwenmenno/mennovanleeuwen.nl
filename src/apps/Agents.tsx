@@ -133,7 +133,7 @@ import { setCloseGuard, useWM, type WinState } from '../os/wm'
 import { pullAll } from '../os/synced'
 import { mayTakeFocus } from '../os/overlays'
 import { allowNotifications } from '../os/agentWatch'
-import { AgentsSettings, showAgentsSection, usePromptLocation } from './AgentsSettings'
+import { AgentsSettings, isSectionId, showAgentsSection, usePromptLocation, type SectionId } from './AgentsSettings'
 import { AlwaysChips, showProjectSkills } from './AgentsSkillRules'
 import { openShareDialog } from './AgentsShare'
 import { AttachedFiles, memoryPicture, sentPicture, ImageCard, Thumbnails } from './AgentsImages'
@@ -154,9 +154,10 @@ import type { TaskSpec } from '../data/agentTaskPolicy'
 import { accountStorage } from '../os/accountSpace'
 import { localPref } from '../os/localPref'
 import { favouriteKey, favouriteModels, ModelPicker } from './AgentsModelPicker'
-import { agentsPagePath, agentsPageUrl, threadInPath } from '../os/agentsPageMode'
+import { agentsPageUrl, pathOf, routeOf, type PageRoute } from '../os/agentsPageMode'
 import { AgentsPageLayout, PageLead, pageGreeting, pageSuggestions, type PageChrome } from './agentsPage/PageLayout'
 import { makerOf, modelName } from '../data/agentModelNames'
+import { useDictation } from '../data/dictation'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
 // archived ones, and what the agent remembers), the conversation on the right with each tool call
@@ -207,6 +208,8 @@ export function Agents({ win, page = false }: { win: WinState; page?: boolean })
 
 /** What the main pane shows: a conversation, the settings, the memory (the user's or a project's), or the background tasks (a task or run in focus). */
 type Main = { kind: 'thread' } | { kind: 'settings' } | { kind: 'memory'; scope: number | null } | { kind: 'tasks'; focus: TasksFocus | null }
+/** The main pane an Agents page address asks for. */
+const mainOf = (r: PageRoute): Main => (r.kind === 'settings' ? { kind: 'settings' } : r.kind === 'tasks' ? { kind: 'tasks', focus: null } : r.kind === 'memory' ? { kind: 'memory', scope: r.scope } : { kind: 'thread' })
 
 const FOLDED_PROJECTS = 'mvlos.agents.folded'
 const readFolded = (): number[] => {
@@ -222,6 +225,8 @@ function AgentsApp({ win, page }: { win: WinState; page: boolean }) {
   const [threads, setThreads] = useState<Thread[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [q, setQ] = useState('')
+  // The Agents page starts where its address points (src/os/agentsPageMode.ts).
+  const [route] = useState<PageRoute | null>(() => (page ? routeOf() : null))
   // `thread: 'new'` asks for a new thread (the Image Studio's Send to chat → New thread).
   const [selected, setSelected] = useState<string | null>(win.props.thread && win.props.thread !== 'new' ? win.props.thread : null)
   // Which conversation is shown. Not the same as `selected`: a new thread gets its id from its
@@ -231,7 +236,9 @@ function AgentsApp({ win, page }: { win: WinState; page: boolean }) {
   const [draftProject, setDraftProject] = useState<number | null>(null)
   // In a narrow window only one side shows: the list, or the conversation.
   const [pane, setPane] = useState<'list' | 'chat'>(win.props.thread ? 'chat' : 'list')
-  const [main, setMain] = useState<Main>({ kind: 'thread' })
+  const [main, setMain] = useState<Main>(() => (route ? mainOf(route) : { kind: 'thread' }))
+  // The settings' section on screen, for the Agents page's address.
+  const [section, setSection] = useState<SectionId | null>(() => (route?.kind === 'settings' && isSectionId(route.section) ? (showAgentsSection(route.section), route.section) : null))
   // The Agents page on a phone: the sidebar is a drawer, closed again by going somewhere from it.
   const [drawer, setDrawer] = useState(false)
   const open = (id: string | null, project: number | null = null) => {
@@ -291,27 +298,57 @@ function AgentsApp({ win, page }: { win: WinState; page: boolean }) {
 
   usePromptLocation()
 
-  // The Agents page keeps the open thread in its address (/agents/<thread>, src/os/agentsPageMode.ts):
-  // going to another thread is a step Back can undo, a new thread getting its id from its first
-  // message only replaces the address of the chat it already was.
-  const shownView = useRef(view)
+  // The Agents page keeps where it is in its address (src/os/agentsPageMode.ts): going to another
+  // thread or panel is a step Back can undo. Some changes only replace the address of the step they
+  // are part of: a new thread getting its id from its first message, another section of the settings
+  // or another memory, and the step the phone's drawer added (below).
+  const here: PageRoute =
+    main.kind === 'settings' ? { kind: 'settings', section } : main.kind === 'tasks' ? { kind: 'tasks' } : main.kind === 'memory' ? { kind: 'memory', scope: main.scope } : { kind: 'thread', thread: selected }
+  const herePath = pathOf(here)
+  const shownStep = useRef({ view, kind: main.kind })
   useEffect(() => {
     if (!page) return
-    const path = agentsPagePath(selected)
-    if (location.pathname !== path) {
-      if (shownView.current === view) history.replaceState(null, '', path)
-      else history.pushState(null, '', path)
+    const was = shownStep.current
+    shownStep.current = { view, kind: main.kind }
+    if (location.pathname === herePath && !history.state?.agpDrawer) return
+    const sameStep = history.state?.agpDrawer || (was.kind === main.kind && (main.kind !== 'thread' || was.view === view))
+    if (sameStep) history.replaceState(null, '', herePath)
+    else history.pushState(null, '', herePath)
+  }, [page, herePath, view, main.kind])
+  // The phone's drawer is a step of its own, so the phone's Back gesture closes it instead of
+  // leaving the place under it. Closed any other way, the step goes again (going somewhere from
+  // the drawer replaces it, above).
+  const drawerNow = useRef(drawer)
+  drawerNow.current = drawer
+  const ownBack = useRef(false)
+  useEffect(() => {
+    if (!page) return
+    if (drawer && !history.state?.agpDrawer) history.pushState({ agpDrawer: true }, '', location.pathname)
+    else if (!drawer && history.state?.agpDrawer) {
+      ownBack.current = true
+      history.back()
     }
-    shownView.current = view
-  }, [page, selected, view])
+  }, [page, drawer])
+  const mainNow = useRef(main)
+  mainNow.current = main
   const selectedNow = useRef(selected)
   selectedNow.current = selected
   useEffect(() => {
     if (!page) return
     const onPop = () => {
-      const id = threadInPath()
-      if (id !== selectedNow.current) open(id)
-      else setMain({ kind: 'thread' })
+      if (ownBack.current) return void (ownBack.current = false)
+      if (drawerNow.current) return setDrawer(false)
+      const r = routeOf()
+      if (r.kind === 'thread') {
+        if (r.thread !== selectedNow.current || mainNow.current.kind !== 'thread') open(r.thread)
+        return
+      }
+      if (r.kind === 'settings') {
+        const want = isSectionId(r.section) ? r.section : 'overview'
+        showAgentsSection(want)
+        setSection(want)
+      }
+      setMain(mainOf(r))
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -643,6 +680,7 @@ function AgentsApp({ win, page }: { win: WinState; page: boolean }) {
     open(null)
   }
   const openSettings = () => {
+    if (main.kind !== 'settings') setSection(null)
     setMain({ kind: 'settings' })
     setPane('chat')
     setDrawer(false)
@@ -772,7 +810,7 @@ function AgentsApp({ win, page }: { win: WinState; page: boolean }) {
   const mainView = (
     <>
       {main.kind === 'settings' ? (
-        <SettingsPane onBack={() => (setMain({ kind: 'thread' }), setPane('list'), page && phone && setDrawer(true))} />
+        <SettingsPane onSection={setSection} onBack={() => (setMain({ kind: 'thread' }), setPane('list'), page && phone && setDrawer(true))} />
       ) : main.kind === 'tasks' ? (
         <TasksView focus={main.focus} fromThread={selected} onBack={() => (setMain({ kind: 'thread' }), setPane('list'), page && phone && setDrawer(true))} onOpenThread={(id) => (setArchived(false), open(id), refresh())} />
       ) : main.kind === 'memory' ? (
@@ -806,7 +844,8 @@ function AgentsApp({ win, page }: { win: WinState; page: boolean }) {
   if (page)
     return (
       <AgentsPageLayout ref={root} ctx={sideCtx} phone={phone} collapsed={collapsed} drawer={drawer} onDrawer={setDrawer} onContextMenu={rootMenu} onSideMenu={sideMenu}>
-        {mainView}
+        {/* Settings, Tasks and Memory get the page's roomier look from this frame (page.css). */}
+        {main.kind === 'thread' ? mainView : <div className={`agp-panel is-${main.kind}`}>{mainView}</div>}
       </AgentsPageLayout>
     )
   return (
@@ -1237,6 +1276,17 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
   const pinned = useRef(true)
   const input = useRef<HTMLTextAreaElement>(null)
   const emoji = useEmojiTyping(input, text)
+  // Dictation (src/data/dictation.ts): what is heard goes after what the box held when it started.
+  const dictationBase = useRef('')
+  const dictation = useDictation((heard, final) => {
+    const base = dictationBase.current
+    setText(heard ? `${base}${base && !/\s$/.test(base) ? ' ' : ''}${heard}` : base)
+    if (final) requestAnimationFrame(() => input.current?.focus())
+  })
+  const toggleDictation = () => {
+    if (dictation.state === 'idle') dictationBase.current = text
+    dictation.toggle()
+  }
   const attachedRequest = useRef<number | null>(null)
   useEffect(() => {
     const a = embedded?.attachment
@@ -2215,10 +2265,11 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
     const bar = boxBar.current
     const pill = modelPill.current
     if (!bar || !pill) return
+    // Never down to the maker's mark alone: at the last level the short name truncates instead (CSS).
     const fit = () => {
       const forms = ['.agt-model-name', '.agt-model-name', '.agt-model-short']
       let level = 0
-      for (; level < 3; level++) {
+      for (; level < 2; level++) {
         pill.dataset.level = String(level)
         const el = pill.querySelector<HTMLElement>(forms[level])
         if (el && el.scrollWidth <= el.clientWidth + 1 && bar.scrollWidth <= bar.clientWidth + 1) break
@@ -2564,7 +2615,7 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
               }
             }}
             onContextMenu={composerMenu}
-            placeholder={suggestion ? `Suggested reply: “${suggestion}”${touch ? '' : ' — Tab to complete, or type your own'}` : editingQ ? 'The queued message' : waiting ? 'Tell it what to do instead…' : answering ? 'Queue a message for when it is done…' : mode === 'deep' ? 'What should it research?' : 'Ask anything'}
+            placeholder={dictation.state === 'listening' ? 'Listening…' : dictation.state === 'transcribing' ? 'Writing it down…' : suggestion ? `Suggested reply: “${suggestion}”${touch ? '' : ' — Tab to complete, or type your own'}` : editingQ ? 'The queued message' : waiting ? 'Tell it what to do instead…' : answering ? 'Queue a message for when it is done…' : mode === 'deep' ? 'What should it research?' : 'Ask anything'}
             rows={1}
             aria-label="Message"
           />
@@ -2600,7 +2651,7 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
               aria-expanded={picking}
             >
               <span className="agt-model-name">{pretty ? pretty.name : 'Automatic'}</span>
-              {pretty && <span className="agt-model-short">{shortName}</span>}
+              <span className="agt-model-short">{pretty ? shortName : 'Auto'}</span>
               {pretty && <span className="agt-model-mark" aria-hidden>{makerOf(pretty.maker).mark}</span>}
               {pretty?.variant && <span className="agt-model-variant">{pretty.variant}</span>}
               <Icon name="chevron" size={12} />
@@ -2626,6 +2677,19 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
                   requestAnimationFrame(() => input.current?.focus())
                 }}
               />
+            )}
+            {dictation.available && (
+              <button
+                type="button"
+                className={`agt-icon agt-mic is-${dictation.state}`}
+                onClick={toggleDictation}
+                disabled={dictation.state === 'transcribing'}
+                aria-pressed={dictation.state === 'listening'}
+                aria-label={dictation.state === 'listening' ? 'Stop dictation' : dictation.state === 'transcribing' ? 'Writing it down' : 'Dictate'}
+                title={dictation.state === 'listening' ? 'Listening… tap to stop' : dictation.state === 'transcribing' ? 'Writing it down…' : 'Dictate: speak instead of typing'}
+              >
+                <Icon name="mic" size={16} />
+              </button>
             )}
             {answering && (
               <button type="button" className="agt-send is-stop" onClick={stop} aria-label="Stop" title="Stop (the queue waits)">
@@ -3510,7 +3574,7 @@ function StatsView({ id, version }: { id: string; version: number }) {
 // --- settings ---------------------------------------------------------------------------------
 
 /** The app's settings (the same as Settings → Agents), with the window's own back button. */
-function SettingsPane({ onBack }: { onBack: () => void }) {
+function SettingsPane({ onBack, onSection }: { onBack: () => void; onSection?: (id: SectionId) => void }) {
   return (
     <>
       <div className="nb-toolbar agt-toolbar">
@@ -3520,7 +3584,7 @@ function SettingsPane({ onBack }: { onBack: () => void }) {
         <span className="agt-title">Agents settings</span>
       </div>
       <div className="agt-settings-host">
-        <AgentsSettings layout="sidebar" />
+        <AgentsSettings layout="sidebar" onSection={onSection} />
       </div>
     </>
   )

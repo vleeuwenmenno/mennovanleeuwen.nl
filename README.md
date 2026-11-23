@@ -2732,10 +2732,18 @@ GIF, camera raw or HEIC through the authenticated Photos proxy, not the thumbnai
 
 **The Agents page.** Agents also has a page of its own at **`/agents`**, laid out like a chat
 website: no boot log, desktop, top bar or dock ([`src/os/agentsPageMode.ts`](src/os/agentsPageMode.ts),
-[`src/apps/agentsPage/`](src/apps/agentsPage)). **`/agents/<thread id>`** opens a thread, so a thread
-can be bookmarked or opened in another tab; the address follows the thread on screen, and the
-browser's Back and Forward move between threads (a new thread getting its id from its first message
-replaces the address rather than adding a step). It is the same app as the window, not a copy:
+[`src/apps/agentsPage/`](src/apps/agentsPage)). Every place on it has an address, so it can be
+bookmarked, opened in another tab or come back to after signing in:
+- **`/agents/<thread id>`** a thread, **`/agents/settings`** and **`/agents/settings/<section>`**
+  (`models`, `permissions`, …) the settings, **`/agents/tasks`** the background tasks, and
+  **`/agents/memory`** (**`/agents/memory/<project>`** a project's) what the agent remembers. Thread
+  ids are UUIDs, so they never clash with those words; an address the page doesn't know opens a new
+  chat (an unknown section, the settings' overview).
+- The address follows what is on screen, and Back and Forward step between threads and panels. A new
+  thread getting its id from its first message, another settings section or another project's memory
+  replace the address instead of adding a step.
+
+It is the same app as the window, not a copy:
 [`Agents.tsx`](src/apps/Agents.tsx) with `page` owns all the state, and only the layout differs
 ([`PageLayout.tsx`](src/apps/agentsPage/PageLayout.tsx), styled in
 [`page.css`](src/apps/agentsPage/page.css) from the theme's colours only). Everything the window
@@ -2744,12 +2752,17 @@ tasks, memory, settings, sharing, the model and effort pickers, attachments and 
 - The sidebar has the app's name, New chat, Search chats, Tasks, Images, Memory, Archived and
   Settings, then Projects and Recents (pinned first), with the account at the bottom (light or dark
   theme, MvL OS, sign out). On a desktop it hides (the top bar's buttons bring it back); on a phone
-  it is a drawer behind the ☰ button. It is built from the same parts as the window's sidebar
+  it is a drawer behind the ☰ button, and the phone's Back gesture closes the drawer rather than
+  leaving the page under it. Archived and Search change the sidebar's list, not the page, so they
+  have no address of their own. It is built from the same parts as the window's sidebar
   styles, so renaming, menus, selecting many threads and dragging into projects work the same.
 - The conversation is a centred column: answers as full-width prose, your messages as bubbles on
   the right. An empty thread is a greeting with the message box under it and a few ideas to start
   from; once it has messages, the box sits at the bottom. The thin top bar has the title, the
   thread's chips (folder, images, mail reads, permission), the context ring, Share and the menu.
+- Settings, Tasks and Memory are the window's own panes in the page's look: a centred column with
+  the same type and room, rounded cards, lists, fields and switches (`.agp-panel` in `page.css`; the
+  window keeps its dense look).
 - Signed out, the page is a sign-in screen (GitHub, or Google where the server offers it), and
   signing in comes back to the same address. What an account may use is decided by the server, as in
   the window. Notifications, dialogs, menus and the Seafile file picker are the OS's own, drawn on
@@ -2761,6 +2774,19 @@ tasks, memory, settings, sharing, the model and effort pickers, attachments and 
 - In the window, the conversation's ⋯ menu (an expand button in its top bar while the thread is
   still new) and the sidebar's right-click menu have **Open in full page**, which opens the thread on
   screen at `/agents/<thread>` (or `/agents`) in a new tab.
+
+**Dictation.** The message box (in the window, on the Agents page and in Xed's Agents panel) has a
+microphone button ([`src/data/dictation.ts`](src/data/dictation.ts)). Where the browser recognises
+speech itself (Chrome, Edge, Safari: the Web Speech API), the words appear in the box as they are
+heard, after what was typed, in the browser's language; tap again to stop. Firefox has no speech
+recognition: there, when the account has an OpenAI API key for Agents (Settings → Agents → Images),
+the microphone is recorded and `POST /api/agents/transcribe`
+([`server/agentTranscribe.ts`](server/agentTranscribe.ts)) has OpenAI's transcription API write it
+down with that key, which stays on the server. That is for signed-in accounts only, one recording
+at a time, up to two minutes and 10 MB (the page stops recording there). With neither, there is no
+button. While it listens the button is red and pulsing; a blocked microphone is said in a
+notification. The model button never shrinks to its arrow alone: its short name (or *Auto*)
+truncates, and in a very narrow box the mode and effort pills drop their arrows first.
 
 
 The **Tools** menu lists four categories (Context, Images, Personal, Files & code), each with its on/total count. A category opens a submenu with each tool's toggle and description; **Turn all on/off** sits below them. The categories are `TOOL_CATEGORIES` in [`src/data/agents.ts`](src/data/agents.ts).

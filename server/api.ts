@@ -20,6 +20,7 @@ import { servePreview } from './imagePreview.ts'
 import { storageReport } from './quota.ts'
 import { assertSeafileLink, bindSeafileRequest, withSeafileLink } from './seafile.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
+import { handleTranscribeApi } from './agentTranscribe.ts'
 import { handleAgentTasksApi } from './agentTasks.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
 import { addMemory, allowSite, listSites, removeSite, agentsPrompt, messagePicture, messagePictureSource, gptPreview, answer, approve, retryTurn, rewind, branchThread, generateAnother, upscaleImage, inpaintImage, enqueue, override, editQueued, removeQueued, moveQueued, sendQueued, automaticModels, clientResult, claimClientCall, mentionTools, skillInfo, skillsInstall, skillsList, skillsRemove, createProject, deleteProject, followThread, listProjects, orderProjects, renameProject, updateMemory, contextOf, threadStats, createThread, listQuick, clearQuick, suggestTitle, regenerateTitle, deleteMemory, deleteThread, getThread, getMailReads, revokeMailReads, setMailReads, listMemories, listThreads, allModels, ollamaSource, removeOllamaKey, runTurn, setOllamaKey, stopThread, updateThread, listSubagents, messageSubagentAsUser, stopSubagentAsUser, watchSubagents } from './agents.ts'
@@ -524,6 +525,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if ((path === '/api/video' || path.startsWith('/api/video/')) && (await handleVideoApi(req, res, url, method, requireUser(req)))) return true
     // The Image Studio (server/agentImageStudio.ts): manual generation, its history and uploads.
     if (path.startsWith('/api/agents/images/studio') && (await handleStudioApi(req, res, url, method, requireUser(req)))) return true
+    // Dictation where the browser has no speech recognition (server/agentTranscribe.ts).
+    if (path === '/api/agents/transcribe' && (await handleTranscribeApi(req, res, method, requireUser(req)))) return true
     // OpenAI pictures and the icon library (server/agentOpenAI.ts): the key, Sign in with ChatGPT, icons by slug.
     if ((path.startsWith('/api/agents/openai') || path.startsWith('/api/agents/icons')) && (await handleOpenAIApi(req, res, path, method, requireUser(req)))) return true
     // Pictures find_image kept (server/findImage.ts): /api/agents/images/w…, the account's own only.

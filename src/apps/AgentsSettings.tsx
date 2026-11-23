@@ -88,6 +88,9 @@ const takePending = (): SectionId | null => {
 }
 /** Said on window to show a section in the settings already open (openAgentsSettings). */
 const SECTION_EVENT = 'mvlos:agents-settings-section'
+/** Whether a word is one of the settings' sections (an address on the Agents page names one). */
+export const isSectionId = (v: unknown): v is SectionId => typeof v === 'string' && SECTIONS.some((x) => x.id === v)
+
 /** Shows `id` in any agents settings already open, or in the next one to open. */
 export function showAgentsSection(id: SectionId) {
   pendingSection = { id, at: Date.now() }
@@ -98,7 +101,7 @@ export function showAgentsSection(id: SectionId) {
  * The settings, by category: a sidebar of their own in the Agents window, tabs inside Settings
  * (which has its sidebar already). A narrow window shows the sidebar as tabs too.
  */
-export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs' }) {
+export function AgentsSettings({ layout = 'tabs', onSection }: { layout?: 'sidebar' | 'tabs'; /** Told the section on screen (the Agents page puts it in the address) */ onSection?: (id: SectionId) => void }) {
   // Overview first, unless something asked for a section (showAgentsSection).
   const [section, setSection] = useState<SectionId>(() => takePending() ?? 'overview')
   useEffect(() => {
@@ -106,6 +109,7 @@ export function AgentsSettings({ layout = 'tabs' }: { layout?: 'sidebar' | 'tabs
     window.addEventListener(SECTION_EVENT, on)
     return () => window.removeEventListener(SECTION_EVENT, on)
   }, [])
+  useEffect(() => onSection?.(section), [section, onSection])
   const pick = (id: SectionId) => setSection(id)
   const wm = useWM()
   const account = useAccount()

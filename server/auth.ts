@@ -222,8 +222,10 @@ export function requireAdmin(req: IncomingMessage): User {
   return user
 }
 
-/** The pages sign-in may come back to: the desktop, the CV page, a game by its direct link (/play/<game>) and the Agents page (/agents, /agents/<thread>). Nothing else, so the link can't send anyone elsewhere. */
-export const backTo = (path: string | null) => (path === '/cv' || (path && (/^\/play(\/[a-z0-9-]{1,40})?$/.test(path) || /^\/agents(\/[0-9a-f-]{36})?$/.test(path))) ? path : '/')
+/** The Agents page's places (src/os/agentsPageMode.ts): a thread, settings at a section, tasks, memory (a project's). */
+const AGENTS_BACK = /^\/agents(\/([0-9a-f-]{36}|settings(\/[a-z]{1,20})?|tasks|memory(\/[1-9]\d{0,8})?))?$/
+/** The pages sign-in may come back to: the desktop, the CV page, a game by its direct link (/play/<game>) and the Agents page (/agents and its places above). Nothing else, so the link can't send anyone elsewhere. */
+export const backTo = (path: string | null) => (path === '/cv' || (path && (/^\/play(\/[a-z0-9-]{1,40})?$/.test(path) || AGENTS_BACK.test(path))) ? path : '/')
 
 /**
  * The scope choice made by this request's signed-in account, if any and still valid. The cookie is

@@ -247,12 +247,7 @@
 .agp:not(.has-side) .agp-main .agt-back {
   display: inline-flex;
 }
-/* Settings, Memory and Tasks: the app's own panes, kept to a readable width in the middle. */
-.agp-main > :not(.agp-conv) {
-  width: 100%;
-  max-width: 980px;
-  margin-inline: auto;
-}
+
 .agp-conv {
   display: flex;
   flex-direction: column;
@@ -519,4 +514,242 @@
 .agp-signin-foot {
   margin: 16px 0 0;
   font-size: 13px;
+}
+
+/* ---------- Settings, Tasks and Memory ---------- */
+
+/* The app's own panes in a centred column with the conversation's type, roundness and room. Only
+   on the page (.agp-panel, Agents.tsx): the window keeps its dense look. */
+.agp-panel {
+  --agp-pad: max(16px, calc((100% - 900px) / 2));
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 15px;
+  line-height: 1.55;
+}
+.agp-panel > .agt-toolbar,
+.agp-panel > * > .agt-toolbar {
+  min-height: 56px;
+  padding: max(6px, env(safe-area-inset-top)) var(--agp-pad) 6px;
+  gap: 10px;
+  border-bottom: 0;
+  background: transparent;
+}
+.agp-panel .agt-toolbar .agt-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.agp-panel .agt-back {
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+  align-items: center;
+  border-radius: 10px;
+  font-size: 18px;
+}
+.agp-panel .agt-scroll {
+  padding: 8px var(--agp-pad) 48px;
+  gap: 12px;
+}
+.agp-panel :is(.muted, .set-help) {
+  line-height: 1.55;
+}
+.agp-panel h4 {
+  font-size: 13px;
+}
+/* Fields and buttons: rounded like the message box. */
+.agp-panel :is(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']), textarea, select) {
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.agp-panel .agt-search {
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+.agp-panel .agt-search input {
+  padding: 0;
+}
+.agp-panel .ui-select,
+.agp-panel .btn {
+  border-radius: 10px;
+}
+.agp-panel .btn {
+  min-height: 34px;
+  padding: 4px 14px;
+  font-size: 14px;
+}
+.agp-panel .btn.btn-small {
+  min-height: 30px;
+  padding: 3px 12px;
+  font-size: 13px;
+}
+.agp-panel .agt-back.btn {
+  padding: 0;
+}
+
+/* Settings: the sections as a soft list on the left, the section in a column beside it. */
+.agp-panel .agt-settings-host {
+  padding: 0 var(--agp-pad);
+}
+.agp-panel .agt-set.is-sidebar .agt-set-picker {
+  padding: 4px 0 14px;
+  border-bottom: 0;
+}
+.agp-panel .agt-set.is-sidebar .agt-set-nav {
+  padding: 4px 16px 24px 0;
+  border-right: 0;
+  background: transparent;
+}
+.agp-panel .agt-set-group-label {
+  padding: 0 12px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.agp-panel .agt-set-nav button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 14px;
+}
+.agp-panel .agt-set-nav button.is-on {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg-bright);
+}
+.agp-panel .agt-set.is-sidebar .agt-set-body {
+  padding: 4px 4px 48px;
+}
+.agp-panel .agt-set-body > * {
+  max-width: 720px;
+}
+.agp-panel .agt-set-title {
+  margin-bottom: 6px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.agp-panel .agt-set-title + .set-help {
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+.agp-panel .agt-ov {
+  gap: 10px;
+}
+.agp-panel .agt-ov-card {
+  min-height: 72px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-dark);
+}
+.agp-panel .agt-ov-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+}
+/* A card that needs something done keeps its colour, as a ring rather than an edge. */
+.agp-panel .agt-ov-card:is(.is-warn, .is-error) {
+  border-color: var(--line);
+}
+.agp-panel .agt-ov-card.is-warn {
+  box-shadow: inset 3px 0 0 var(--yellow);
+}
+.agp-panel .agt-ov-card.is-error {
+  box-shadow: inset 3px 0 0 var(--red);
+}
+.agp-panel .agt-ov-card strong {
+  font-size: 15px;
+}
+.agp-panel .agt-ov-fix {
+  border-radius: 99px;
+}
+/* A list of settings: one rounded card, rows divided inside it; switches as pills. */
+.agp-panel .set-list {
+  border-radius: 14px;
+  background: var(--bg-dark);
+  overflow: hidden;
+}
+.agp-panel .set-row {
+  padding: 12px 16px;
+}
+.agp-panel .set-toggle {
+  width: 40px;
+  height: 24px;
+  border-radius: 99px;
+}
+.agp-panel .set-toggle::after {
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+.agp-panel .set-toggle.is-on::after {
+  transform: translateX(16px);
+}
+
+/* Tasks: the list as rounded cards. */
+.agp-panel .agt-tk-list {
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-dark);
+}
+.agp-panel .agt-tk-row {
+  padding: 12px 0;
+}
+.agp-panel .agt-tk-row:last-child {
+  border-bottom: 0;
+}
+.agp-panel :is(.agt-tk-group h4, .agt-tk-sub) {
+  margin: 20px 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.agp-panel :is(.agt-tk-banner, .agt-tk-empty) {
+  border-radius: 14px;
+}
+
+/* Memory: categories and memories as soft rows. */
+.agp-panel .agt-cat > summary {
+  padding: 8px 8px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+.agp-panel .agt-cat > summary:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.agp-panel .agt-mem {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+.agp-panel .agt-mem-text {
+  line-height: 1.55;
+}
+
+@media (pointer: coarse) {
+  .agp-panel .btn {
+    min-height: 40px;
+  }
+  .agp-panel .agt-set-nav button {
+    min-height: 44px;
+  }
+}
+.agp.is-phone .agp-panel {
+  --agp-pad: 12px;
+}
+
+/* A phone's message box: smaller pills so the model's name keeps room at 360 px. */
+.agp.is-phone .agp-conv .agt-pill {
+  padding: 0 7px;
+}
+.agp.is-phone .agp-conv .agt-box {
+  padding-left: 12px;
 }
