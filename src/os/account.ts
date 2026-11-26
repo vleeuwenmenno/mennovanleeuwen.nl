@@ -37,12 +37,12 @@ export type Account = {
   /** CalDAV accounts (Fastmail, Nextcloud...) for calendars */
   caldav: CaldavInfo[]
   /** Third-party services with a key on the server: saved in Settings, set on the server, or none */
-  /** `openai`: signed in with ChatGPT or an OpenAI API key, so Agents can run on OpenAI's models */
-  integrations: { updown: 'settings' | 'server' | null; ollama: 'settings' | 'server' | null; openai?: boolean }
+  /** `openai`: signed in with ChatGPT or an OpenAI API key; `customOpenAI`: number of custom OpenAI-compatible endpoints */
+  integrations: { updown: 'settings' | 'server' | null; ollama: 'settings' | 'server' | null; openai?: boolean; customOpenAI?: number }
   seafile: SeafileInfo | null
 }
 
-let account: Account = { status: 'loading', user: null, registration: null, signIn: { github: false, google: false }, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null }, seafile: null }
+let account: Account = { status: 'loading', user: null, registration: null, signIn: { github: false, google: false }, forges: [], googleEnabled: false, google: null, caldav: [], integrations: { updown: null, ollama: null, customOpenAI: 0 }, seafile: null }
 const listeners = new Set<() => void>()
 
 /**
@@ -108,8 +108,8 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown;
 export async function loadAccount() {
   try {
     await waitAccountSpace()
-    const me = await api<{ authEnabled: boolean; registration?: Registration | null; signIn?: SignInProviders; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null; openai?: boolean }; seafile?: SeafileInfo | null }>('/api/me')
-    const next: Account = { resolved: true, status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, signIn: { github: !!me.signIn?.github, google: !!me.signIn?.google }, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null, openai: !!me.integrations?.openai }, seafile: me.seafile ?? null }
+    const me = await api<{ authEnabled: boolean; registration?: Registration | null; signIn?: SignInProviders; user: AccountUser | null; forges: ForgeInfo[]; googleEnabled?: boolean; google?: { email: string; canWrite?: boolean } | null; caldav?: CaldavInfo[]; integrations?: { updown: 'settings' | 'server' | null; ollama?: 'settings' | 'server' | null; openai?: boolean; customOpenAI?: number }; seafile?: SeafileInfo | null }>('/api/me')
+    const next: Account = { resolved: true, status: me.user ? 'user' : me.authEnabled ? 'anon' : 'off', user: me.user, registration: me.registration ?? null, signIn: { github: !!me.signIn?.github, google: !!me.signIn?.google }, forges: me.forges, googleEnabled: !!me.googleEnabled, google: me.google ?? null, caldav: me.caldav ?? [], integrations: { updown: me.integrations?.updown ?? null, ollama: me.integrations?.ollama ?? null, openai: !!me.integrations?.openai, customOpenAI: Number(me.integrations?.customOpenAI ?? 0) }, seafile: me.seafile ?? null }
     // This tab took its account from the browser's cookie as it loaded (src/os/accountSpace.ts).
     // The server says otherwise (the session ran out, or the cookie was from before it was kept):
     // its answer has put the cookie right, so start again as that account, keeping this one's
@@ -232,6 +232,9 @@ export async function removeOllamaKey() {
   await api('/api/integrations/ollama', { method: 'DELETE' })
   await loadAccount()
 }
+
+/** Whether the signed-in account has any chat model provider set up (Ollama Cloud, ChatGPT/OpenAI, or a custom OpenAI-compatible API). */
+export const hasAgentProvider = (a: Account) => !!a.integrations.ollama || !!a.integrations.openai || (a.integrations.customOpenAI ?? 0) > 0
 
 /** Whether any calendar is connected (Google or CalDAV), for the Agenda widget and the clock. */
 export const hasCalendar = (a: Account) => a.status === 'user' && (!!a.google || a.caldav.length > 0)

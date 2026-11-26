@@ -88,6 +88,7 @@
     "check:agents-sidebar": "node scripts/agents-sidebar-e2e.ts",
     "check:agents-pwa": "node scripts/agents-pwa-e2e.ts",
     "check:agents-chatgpt-models": "node scripts/agents-model-names.ts && node scripts/agents-chatgpt-models.ts",
+    "check:agents-custom-openai": "node scripts/agents-custom-openai.ts",
     "check:agents-mail": "node scripts/agents-mail-check.ts",
     "check:money": "node scripts/money-check.ts",
     "check:seafile-stream": "node scripts/seafile-stream.ts",

@@ -90,3 +90,20 @@ export function responsesStats(provider: ChatProvider, model: string, usage: Usa
     ms: measured.ms,
   })
 }
+
+type ChatCompletionsUsage = { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number }; completion_tokens_details?: { reasoning_tokens?: number } }
+
+/** A Chat Completions API usage block (custom OpenAI-compatible endpoints). */
+export function chatCompletionsStats(provider: ChatProvider, model: string, usage: ChatCompletionsUsage | null, measured: { ms: number; ttft?: number; gen?: number }): CallStats {
+  return tidy({
+    provider,
+    model,
+    input: count(usage?.prompt_tokens),
+    cached: count(usage?.prompt_tokens_details?.cached_tokens),
+    output: count(usage?.completion_tokens),
+    reasoning: count(usage?.completion_tokens_details?.reasoning_tokens),
+    ttft: measured.ttft,
+    gen: measured.gen,
+    ms: measured.ms,
+  })
+}

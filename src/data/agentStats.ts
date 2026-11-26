@@ -4,7 +4,7 @@
 // for what they lack.
 
 export type CallStats = {
-  provider: 'ollama' | 'chatgpt' | 'openai'
+  provider: 'ollama' | 'chatgpt' | 'openai' | 'custom'
   model: string
   input?: number
   cached?: number

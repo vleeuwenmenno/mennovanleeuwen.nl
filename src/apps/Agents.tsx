@@ -53,6 +53,7 @@ import {
   deleteMemory,
   deleteThread,
   getContext,
+  getDefaults,
   getThreadStats,
   getThread,
   listMemories,
@@ -86,6 +87,7 @@ import {
   tokenCount,
   toolLabel,
   updateThread,
+  useAgentModelsVersion,
   useAgentSettings,
   type ContextInfo,
   type AgentMessage,
@@ -124,7 +126,7 @@ import { notify } from '../os/notify'
 import { useEmojiTyping } from '../os/emojiTyping'
 import { pickFiles, pickFolder } from '../os/FolderPicker'
 import { Select } from '../os/Select'
-import { hasCalendar, signIn, useAccount } from '../os/account'
+import { hasAgentProvider, hasCalendar, signIn, useAccount } from '../os/account'
 import { useMailAccounts } from '../data/mail'
 import { fieldMenu, linkAt, linkMenu, openContextMenu, openMenuAt, selectionIn, tidyMenu, type MenuItem } from '../os/ContextMenu'
 import { searchWeb } from '../data/searchEngine'
@@ -156,7 +158,7 @@ import { localPref } from '../os/localPref'
 import { favouriteKey, favouriteModels, ModelPicker } from './AgentsModelPicker'
 import { agentsPageUrl, pathOf, routeOf, type PageRoute } from '../os/agentsPageMode'
 import { AgentsPageLayout, PageLead, pageGreeting, pageSuggestions, type PageChrome } from './agentsPage/PageLayout'
-import { makerOf, modelName } from '../data/agentModelNames'
+import { makerOf, modelName, providerOfModel } from '../data/agentModelNames'
 import { useDictation } from '../data/dictation'
 
 // Agents: a research assistant on Ollama Cloud (server/agents.ts). Threads on the left (and the
@@ -189,12 +191,12 @@ export function Agents({ win, page = false }: { win: WinState; page?: boolean })
         )}
       </div>
     )
-  // Without an Ollama key, a ChatGPT sign-in or an OpenAI key is enough: those threads run on OpenAI's models.
-  const canChat = !!account.integrations.ollama || !!account.integrations.openai
+  // Any configured provider is enough: Ollama Cloud, ChatGPT/OpenAI, or a custom OpenAI-compatible API.
+  const canChat = hasAgentProvider(account)
   if (!canChat)
     return (
       <div className="nb-blank">
-        <p className="muted">Agents runs on Ollama Cloud. Add an API key from your Ollama account to start, or sign in with ChatGPT (or add an OpenAI API key) in Settings → Agents → Images to use OpenAI's models.</p>
+        <p className="muted">Connect a model provider to start: add an Ollama Cloud API key or a custom OpenAI-compatible API in Settings → Integrations, or sign in with ChatGPT (or add an OpenAI API key) in Settings → Agents → Images.</p>
         <button className="btn btn-primary" onClick={() => wm.open('settings', { section: 'integrations', t: String(Date.now()) })}>
           Open Settings → Integrations
         </button>
@@ -1311,8 +1313,23 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
   // Kept for coming back: per thread, or for the new thread while there is none yet. A queued
   // message being edited is not a draft.
   useEffect(() => void (!editingQ && setDraft(id ?? 'new', text, files)), [id, text, files, editingQ])
+  const modelsVersion = useAgentModelsVersion()
+  const [autoDefaults, setAutoDefaults] = useState<{ quick: string; deep: string } | null>(null)
   useEffect(() => {
-    agentModels().then(setModels, () => {})
+    let alive = true
+    agentModels().then(
+      (list) => alive && setModels(list),
+      () => alive && setModels([]),
+    )
+    getDefaults().then(
+      (d) => alive && setAutoDefaults(d),
+      () => alive && setAutoDefaults(null),
+    )
+    return () => {
+      alive = false
+    }
+  }, [modelsVersion])
+  useEffect(() => {
     if (mayTakeFocus()) input.current?.focus()
     return () => abort.current?.abort()
   }, [])
@@ -1539,7 +1556,20 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
 
   const mode = thread?.mode ?? draftMode
   const model = thread?.model ?? draftModel ?? ''
-  const usualModel = (draftMode === 'deep' ? settingsNow.deepModel : settingsNow.quickModel) ?? null
+  const configuredUsual = (draftMode === 'deep' ? settingsNow.deepModel : settingsNow.quickModel) ?? null
+  const usualDisconnected =
+    !!configuredUsual &&
+    ((providerOfModel(configuredUsual) === 'ollama' && !account.integrations.ollama) ||
+      (models.length > 0 && !models.some((m) => m.name === configuredUsual)))
+  const usualModel = configuredUsual && !usualDisconnected ? configuredUsual : null
+  const autoFallback = (draftMode === 'deep' ? autoDefaults?.deep : autoDefaults?.quick) || ''
+  const resolvedUsual =
+    usualModel ??
+    (autoFallback && (!models.length || models.some((m) => m.name === autoFallback))
+      ? autoFallback
+      : usualDisconnected
+        ? (models[0]?.name ?? null)
+        : null)
 
   const setMode = (m: Mode) => {
     setAgentSettings({ mode: m })
@@ -2249,7 +2279,7 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
     )
   // The model: the picker (AgentsModelPicker.tsx), its pretty name on the pill, and the thinking
   // effort beside it for models that take one.
-  const shownModel = model || usualModel || ''
+  const shownModel = model || resolvedUsual || ''
   const shownInfo = models.find((m) => m.name === shownModel)
   // Warned only when the model that will answer is known (the thread's, or the usual one from Settings) and has no vision.
   const visionless = files.some((f) => f.kind === 'image') && !!shownInfo && !shownInfo.vision
@@ -2667,7 +2697,17 @@ export function Conversation({ embedded, id, draftProject, projects, listThread,
               <ModelPicker
                 models={modelOptions}
                 value={model}
-                usual={thread ? null : { hint: usualModel ? `${modelName(usualModel, models.find((m) => m.name === usualModel)?.label).name}, as set in Settings` : 'Picked for the mode (Settings can choose)' }}
+                usual={
+                  thread
+                    ? null
+                    : {
+                        hint: usualModel
+                          ? `${modelName(usualModel, models.find((m) => m.name === usualModel)?.label).name}, as set in Settings`
+                          : resolvedUsual
+                            ? `${modelName(resolvedUsual, models.find((m) => m.name === resolvedUsual)?.label).name}, picked for the mode`
+                            : 'Picked for the mode (Settings can choose)',
+                      }
+                }
                 anchor={modelPill.current}
                 onClose={() => setPicking(false)}
                 onPick={(name) => {

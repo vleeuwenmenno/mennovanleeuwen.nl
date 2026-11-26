@@ -31,7 +31,7 @@ import { libraryName, loadLibraries, primaryOf, setSeafilePrefs, useLibraries, u
 import { fstabEntries, isSeafileType, useMounts } from '../data/mounts'
 
 const libraryNameOf = (prefix: string) => libraryName(prefix.slice('seafile://'.length))
-import { addCaldav, connectGoogle, disconnectGoogle, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasGithub, hasOrgScope, hasRepoScope, linkSignIn, orgAccess, signInWithRepos, signOut, unlinkSignIn, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
+import { addCaldav, connectGoogle, disconnectGoogle, hasAgentProvider, linkSeafile, removeCaldav, removeOffice, removeOllamaKey, removeUpdownKey, setOffice, setOllamaKey, setUpdownKey, deleteAccount, hasGithub, hasOrgScope, hasRepoScope, linkSignIn, orgAccess, signInWithRepos, signOut, unlinkSignIn, unlinkForge, unlinkSeafile, useAccount, useLikelySignedIn } from '../os/account'
 import { clearCodeSearch } from '../os/codeSearch'
 import type { OrgAccess, OrgsResponse } from '../data/code'
 import { APP_META } from '../os/apps'
@@ -51,6 +51,7 @@ import { ACCENTS, DARK_THEMES, LIGHT_THEMES, setAccent, setMode, setTheme, theme
 import { ReleaseStatus } from '../os/TopbarWidgets'
 import { useWM, type AppId, type WinState } from '../os/wm'
 import { AgentsSettings } from './AgentsSettings'
+import { AgentsCustomOpenAISettings } from './AgentsCustomOpenAISettings'
 import { StudioSettings } from './StudioSettings'
 import { ContactsAccounts, ContactsSettings } from './contacts/ContactsSettings'
 import { MailPane } from './mail/MailPane'
@@ -1164,7 +1165,7 @@ function Launchers() {
 }
 
 /** Every account the desktop links to, and the keys it keeps for services: updown.io for Status, Ollama, Seafile, OnlyOffice, mail, Immich, calendars and address books. */
-type IntegrationId = 'updown' | 'ollama' | 'seafile' | 'onlyoffice' | 'mail' | 'immich' | 'calendars' | 'contacts'
+type IntegrationId = 'updown' | 'ollama' | 'customOpenAI' | 'seafile' | 'onlyoffice' | 'mail' | 'immich' | 'calendars' | 'contacts'
 
 /** Third-party services, one row each; a row opens that service's own settings. */
 /** `sub` opens one service's settings straight away (Settings → Integrations → Seafile, from an alert). */
@@ -1172,7 +1173,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
   const account = useAccount()
   const [open, setOpen] = useState<IntegrationId | null>(null)
   useEffect(() => {
-    if (sub === 'updown' || sub === 'ollama' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts' || sub === 'mail' || sub === 'immich' || sub === 'calendars') setOpen(sub)
+    if (sub === 'updown' || sub === 'ollama' || sub === 'customOpenAI' || sub === 'seafile' || sub === 'onlyoffice' || sub === 'contacts' || sub === 'mail' || sub === 'immich' || sub === 'calendars') setOpen(sub)
   }, [sub, t])
   const { libraries } = useLibraries()
   const { accounts: mailAccounts } = useMailAccounts()
@@ -1199,6 +1200,16 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
       icon: <Fav src="https://ollama.com/public/icon-64x64.png" glyph="🦙" />,
       status: account.integrations.ollama === 'server' ? 'Connected with the key set on the server' : account.integrations.ollama ? 'Connected · for Agents' : 'Models and web search, for the Agents app',
       on: !!account.integrations.ollama,
+    },
+    {
+      id: 'customOpenAI',
+      name: 'OpenAI-compatible APIs',
+      icon: <span className="set-glyph">🔌</span>,
+      status:
+        (account.integrations.customOpenAI ?? 0) > 0
+          ? `${account.integrations.customOpenAI} ${account.integrations.customOpenAI === 1 ? 'endpoint' : 'endpoints'} · for Agents`
+          : 'Strata API, vLLM, llama.cpp, LiteLLM and other OpenAI-compatible servers',
+      on: (account.integrations.customOpenAI ?? 0) > 0,
     },
     {
       id: 'seafile',
@@ -1257,7 +1268,7 @@ function Integrations({ sub, t }: { sub?: string; t?: string }) {
           <strong>{current.name}</strong>
           {current.on && <span className="set-badge">Connected</span>}
         </div>
-        {current.id === 'mail' ? <MailSettings /> : current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'immich' ? <ImmichLink /> : current.id === 'contacts' ? <ContactsAccounts /> : current.id === 'calendars' ? <CalendarAccounts /> : <OfficeSettings />}
+        {current.id === 'mail' ? <MailSettings /> : current.id === 'updown' ? <UpdownSettings /> : current.id === 'ollama' ? <OllamaSettings /> : current.id === 'customOpenAI' ? <AgentsCustomOpenAISettings /> : current.id === 'seafile' ? <SeafileSettings /> : current.id === 'immich' ? <ImmichLink /> : current.id === 'contacts' ? <ContactsAccounts /> : current.id === 'calendars' ? <CalendarAccounts /> : <OfficeSettings />}
       </>
     )
 
@@ -1917,8 +1928,8 @@ function SpotlightSettings() {
   const visits = useVisits()
   const hits = useRecentHits()
   const account = useAccount()
-  // Quick answers come from the Agents app: only when signed in, with an Ollama key.
-  const agents = account.status === 'user' && !!account.integrations.ollama
+  // Quick answers come from the Agents app: only when signed in with an Agents provider.
+  const agents = account.status === 'user' && hasAgentProvider(account)
   const [cleared, setCleared] = useState(false)
   const clearAnswers = async () => {
     if (!(await ask({ title: 'Forget every quick answer?', body: 'Answers you continued in Agents stay there.', confirm: 'Forget all', danger: true }))) return
@@ -2396,13 +2407,13 @@ const GROUPS: Group[] = [
   {
     panes: [
       { id: 'instances', label: 'Code hosts', hue: 'var(--orange)', account: true, icon: <BranchGlyph />, keywords: 'code hosts gitea forgejo github token instances repositories repos org orgs organisation organisations organization organizations team company private access grant oauth sso saml read:org', blurb: 'GitHub and its organisations, and the Gitea or Forgejo instances you linked.', render: () => <Instances /> },
-      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations accounts link connect updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama agents ai models storage mail email jmap fastmail immich photos calendar calendars google caldav tasks contacts carddav address book icloud nextcloud', blurb: 'Every account and key: calendars (Google, CalDAV), contacts (CardDAV), Mail, Immich, Seafile, OnlyOffice, Ollama Cloud and updown.io.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
+      { id: 'integrations', label: 'Integrations', hue: 'var(--green)', account: true, icon: svg(<><circle cx="7" cy="12" r="3" /><circle cx="17" cy="12" r="3" /><path d="M10 12h4" /></>), keywords: 'integrations accounts link connect updown uptime status monitoring api key widgets seafile files cloud onlyoffice office documents ollama openai compatible custom api endpoint strata local llm vllm litellm netbird agents ai models storage mail email jmap fastmail immich photos calendar calendars google caldav tasks contacts carddav address book icloud nextcloud', blurb: 'Every account and key: calendars (Google, CalDAV), contacts (CardDAV), Mail, Immich, Seafile, OnlyOffice, Ollama Cloud, OpenAI-compatible APIs and updown.io.', render: ({ sub, t }) => <Integrations sub={sub} t={t} /> },
     ],
   },
   {
     title: 'Apps',
     panes: [
-      { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'tasks background tasks scheduled schedule cron recurring one-off new mail trigger mail arrives incoming email filter inbox mail budget runs per hour tokens per day limit reminders watch report reports email report task model runs kept retention history past threads history search agents overview status ai assistant ollama images image generation openai gpt-image chatgpt codex sign in api key icons icon library image studio comfyui diffusion models quick deep research thinking effort reasoning favourites favorite gpt-5 chatgpt models deepseek glm kimi mistral title thread system prompt agents.md tools memory skills always on always-on skills caveman adhd personalize hooks rules per project instructions suggested reply suggestion tab complete answer composer autocomplete sidebar style layout look thread list classic compact detailed focus dense density rows filter chips running unread new thread button', blurb: 'The Agents app: its models, what a new thread starts with, how its sidebar looks, and its system prompt.', render: () => <AgentsSettings /> },
+      { id: 'agents', label: 'Agents', hue: 'var(--magenta)', account: true, icon: null, app: 'agents', keywords: 'tasks background tasks scheduled schedule cron recurring one-off new mail trigger mail arrives incoming email filter inbox mail budget runs per hour tokens per day limit reminders watch report reports email report task model runs kept retention history past threads history search agents overview status ai assistant ollama openai compatible custom api endpoint strata local llm vllm litellm netbird images image generation openai gpt-image chatgpt codex sign in api key icons icon library image studio comfyui diffusion models quick deep research thinking effort reasoning favourites favorite gpt-5 chatgpt models deepseek glm kimi mistral title thread system prompt agents.md tools memory skills always on always-on skills caveman adhd personalize hooks rules per project instructions suggested reply suggestion tab complete answer composer autocomplete sidebar style layout look thread list classic compact detailed focus dense density rows filter chips running unread new thread button', blurb: 'The Agents app: its models, what a new thread starts with, how its sidebar looks, and its system prompt.', render: () => <AgentsSettings /> },
       { id: 'calendar', label: 'Calendar', hue: 'var(--red)', account: true, icon: null, app: 'calendar', keywords: 'calendar agenda events view week month day year default new events which calendars show google caldav accounts hide hidden calendar duplicate duplicates fastmail show in mvl os', blurb: 'Which calendars show, how the Calendar app opens, and where new events go. The accounts are in Integrations.', render: () => <CalendarSettings /> },
       { id: 'contacts', label: 'Contacts', hue: 'var(--orange)', account: true, icon: null, app: 'contacts', keywords: 'contacts people address book default new contacts carddav accounts vcard vcf birthdays groups', blurb: 'Where new contacts go. The address book accounts (Fastmail, iCloud…) are in Integrations.', render: () => <ContactsSettings /> },
       { id: 'files', label: 'Files', hue: 'var(--blue)', icon: null, app: 'files', keywords: 'files file manager view list grid compact gallery icon size zoom sort order hidden dotfiles sidebar preview pane quick look new windows remember', blurb: 'How Files shows a folder: the view, icon size, sort order, hidden files, the sidebar and the preview pane.', render: () => <FilesPane /> },

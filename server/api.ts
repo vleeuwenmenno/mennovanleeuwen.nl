@@ -20,6 +20,7 @@ import { servePreview } from './imagePreview.ts'
 import { storageReport } from './quota.ts'
 import { assertSeafileLink, bindSeafileRequest, withSeafileLink } from './seafile.ts'
 import { handleOpenAIApi } from './agentOpenAI.ts'
+import { customOpenAICount, handleCustomOpenAIApi } from './agentCustomOpenAI.ts'
 import { handleTranscribeApi } from './agentTranscribe.ts'
 import { handleAgentTasksApi } from './agentTasks.ts'
 import { chatProviderReady } from './agentChatGPT.ts'
@@ -134,7 +135,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
         googleEnabled: googleEnabled(),
         google: user ? googleAccount(user) : null,
         caldav: user ? listCaldav(user) : [],
-        integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null, openai: user ? chatProviderReady(user, 'chatgpt') || chatProviderReady(user, 'openai') : false },
+        integrations: { updown: user ? updownSource(user) : null, ollama: user ? ollamaSource(user) : null, openai: user ? chatProviderReady(user, 'chatgpt') || chatProviderReady(user, 'openai') : false, customOpenAI: user ? customOpenAICount(user) : 0 },
         seafile: user ? seafileInfo(user) : null,
       }, mergeHeaders(fix.length ? { 'Set-Cookie': fix } : {}, cachePurge(req)))
       return true
@@ -393,7 +394,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     // The Agents app (server/agents.ts): Ollama Cloud's key, threads, a turn (streamed) and memory.
     if (path === '/api/integrations/ollama' && method === 'PUT') return await setOllamaKey(requireUser(req), await readJson(req, 4096)), json(res, 200, { ok: true }), true
     if (path === '/api/integrations/ollama' && method === 'DELETE') return removeOllamaKey(requireUser(req)), json(res, 200, { ok: true }), true
-    if (path === '/api/agents/defaults' && read) return requireUser(req), json(res, 200, await automaticModels()), true
+    if (path === '/api/agents/defaults' && read) return json(res, 200, await automaticModels(requireUser(req))), true
     if (path === '/api/agents/models' && read) return json(res, 200, await allModels(requireUser(req))), true
     if (path === '/api/agents/threads/search' && method === 'POST') return json(res, 200, searchPastThreads(requireUser(req), await readJson(req, 2048))), true
     if (path === '/api/agents/threads' && read) return json(res, 200, listThreads(requireUser(req), url.searchParams.get('archived') === '1')), true
@@ -529,6 +530,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse): Prom
     if (path === '/api/agents/transcribe' && (await handleTranscribeApi(req, res, method, requireUser(req)))) return true
     // OpenAI pictures and the icon library (server/agentOpenAI.ts): the key, Sign in with ChatGPT, icons by slug.
     if ((path.startsWith('/api/agents/openai') || path.startsWith('/api/agents/icons')) && (await handleOpenAIApi(req, res, path, method, requireUser(req)))) return true
+    // Custom OpenAI-compatible API endpoints (server/agentCustomOpenAI.ts).
+    if ((path === '/api/agents/custom-openai' || path.startsWith('/api/agents/custom-openai/')) && (await handleCustomOpenAIApi(req, res, path, method, requireUser(req)))) return true
     // Pictures find_image kept (server/findImage.ts): /api/agents/images/w…, the account's own only.
     if (path.startsWith('/api/agents/images/w') && handleFoundImageApi(req, res, path, method, requireUser(req))) return true
     if (path.startsWith('/api/agents/images') && (await handleImageApi(req, res, url, method, requireUser(req)))) return true

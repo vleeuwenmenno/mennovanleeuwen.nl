@@ -346,8 +346,8 @@ export function cleanSpec(user: User, raw: unknown, base?: TaskSpec, from: strin
     if (!mail.length) throw new HttpError(400, 'Email reports need a linked mail account (Settings → Integrations → Mail)')
     if (report.emailAccount === null || !mail.some((a) => a.id === report.emailAccount)) report.emailAccount = mail[0].id
   }
-  const model = has('model') ? (v.model === null || v.model === '' ? null : text(v.model, 80)) : (base?.model ?? null)
-  if (model !== null && !/^[\w.:/-]{1,80}$/.test(model)) throw new HttpError(400, 'Bad model name')
+  const model = has('model') ? (v.model === null || v.model === '' ? null : text(v.model, 160)) : (base?.model ?? null)
+  if (model !== null && !/^[\w.:/@+-]{1,160}$/.test(model)) throw new HttpError(400, 'Bad model name')
   // A model of its own: one the account can run (its provider is set up). Whether it is in the
   // account's list is checked where that can be asked (checkSpecModel), without blocking a save when the list does not answer.
   if (model !== null && model !== base?.model) requireTaskKey(user, model)
@@ -522,7 +522,7 @@ export function runNow(user: User, id: string, body: { dry?: unknown; model?: un
   if (!enabled) throw new HttpError(409, 'Tasks are switched off on this server (AGENT_TASKS)')
   if (activeRunOf(row.id).length) throw new HttpError(409, 'A run of this task is going: wait for it, or cancel it')
   const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : null
-  if (model !== null && !/^[\w.:/-]{1,80}$/.test(model)) throw new HttpError(400, 'Bad model name')
+  if (model !== null && !/^[\w.:/@+-]{1,160}$/.test(model)) throw new HttpError(400, 'Bad model name')
   if (model) requireTaskKey(user, model)
   const runId = queueRun(row, body.dry === true ? 'dry' : 'manual', { dry: body.dry === true, model })
   kick()

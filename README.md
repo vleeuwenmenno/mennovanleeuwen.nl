@@ -3238,11 +3238,11 @@ pnpm check:agents-terminal-exec   # the agents' terminal tool: fresh shell per c
 
 **Models, makers and thinking effort.** The model pill in the composer opens a picker
 ([`src/apps/AgentsModelPicker.tsx`](src/apps/AgentsModelPicker.tsx)): a search box (*Search models…*,
-matching the pretty name, the raw id, the maker and the provider, also with gaps, like `dsv41`), a
+matching the pretty name, the raw id, the maker and the provider or custom endpoint name, also with gaps, like `dsv41`), a
 rail of makers on the left (★ Favourites first, then All models, then each maker that has models),
 and the models as rows: the pretty name, a small variant tag (a size such as `120B`, or a dated
-build such as `1017`), the provider under it (*Ollama Cloud*, *ChatGPT* or *OpenAI API*) with the
-raw id, badges (*sees* for vision, *thinks*, the context window) and a star. Pretty names and makers
+build such as `1017`), the provider under it (*Ollama Cloud*, *ChatGPT*, *OpenAI API*, or the custom endpoint's name) with the
+raw id, badges (*sees* for vision, *thinks*, the context window) and a star. Ollama Cloud models only appear when the account has an Ollama Cloud API key (or `OLLAMA_API_KEY` on the server for admins); removing the key removes them from `/api/agents/models`, `/api/agents/defaults` and the picker immediately. Pretty names and makers
 come from patterns in [`src/data/agentModelNames.ts`](src/data/agentModelNames.ts): `deepseek-v4.1-flash:1017`
 is DeepSeek's "DeepSeek V4.1 Flash" with `1017`, `glm-5.3-flash` Z.ai's "GLM 5.3 Flash", `kimi-*`
 Moonshot AI, `minimax-*` MiniMax, `mistral-*`/`devstral-*` Mistral, `nemotron-*` NVIDIA, `gemma*`
@@ -3267,6 +3267,25 @@ high, as before; Ollama's on/off thinkers stay on) or a level the model takes, k
 gpt-oss low, medium or high; OpenAI's get `reasoning.effort` from the levels their list names
 (ChatGPT's GPT-5.5: low to xhigh; some newer ones max), and a level the model lacks goes to the
 nearest it has.
+
+**Custom OpenAI-compatible APIs** ([`server/agentCustomOpenAI.ts`](server/agentCustomOpenAI.ts),
+[`src/apps/AgentsCustomOpenAISettings.tsx`](src/apps/AgentsCustomOpenAISettings.tsx)). Add up to 8
+custom OpenAI-compatible servers (such as Strata API over NetBird, vLLM, llama.cpp, LM Studio,
+LiteLLM or OpenRouter) in **Settings → Integrations → OpenAI-compatible APIs** or **Settings → Apps
+→ Agents → General**. Each endpoint stores its name, base URL (auto-detecting `/v1` when omitted),
+optional API key (stored encrypted, never returned to the browser) and optional manual model IDs for
+servers without `/models`. Every outbound request goes through `guardedFetch`, so admins can connect
+to LAN, loopback or NetBird addresses while non-admin accounts are limited to public addresses.
+Models appear under `custom/<endpointId>/<modelId>` with the endpoint's name as provider label and
+are searchable by endpoint name; an offline endpoint never blocks other endpoints or providers.
+Turns stream via `POST /chat/completions` (supporting text deltas, `reasoning_content`/`reasoning`
+thinking deltas, parallel tool calls with call-ID pairing, vision `image_url` data URLs, usage
+stats, Stop abort, automatic retry without `stream_options` on HTTP 400, and non-streaming JSON
+responses).
+
+```sh
+pnpm check:agents-custom-openai     # Removing Ollama key hides Ollama models; CRUD, /v1 auto-detection, admin vs non-admin egress guard, offline endpoint resilience, and full Chat Completions streaming (text, reasoning, parallel tools, vision, stats, Stop, stream_options fallback, non-streaming JSON)
+```
 
 **ChatGPT and OpenAI models** ([`server/agentChatGPT.ts`](server/agentChatGPT.ts)). With *Sign in
 with ChatGPT* (Settings → Agents → Images, below) the picker also lists the ChatGPT plan's models,

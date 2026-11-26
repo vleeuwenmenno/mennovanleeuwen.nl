@@ -24,7 +24,7 @@ export type FavouriteSet = { models: Record<string, FavouriteEntry> }
 /** Entries kept at most: the unstarred ones go first, the longest unchanged first. */
 const MAX_ENTRIES = 200
 const EMPTY: FavouriteSet = { models: {} }
-const validName = (n: unknown): n is string => typeof n === 'string' && n.length > 0 && n.length <= 80
+const validName = (n: unknown): n is string => typeof n === 'string' && n.length > 0 && n.length <= 160
 
 /** Whether `a` wins over `b`: the higher counter; a tie goes to the unstar, the same on every device. */
 const wins = (a: FavouriteEntry, b: FavouriteEntry) => (a.at !== b.at ? a.at > b.at : !a.on && b.on)
