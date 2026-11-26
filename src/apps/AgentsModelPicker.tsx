@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { favouriteNames, toggleFavourite, useFavouriteNames } from '../data/agentFavourites'
 import { tokenCount, type ModelInfo } from '../data/agents'
-import { MAKERS, makerOf, modelMatch, modelName, PROVIDER_NAMES, type MakerId, type ModelName } from '../data/agentModelNames'
+import { MAKERS, makerOf, modelMatch, modelName, modelRawId, PROVIDER_NAMES, type MakerId, type ModelName } from '../data/agentModelNames'
 import { useIsMobile } from '../os/useIsMobile'
 import './AgentsModelPicker.css'
 import { toUi, uiRect, viewH, viewW } from '../os/uiScale'
@@ -124,7 +124,7 @@ export function ModelPicker({ models, value, usual, onPick, onClose, status, anc
     const q = query.trim()
     if (q)
       return rows
-        .map((r) => ({ r, s: modelMatch(r.n, q) }))
+        .map((r) => ({ r, s: modelMatch(r.n, q, r.info.providerLabel) }))
         .filter((x) => x.s > 0)
         .sort((a, b) => b.s - a.s)
         .map((x) => x.r)
@@ -220,8 +220,8 @@ export function ModelPicker({ models, value, usual, onPick, onClose, status, anc
             {r.n.variant && <span className="amp-variant">{r.n.variant}</span>}
           </span>
           <span className="amp-row-sub">
-            {PROVIDER_NAMES[r.n.provider]}
-            <span className="amp-raw"> · {r.n.raw}</span>
+            {r.info.providerLabel || PROVIDER_NAMES[r.n.provider]}
+            <span className="amp-raw"> · {r.n.provider === 'custom' ? modelRawId(r.n.raw) : r.n.raw}</span>
           </span>
         </span>
         <Badges info={r.info} />

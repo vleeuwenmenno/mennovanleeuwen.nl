@@ -57,9 +57,20 @@ const GLUED = new Set(['qwen', 'phi'])
 const SIZE = /^\d+(\.\d+)?[bmkt]$/i
 const word = (t: string) => WORDS[t] ?? (/^[a-z]\d/.test(t) ? t.toUpperCase() : /^\d/.test(t) ? t.toUpperCase() : t[0].toUpperCase() + t.slice(1))
 
-export type Provider = 'ollama' | 'chatgpt' | 'openai'
-export const PROVIDER_NAMES: Record<Provider, string> = { ollama: 'Ollama Cloud', chatgpt: 'ChatGPT', openai: 'OpenAI API' }
-export const providerOfModel = (raw: string): Provider => (raw.startsWith('chatgpt/') ? 'chatgpt' : raw.startsWith('openai/') ? 'openai' : 'ollama')
+export type Provider = 'ollama' | 'chatgpt' | 'openai' | 'custom'
+export const PROVIDER_NAMES: Record<Provider, string> = { ollama: 'Ollama Cloud', chatgpt: 'ChatGPT', openai: 'OpenAI API', custom: 'Custom API' }
+export const providerOfModel = (raw: string): Provider => (raw.startsWith('chatgpt/') ? 'chatgpt' : raw.startsWith('openai/') ? 'openai' : raw.startsWith('custom/') ? 'custom' : 'ollama')
+
+/** The model ID without its provider (or custom endpoint) prefix. */
+export function modelRawId(raw: string): string {
+  const p = providerOfModel(raw)
+  if (p === 'ollama') return raw
+  if (p === 'custom') {
+    const m = /^custom\/[^/]+\/(.+)$/.exec(raw)
+    return m ? m[1] : raw.slice(raw.indexOf('/') + 1)
+  }
+  return raw.slice(raw.indexOf('/') + 1)
+}
 
 export type ModelName = {
   /** The id as the server has it */
@@ -88,11 +99,16 @@ function openaiName(tokens: string[]): string {
  */
 export function modelName(raw: string, label?: string): ModelName {
   const provider = providerOfModel(raw)
-  const id = provider === 'ollama' ? raw : raw.slice(raw.indexOf('/') + 1)
-  const [base, tag = ''] = id.toLowerCase().split(':')
-  const maker = MAKER_PATTERNS.find(([re]) => re.test(base))?.[1] ?? 'other'
+  const id = modelRawId(raw)
+  const idNoTag = id.split(':')[0]
+  const [fullBase, tag = ''] = id.toLowerCase().split(':')
+  const segment = fullBase.includes('/') ? fullBase.slice(fullBase.lastIndexOf('/') + 1) : fullBase
+  const segMaker = segment !== fullBase ? MAKER_PATTERNS.find(([re]) => re.test(segment))?.[1] : undefined
+  const directMaker = segMaker ? undefined : MAKER_PATTERNS.find(([re]) => re.test(fullBase))?.[1]
+  const maker = segMaker ?? directMaker ?? 'other'
+  const base = segMaker ? segment : fullBase
   const variant = !tag || tag === 'latest' || tag === 'cloud' ? null : SIZE.test(tag) ? tag.toUpperCase() : tag.replace(/-cloud$/, '').slice(0, 16)
-  if (maker === 'other') return { raw, name: provider === 'ollama' ? base : id, variant, maker, family: base, provider }
+  if (maker === 'other') return { raw, name: label?.trim() || (provider === 'ollama' ? fullBase : idNoTag), variant, maker, family: fullBase, provider }
   // "gemma4" → gemma 4, "qwen3" stays one word; sizes inside the name ("30b") become "30B".
   let tokens = base.split(/[-_\s]+/).filter(Boolean)
   const m = /^([a-z]+)(\d[\w.]*)$/.exec(tokens[0])
@@ -103,13 +119,13 @@ export function modelName(raw: string, label?: string): ModelName {
 
 /**
  * How well `query` matches a model: 0 is no match. Every word of the query must appear in the
- * pretty name, raw id, maker or provider, as a run or (scored lower) with gaps, like "dsv4" for
- * DeepSeek V4.
+ * pretty name, raw id, maker or provider (including custom endpoint label), as a run or (scored
+ * lower) with gaps, like "dsv4" for DeepSeek V4.
  */
-export function modelMatch(n: ModelName, query: string): number {
+export function modelMatch(n: ModelName, query: string, providerLabel?: string): number {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (!words.length) return 1
-  const hay = `${n.name} ${n.variant ?? ''} ${n.raw} ${makerOf(n.maker).name} ${PROVIDER_NAMES[n.provider]}`.toLowerCase()
+  const hay = `${n.name} ${n.variant ?? ''} ${n.raw} ${makerOf(n.maker).name} ${PROVIDER_NAMES[n.provider]} ${providerLabel ?? ''}`.toLowerCase()
   const compact = hay.replace(/[\s.:/-]+/g, '')
   let score = 0
   for (const w of words) {

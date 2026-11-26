@@ -2,7 +2,7 @@ import { ClientCalls } from './lifecycle'
 import { generatedImage } from '../../data/agentImages'
 import { agentSettings, answerApproval, claimClientCall, answerForm, createThread, getThread, listProjects, listThreads, sendClientResult, sendMessage, threadMatches, type Permission, type Thread, type Workdir } from '../../data/agents'
 import { seafileAt, syncAgentPlaces } from '../../data/agentPlaces'
-import { getAccount } from '../../os/account'
+import { getAccount, hasAgentProvider } from '../../os/account'
 import { CmdError, type Ctx } from '../types'
 import { prettyPath } from '../vfs'
 import { Session } from './app'
@@ -86,7 +86,7 @@ const PERMS: Permission[] = ['default', 'auto', 'acceptEdits', 'plan', 'bypass']
 function needAgents() {
   const a = getAccount()
   if (a.status !== 'user') throw new CmdError('agents: sign in with GitHub first (the agents are for signed-in users)')
-  if (!a.integrations.ollama) throw new CmdError('agents: add an Ollama API key in Settings → Integrations first')
+  if (!hasAgentProvider(a)) throw new CmdError('agents: connect Ollama Cloud, OpenAI/ChatGPT, or a custom OpenAI-compatible API in Settings first')
 }
 
 /** The current folder as a work folder, when it is on Seafile. */

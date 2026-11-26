@@ -1,20 +1,21 @@
 import { AgentsImageSettings } from './AgentsImageSettings'
 import { AgentsOpenAISettings } from './AgentsOpenAISettings'
+import { AgentsCustomOpenAISettings } from './AgentsCustomOpenAISettings'
 import { getOpenAIImages } from '../data/openaiImages'
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AGENTS_MD } from '../data/agentsPrompt'
 import { allowSite, getMailReads, installSkills, listSites, listSkills, MAIL_READS_EVENT, removeSite, removeSkill, setMailReads, setSkillEnabled, type AllowedSite, type MailReadsMode, type Skill } from '../data/agents'
 import { ask } from '../os/Dialogs'
-import { makerOf, modelName, PROVIDER_NAMES } from '../data/agentModelNames'
+import { makerOf, modelName, modelRawId, PROVIDER_NAMES } from '../data/agentModelNames'
 import { namedModels } from './AgentsModelPicker'
 import { TASK_KEEP } from '../data/agents'
 import { MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS } from '../data/agentTaskMail'
-import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, SIDEBAR_STYLES, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
+import { agentModels, COMPACT_AT, getDefaults, getPrompt, listMemories, setAgentSettings, SIDEBAR_STYLES, TITLE_EVERY, TOOL_GROUPS, toolState, tokenCount, useAgentModelsVersion, useAgentSettings, type ModelInfo, type Mode, type PromptInfo } from '../data/agents'
 import { useMounts, whereIs } from '../data/mounts'
 import { syncAgentPlaces } from '../data/agentPlaces'
 import { getWebSearch, PROVIDERS, resetWebSearch, saveWebSearch, testWebSearch, type Provider, type ResultMap, type SearchResult, type WebSearchInput, type WebSearchView } from '../data/websearch'
 import { getLibraries, useLibraries } from '../data/seafile'
-import { hasCalendar, useAccount } from '../os/account'
+import { hasAgentProvider, hasCalendar, useAccount } from '../os/account'
 import { useMailAccounts } from '../data/mail'
 import { Select } from '../os/Select'
 import { useWM } from '../os/wm'
@@ -59,7 +60,7 @@ const icon = (d: ReactNode) => (
 )
 const SECTIONS: { id: SectionId; label: string; blurb: string; icon: ReactNode }[] = [
   { id: 'overview', label: 'Overview', blurb: 'What is set up, at a glance. Pick a card to change it.', icon: icon(<><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></>) },
-  { id: 'general', label: 'General', blurb: 'The Ollama Cloud connection Agents runs on, what it remembers, and how its sidebar looks.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
+  { id: 'general', label: 'General', blurb: 'Model providers (Ollama Cloud and custom OpenAI-compatible APIs), what Agents remembers, and how its sidebar looks.', icon: icon(<><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" /></>) },
   { id: 'models', label: 'Models', blurb: 'Which model a new Quick or Deep thread gets, which one names threads and keeps their titles up to date, and which one checks web addresses in Auto.', icon: icon(<><rect x="4" y="4" width="16" height="16" /><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" /></>) },
   { id: 'threads', label: 'New threads', blurb: 'The mode and tools a new thread starts with, and how a long thread makes room in the model’s context window.', icon: icon(<path d="M4 5h16v11H9l-5 4z" />) },
   { id: 'tasks', label: 'Tasks', blurb: 'Background tasks: the model they run on unless a task names its own, where a new task’s reports go, how many runs each one keeps, and the budget of tasks started by new mail.', icon: icon(<><circle cx="12" cy="13" r="8" /><path d="M12 9v4l3 2M9 2h6" /></>) },
@@ -121,15 +122,34 @@ export function AgentsSettings({ layout = 'tabs', onSection }: { layout?: 'sideb
   const [memories, setMemories] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const modelsVersion = useAgentModelsVersion()
+  const canChat = account.status === 'user' && hasAgentProvider(account)
   usePromptLocation()
   // Fresh each time the pane opens or the file is made, so an edit or upload shows at once.
   const load = useCallback(() => getPrompt(true).then(setPrompt, (e: Error) => setError(e.message)), [])
   useEffect(() => {
-    if (!account.integrations.ollama) return
-    agentModels().then(setModels, () => {})
-    getDefaults().then(setAuto, () => {})
-    listMemories().then((m) => setMemories(m.length), () => {})
-  }, [account.integrations.ollama])
+    if (!canChat) {
+      setModels([])
+      setAuto(null)
+      return
+    }
+    let alive = true
+    agentModels().then(
+      (list) => alive && setModels(list),
+      () => alive && setModels([]),
+    )
+    getDefaults().then(
+      (d) => alive && setAuto(d),
+      () => alive && setAuto(null),
+    )
+    listMemories().then(
+      (m) => alive && setMemories(m.length),
+      () => {},
+    )
+    return () => {
+      alive = false
+    }
+  }, [canChat, modelsVersion])
   useEffect(() => void load(), [load, settings.promptFile])
 
   if (account.status !== 'user') return <p className="muted">Sign in first: Agents is a research assistant for signed-in users.</p>
@@ -167,14 +187,14 @@ export function AgentsSettings({ layout = 'tabs', onSection }: { layout?: 'sideb
         value={value ?? ''}
         onChange={(v) => onChange(v || null)}
         aria-label={label}
-        disabled={!models.length}
+        disabled={!offered.length}
         options={[
           { value: '', label: `Automatic${fallback ? ` (${named(fallback)})` : ''}` },
           ...(value && !offered.some((r) => r.info.name === value) ? [{ value, label: named(value), hint: value, note: 'not offered now' }] : []),
           ...offered.map(({ info: m, n }) => ({
             value: m.name,
             label: `${n.name}${n.variant ? ` ${n.variant}` : ''}`,
-            hint: `${makerOf(n.maker).name} · ${PROVIDER_NAMES[n.provider]} · ${m.name}`,
+            hint: `${makerOf(n.maker).name} · ${m.providerLabel || PROVIDER_NAMES[n.provider]} · ${n.provider === 'custom' ? modelRawId(m.name) : m.name}`,
             note: [m.contextLength ? tokenCount(m.contextLength) : '', m.vision ? 'sees' : ''].filter(Boolean).join(' · ') || undefined,
           })),
         ]}
@@ -201,13 +221,15 @@ export function AgentsSettings({ layout = 'tabs', onSection }: { layout?: 'sideb
         <li className="set-row">
           <span className="set-row-text">
             <strong>{account.integrations.ollama ? 'Connected' : 'Not connected'}</strong>
-            <span className="muted">{account.integrations.ollama === 'server' ? 'With OLLAMA_API_KEY from the server' : account.integrations.ollama ? 'With a key saved in Integrations' : 'Agents needs an Ollama API key'}</span>
+            <span className="muted">{account.integrations.ollama === 'server' ? 'With OLLAMA_API_KEY from the server' : account.integrations.ollama ? 'With a key saved in Integrations' : 'Add an Ollama API key to use Ollama Cloud models, titles and web search'}</span>
           </span>
           <button className="btn btn-small" onClick={() => open('settings', { section: 'integrations' })}>
             {account.integrations.ollama ? 'Integrations…' : 'Add a key…'}
           </button>
         </li>
       </ul>
+
+      <AgentsCustomOpenAISettings heading />
 
       <h4 className="set-subhead">Memory</h4>
       <ul className="set-list">
@@ -282,7 +304,7 @@ export function AgentsSettings({ layout = 'tabs', onSection }: { layout?: 'sideb
           {modelSelect(settings.checkModel, auto?.check, (checkModel) => setAgentSettings({ checkModel }), 'Model for the safety check', true)}
         </li>
       </ul>
-      <p className="muted set-help">Ollama Cloud's models that can use tools, and OpenAI's once you sign in with ChatGPT or add an OpenAI API key (Images below), by name and maker, with their context window. Titles and the safety check always run on Ollama. A thread keeps the model it started with; change it, and its thinking effort, in the thread's composer.</p>
+      <p className="muted set-help">Ollama Cloud's models (when an Ollama API key is set), OpenAI's (when signed in with ChatGPT or with an OpenAI API key in Images), and any custom OpenAI-compatible APIs (in General or Integrations), by name and maker, with their context window. Titles and the safety check always run on Ollama. A thread keeps the model it started with; change it, and its thinking effort, in the thread's composer.</p>
 
       <h4 className="set-subhead">Thread titles</h4>
       <ul className="set-list">
@@ -567,7 +589,12 @@ type Card = { id: SectionId; summary: string; fix?: string; tone?: 'warn' | 'err
 function AgentsOverview({ pick, models, auto, prompt, memories }: { pick: (id: SectionId) => void; models: ModelInfo[]; auto: { quick: string; deep: string } | null; prompt: PromptInfo | null; memories: number | null }) {
   const account = useAccount()
   const settings = useAgentSettings()
-  const ollama = !!account.integrations.ollama
+  const canChat = hasAgentProvider(account)
+  const providers = [
+    account.integrations.ollama ? 'Ollama Cloud' : '',
+    account.integrations.openai ? 'OpenAI / ChatGPT' : '',
+    (account.integrations.customOpenAI ?? 0) > 0 ? plural(account.integrations.customOpenAI!, 'custom API') : '',
+  ].filter(Boolean)
   const images = useRead(getImageSettings)
   const profiles = useRead(getImageProfiles)
   const search = useRead(getWebSearch)
@@ -588,8 +615,12 @@ function AgentsOverview({ pick, models, auto, prompt, memories }: { pick: (id: S
   const provider = search && 'value' in search ? PROVIDERS.find((p) => p.value === search.value.provider)?.label ?? search.value.provider : undefined
   const enabledSkills = skills && 'value' in skills ? skills.value.filter((s) => s.enabled).length : null
   const cards: Card[] = [
-    { id: 'general', summary: ollama ? `Ollama Cloud connected${memories === null ? '' : ` · ${plural(memories, 'thing')} remembered`}` : 'Ollama Cloud not connected: Agents needs an API key', ...(ollama ? {} : { fix: 'Add a key', tone: 'error' as const }) },
-    { id: 'models', summary: ollama && !models.length && !auto ? loading : `Quick: ${model(settings.quickModel, auto?.quick)} · Deep: ${model(settings.deepModel, auto?.deep)}` },
+    {
+      id: 'general',
+      summary: canChat ? `${providers.join(' · ')}${memories === null ? '' : ` · ${plural(memories, 'thing')} remembered`}` : 'No model provider connected: add Ollama Cloud, OpenAI/ChatGPT, or a custom API',
+      ...(canChat ? {} : { fix: 'Set up', tone: 'error' as const }),
+    },
+    { id: 'models', summary: canChat && !models.length && !auto ? loading : `Quick: ${model(settings.quickModel, auto?.quick)} · Deep: ${model(settings.deepModel, auto?.deep)}` },
     { id: 'threads', summary: `${MODE_LABEL[settings.mode]} · ${settings.tools.length} of ${plural(TOOL_GROUPS.length, 'tool group')} on${settings.autoCompact ? ' · compacts long threads' : ''}${settings.replySuggestions ? ' · suggests replies' : ''}` },
     { id: 'tasks', summary: `Model: ${model(settings.taskModel, settings.quickModel ?? auto?.quick)} · ${settings.taskKeep} runs kept · mail: ${settings.taskMailRuns} runs an hour` },
     { id: 'prompt', summary: !prompt ? loading : prompt.source === 'seafile' ? 'Your own ~/AGENTS.md' : prompt.error ? `Built in: ~/AGENTS.md could not be read` : 'Built in', ...(prompt?.error ? { tone: 'warn' as const } : {}) },

@@ -334,6 +334,10 @@ try {
   const as2 = async (method: string, path: string, body?: unknown) => fetch(`${server.origin}${path}`, { method, headers: { Cookie: `mvlos_sid=${sid2}`, ...(await asPage(sid2)), 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
   const me = (await (await as2('GET', '/api/me')).json()) as { integrations: { ollama: string | null; openai: boolean } }
   check('without an Ollama key, /api/me says OpenAI is there', me.integrations.ollama === null && me.integrations.openai === true)
+  const list2 = (await (await as2('GET', '/api/agents/models')).json()) as Model[]
+  check('without an Ollama key, /api/agents/models returns no Ollama models', list2.length > 0 && list2.every((m) => m.provider !== 'ollama'))
+  const defaults2 = (await (await as2('GET', '/api/agents/defaults')).json()) as { quick: string; deep: string; title: string; check: string }
+  check('without an Ollama key, /api/agents/defaults picks ChatGPT and leaves Ollama-only defaults blank', defaults2.quick.startsWith('chatgpt/') && defaults2.deep.startsWith('chatgpt/') && defaults2.title === '' && defaults2.check === '')
   const t2 = (await (await as2('POST', '/api/agents/threads', { mode: 'quick', tools: [] })).json()) as { id: string; model: string }
   check(`a new thread without a model picks a ChatGPT one (${t2.model})`, t2.model.startsWith('chatgpt/'))
   const said = (await (await as2('POST', `/api/agents/threads/${t2.id}/messages`, { text: 'SCENARIO chatonly' })).text()).split('\n').filter(Boolean).map((l) => JSON.parse(l) as Ev)

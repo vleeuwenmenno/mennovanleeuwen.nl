@@ -18,6 +18,7 @@ import { type ImageInput, generateImage, makeImageMask, listGeneratedImages, pre
 import { randomUUID } from 'node:crypto'
 import { expectedMs, icon as gptIcon, image as gptImage, listIcons, MAX_REFERENCE_BYTES, MAX_REFERENCES, openaiImagesReady, type Reference as GptReference, sniff as sniffImage, SLUG as ICON_SLUG } from './agentOpenAI.ts'
 import { chatProviderReady, isEffort, openaiModels, providerOf, responsesChat, type Effort } from './agentChatGPT.ts'
+import { customOpenAIChat, customOpenAIModels, customOpenAIReady } from './agentCustomOpenAI.ts'
 import { meter, ollamaStats, type CallStats, type ToolStats } from './agentStats.ts'
 import type { ServerResponse } from 'node:http'
 import { accounts, bindResponse, serverKey, type User } from './auth.ts'
@@ -106,6 +107,10 @@ function requireKey(user: User, model?: string): string {
   const key = storedKey(user)
   if (key) return key
   const provider = model ? providerOf(model) : 'ollama'
+  if (provider === 'custom') {
+    if (model && customOpenAIReady(user, model)) return ''
+    throw new HttpError(409, 'Add or reconnect this OpenAI-compatible API in Settings → Integrations first, or pick another model')
+  }
   if (provider !== 'ollama' && chatProviderReady(user, provider)) return ''
   if (provider === 'chatgpt') throw new HttpError(409, 'Sign in with ChatGPT in Settings → Agents → Images first, or pick an Ollama model')
   if (provider === 'openai') throw new HttpError(409, 'Add an OpenAI API key in Settings → Agents → Images first, or pick an Ollama model')
@@ -139,7 +144,7 @@ async function ollama(key: string, path: string, body: unknown, signal: AbortSig
  * prefixed chatgpt/ or openai/). `efforts`: the thinking levels it takes (Ollama's boolean thinking is
  * off and on; gpt-oss takes low, medium and high), absent when thinking cannot be set.
  */
-export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null; provider?: 'ollama' | 'chatgpt' | 'openai'; label?: string; efforts?: Effort[]; defaultEffort?: Effort }
+export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null; provider?: 'ollama' | 'chatgpt' | 'openai' | 'custom'; providerLabel?: string; label?: string; efforts?: Effort[]; defaultEffort?: Effort }
 export type Mode = 'quick' | 'deep'
 
 /** Picked when a thread does not say: quick wants speed, deep a stronger reasoner. */
@@ -184,41 +189,61 @@ export function models(): Promise<ModelInfo[]> {
 }
 
 /**
- * Every model this account can pick for a thread: Ollama Cloud's, then OpenAI's when signed in
- * with ChatGPT or with an API key. Fails only when there is nothing at all.
+ * Every model this account can pick for a thread: Ollama Cloud's (only when the account has an
+ * Ollama key), OpenAI's (when signed in with ChatGPT or with an API key), and custom
+ * OpenAI-compatible endpoints. Fails only when there is nothing at all and Ollama errored.
  */
 export async function allModels(user: User): Promise<ModelInfo[]> {
-  const [ollamaList, openai] = await Promise.all([models().then((l) => ({ l }), (e: Error) => ({ l: [] as ModelInfo[], e })), openaiModels(user)])
-  if (!ollamaList.l.length && !openai.length && 'e' in ollamaList) throw ollamaList.e
-  return [...ollamaList.l, ...openai]
+  const [ollamaList, openai, custom] = await Promise.all([
+    storedKey(user) ? models().then((l) => ({ l }), (e: Error) => ({ l: [] as ModelInfo[], e })) : Promise.resolve({ l: [] as ModelInfo[] }),
+    openaiModels(user),
+    customOpenAIModels(user),
+  ])
+  if (!ollamaList.l.length && !openai.length && !custom.length && 'e' in ollamaList) throw ollamaList.e
+  return [...ollamaList.l, ...openai, ...custom]
 }
 
 /** One model's details, from its provider's list (null when it is not offered now). */
 async function modelInfo(user: User, name: string): Promise<ModelInfo | null> {
-  const list = providerOf(name) === 'ollama' ? await models().catch(() => [] as ModelInfo[]) : await openaiModels(user)
+  const provider = providerOf(name)
+  const list =
+    provider === 'ollama'
+      ? storedKey(user)
+        ? await models().catch(() => [] as ModelInfo[])
+        : []
+      : provider === 'custom'
+        ? await customOpenAIModels(user)
+        : await openaiModels(user)
   return list.find((m) => m.name === name) ?? null
 }
 
 /** The model a new thread gets: the user's pick for the mode (Settings), else a sensible one. */
 async function defaultModel(mode: Mode, user?: User): Promise<string> {
-  const list = await models().catch(() => [] as ModelInfo[])
+  const hasOllama = !user || !!storedKey(user)
   const chosen = user ? agentSettings(user)[mode === 'deep' ? 'deepModel' : 'quickModel'] : null
-  // An OpenAI model as the usual one: kept while its provider is set up.
-  const openai = chosen && providerOf(chosen) !== 'ollama'
-  if (openai && user && chatProviderReady(user, providerOf(chosen))) return chosen
-  // No Ollama key, but ChatGPT or an OpenAI key: the first of OpenAI's models.
-  if (user && !storedKey(user)) {
-    const theirs = await openaiModels(user)
-    if (theirs.length) return theirs[0].name
+  if (chosen && user) {
+    const p = providerOf(chosen)
+    if (p === 'custom' && customOpenAIReady(user, chosen)) return chosen
+    if ((p === 'chatgpt' || p === 'openai') && chatProviderReady(user, p)) return chosen
   }
-  if (chosen && !openai && (!list.length || list.some((m) => m.name === chosen))) return chosen
+  // No Ollama key: never return an Ollama model; fall back to OpenAI or custom models, else ''.
+  if (!hasOllama && user) {
+    const [openai, custom] = await Promise.all([openaiModels(user), customOpenAIModels(user)])
+    return openai[0]?.name ?? custom[0]?.name ?? ''
+  }
+  const list = await models().catch(() => [] as ModelInfo[])
+  if (chosen && providerOf(chosen) === 'ollama' && (!list.length || list.some((m) => m.name === chosen))) return chosen
   return PREFERRED[mode].find((n) => list.some((m) => m.name === n)) ?? list[0]?.name ?? PREFERRED[mode][0]
 }
 
 /** What "Automatic" means right now, for Settings: the model each choice falls back to. */
-export async function automaticModels(): Promise<{ quick: string; deep: string; title: string; check: string }> {
-  const [quick, deep] = await Promise.all([defaultModel('quick'), defaultModel('deep')])
-  return { quick, deep, title: quick, check: quick }
+export async function automaticModels(user: User): Promise<{ quick: string; deep: string; title: string; check: string }> {
+  const [quick, deep, ollamaQuick] = await Promise.all([
+    defaultModel('quick', user),
+    defaultModel('deep', user),
+    storedKey(user) ? defaultModel('quick') : Promise.resolve(''),
+  ])
+  return { quick, deep, title: ollamaQuick, check: ollamaQuick }
 }
 
 // --- tool groups -----------------------------------------------------------------------------
@@ -797,7 +822,7 @@ const effortOf = (v: unknown): Effort | null => {
 }
 const modelName = (v: unknown) => {
   const name = String(v ?? '').trim()
-  if (!/^[\w.:/-]{1,80}$/.test(name)) throw new HttpError(400, 'Bad model name')
+  if (!/^[\w.:/@+-]{1,160}$/.test(name)) throw new HttpError(400, 'Bad model name')
   return name
 }
 
@@ -1133,7 +1158,7 @@ export const COMPACT_AT = [60, 70, 80, 85, 90, 95]
 
 function agentSettings(user: User): AgentSettings {
   const v = (readState(user).agents?.value ?? {}) as { titleModel?: unknown; checkModel?: unknown; quickModel?: unknown; deepModel?: unknown; promptFile?: { repo?: unknown; path?: unknown } | null; skillsFolder?: unknown; skillsOff?: unknown; titleRefresh?: unknown; titleEvery?: unknown; autoCompact?: unknown; compactAt?: unknown; replySuggestions?: unknown }
-  const name = (x: unknown) => (typeof x === 'string' && /^[\w.:/-]{1,80}$/.test(x) ? x : null)
+  const name = (x: unknown) => (typeof x === 'string' && /^[\w.:/@+-]{1,160}$/.test(x) ? x : null)
   const titleModel = name(v.titleModel)
   const f = v.promptFile
   const promptFile = f && typeof f.repo === 'string' && /^[0-9a-f-]{36}$/i.test(f.repo) && typeof f.path === 'string' && f.path.startsWith('/') && !f.path.split('/').includes('..') ? { repo: f.repo, path: f.path } : null
@@ -1218,6 +1243,7 @@ export function cleanTitle(raw: string): string | null {
 
 /** A title for the thread so far, from the title model (Settings in the app; a fast one otherwise). */
 async function makeTitle(user: User, key: string, thread: string, recent = false): Promise<string | null> {
+  if (!key) return null
   const msgs = messagesOf(thread)
   const first = msgs.find((m) => m.role === 'user')
   const firstAsk = [first?.content ?? '', ...(first?.attachments ?? []).map((a) => `(attached: ${a.name})`)].filter(Boolean).join(' ')
@@ -1246,6 +1272,7 @@ async function makeTitle(user: User, key: string, thread: string, recent = false
 
 /** One answer from the title model, held to `format` when the model takes structured output. */
 async function askTitleModel(user: User, key: string, messages: { role: string; content: string }[], format: object, temperature: number, numPredict = 60): Promise<string> {
+  if (!key) return ''
   const model = agentSettings(user).titleModel ?? (await defaultModel('quick'))
   const info = (await models().catch(() => [] as ModelInfo[])).find((m) => m.name === model)
   const think = info?.thinking ? (model.startsWith('gpt-oss') ? 'low' : false) : undefined
@@ -1428,6 +1455,7 @@ export function pickRetitle(raw: string, current: string): string | null {
  * thread says it is being checked, so windows look again until the check is done.
  */
 function keepTitleFresh(user: User, key: string, thread: string, send: (e: TurnEvent) => void) {
+  if (!key) return
   const settings = agentSettings(user)
   if (!settings.titleRefresh || checkingTitle.has(thread) || titling.has(thread)) return
   const row = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
@@ -1565,6 +1593,7 @@ function replyDigest(msgs: AgentMessage[]): string {
  * looking at the list again while it is thought of, get it when it is in.
  */
 function suggestReply(user: User, key: string, thread: string, send: (e: TurnEvent) => void) {
+  if (!key) return
   const row = database().prepare('SELECT * FROM agent_threads WHERE id = ?').get(thread) as ThreadRow | undefined
   if (!row || suggesting.has(thread)) return
   const msgs = messagesOf(thread)
@@ -2312,6 +2341,7 @@ const CHECK_PROMPT = [
 
 /** Step 2: the safety check model's verdict, or null when it gave none (an error, too slow, not the JSON asked for). */
 async function askCheckModel(user: User, key: string, candidate: URL, given: URL[], signal: AbortSignal): Promise<{ verdict: 'safe' | 'ask'; reason: string; model: string } | null> {
+  if (!key) return null
   const model = agentSettings(user).checkModel ?? (await defaultModel('quick'))
   const site = siteOf(candidate.hostname)
   // The same site's addresses first, then the latest others; 40 at most.
@@ -3349,8 +3379,10 @@ function ollamaThink(model: string, effort: Effort | null, mode: Mode): boolean 
  */
 async function talk(user: User, key: string, body: { model: string; messages: ChatMessage[]; tools?: unknown[]; think?: boolean | string; effort?: Effort | null; session?: string } & Record<string, unknown>, signal: AbortSignal, onDelta: (d: { content?: string; thinking?: string }) => void): Promise<{ content: string; thinking: string; calls: ToolCall[]; used: number | null; stats?: CallStats }> {
   const { effort, session, ...rest } = body
-  if (providerOf(body.model) === 'ollama') return chat(key, rest, signal, onDelta)
+  const provider = providerOf(body.model)
+  if (provider === 'ollama') return chat(key, rest, signal, onDelta)
   const level = effort ?? (body.think === false ? 'none' : isEffort(body.think) ? body.think : null)
+  if (provider === 'custom') return customOpenAIChat(user, { model: body.model, messages: endOnUser(body.messages) as ChatMessage[], tools: body.tools as Parameters<typeof customOpenAIChat>[1]['tools'], effort: level, session }, signal, onDelta)
   return responsesChat(user, { model: body.model, messages: endOnUser(body.messages) as ChatMessage[], tools: body.tools as Parameters<typeof responsesChat>[1]['tools'], effort: level, session }, signal, onDelta)
 }
 
@@ -5000,12 +5032,16 @@ export const closeRunCalls = (thread: string) => closeOpenCalls(thread, 'The ser
 export async function taskModel(user: User, model: string | null): Promise<string> {
   if (model) return model
   const v = (readState(user).agents?.value ?? {}) as { taskModel?: unknown }
-  return typeof v.taskModel === 'string' && /^[\w.:/-]{1,80}$/.test(v.taskModel) ? v.taskModel : defaultModel('quick', user)
+  return typeof v.taskModel === 'string' && /^[\w.:/@+-]{1,160}$/.test(v.taskModel) ? v.taskModel : defaultModel('quick', user)
 }
 /** Throws (409) when the account has no way to run that model: its provider is not set up. */
 export function requireTaskKey(user: User, model: string) {
   const provider = providerOf(model)
   if (provider === 'ollama') return void requireKey(user, model)
+  if (provider === 'custom') {
+    if (customOpenAIReady(user, model)) return
+    throw new HttpError(409, 'Add or reconnect this OpenAI-compatible API in Settings → Integrations first, or pick another model')
+  }
   if (chatProviderReady(user, provider)) return
   throw new HttpError(409, provider === 'chatgpt' ? 'Sign in with ChatGPT in Settings → Agents → Images first, or pick an Ollama model' : 'Add an OpenAI API key in Settings → Agents → Images first, or pick an Ollama model')
 }

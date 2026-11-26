@@ -5,7 +5,7 @@ import { MarkdownPreview } from './Zed'
 import { Select } from '../os/Select'
 import { ask, tell } from '../os/Dialogs'
 import { hasCalendar, useAccount } from '../os/account'
-import { agentModels, followThread, getThread, listThreads, type AgentMessage, type Thread, type TurnEvent } from '../data/agents'
+import { agentModels, followThread, getThread, listThreads, useAgentModelsVersion, type AgentMessage, type Thread, type TurnEvent } from '../data/agents'
 import { approveRun, cancelRun, continueRun, createTask, deleteTask, getRun, getTask, listRuns, listTasks, runTask, taskOptions, updateTask, useTasksChanged, type TaskOptionsInfo, type TasksChange } from '../data/agentTasks'
 import {
   askArgLines,
@@ -159,10 +159,20 @@ function useTaskOptions(thread?: string | null): TaskOptionsInfo | null {
   return o
 }
 
-/** The models the account can pick, by name, once. */
+/** The models the account can pick, by name. */
 function useModelNames(): string[] {
+  const modelsVersion = useAgentModelsVersion()
   const [models, setModels] = useState<string[]>([])
-  useEffect(() => void agentModels().then((m) => setModels(m.map((x) => x.name)), () => {}), [])
+  useEffect(() => {
+    let alive = true
+    agentModels().then(
+      (m) => alive && setModels(m.map((x) => x.name)),
+      () => alive && setModels([]),
+    )
+    return () => {
+      alive = false
+    }
+  }, [modelsVersion])
   return models
 }
 

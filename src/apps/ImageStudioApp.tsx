@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { listThreads, type Thread } from '../data/agents'
-import { signIn, useAccount } from '../os/account'
+import { hasAgentProvider, signIn, useAccount } from '../os/account'
 import { useWM, type WinState } from '../os/wm'
 import { ImageStudio } from './ImageStudio'
 
@@ -11,7 +11,7 @@ import { ImageStudio } from './ImageStudio'
 export function ImageStudioApp({ win: _win }: { win: WinState }) {
   const account = useAccount()
   const wm = useWM()
-  const canChat = account.status === 'user' && (!!account.integrations.ollama || !!account.integrations.openai)
+  const canChat = account.status === 'user' && hasAgentProvider(account)
   const [threads, setThreads] = useState<Thread[]>([])
   useEffect(() => {
     if (!canChat) return

@@ -1,6 +1,6 @@
 import type { TerminalResource } from './terminalResources'
 import { DEFAULT_BUDGET_RUNS, DEFAULT_BUDGET_TOKENS, MAIL_BUDGET_RUNS, MAIL_BUDGET_TOKENS } from './agentTaskMail'
-import { api } from '../os/account'
+import { api, getAccount, subscribeAccount } from '../os/account'
 import { synced } from '../os/synced'
 import { useEffect, useState } from 'react'
 import { parseSkillConfig, type SkillConfig } from './agentSkillRules'
@@ -147,7 +147,7 @@ export { EFFORTS, EFFORT_NAMES, type Effort } from './agentModelNames'
  * A model a thread can run on: Ollama Cloud's, or OpenAI's (ids prefixed chatgpt/ or openai/).
  * `label` is the provider's own name for it; `efforts` the thinking levels it takes (none: it cannot be set).
  */
-export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null; provider?: 'ollama' | 'chatgpt' | 'openai'; label?: string; efforts?: Effort[]; defaultEffort?: Effort }
+export type ModelInfo = { name: string; thinking: boolean; vision: boolean; contextLength: number | null; provider?: 'ollama' | 'chatgpt' | 'openai' | 'custom'; providerLabel?: string; label?: string; efforts?: Effort[]; defaultEffort?: Effort }
 /**
  * The effort a thread runs with: its own pick when the model takes it (else the nearest the model
  * has), or what the mode means (quick low, deep high; Ollama's on/off models: on).
@@ -427,7 +427,7 @@ const settingsStore = synced<AgentSettings>('agents', { titleModel: null, checkM
       autoCompact: s.autoCompact !== false,
       compactAt: COMPACT_AT.includes(Number(s.compactAt)) ? Number(s.compactAt) : 85,
       replySuggestions: s.replySuggestions !== false,
-      favoriteModels: Array.isArray(s.favoriteModels) ? [...new Set(s.favoriteModels.filter((x): x is string => typeof x === 'string' && x.length <= 80))].slice(0, 50) : [],
+      favoriteModels: Array.isArray(s.favoriteModels) ? [...new Set(s.favoriteModels.filter((x): x is string => typeof x === 'string' && x.length <= 160))].slice(0, 50) : [],
       sidebarStyle: sidebarStyleOf(s.sidebarStyle),
       taskModel: typeof s.taskModel === 'string' && s.taskModel ? s.taskModel : null,
       taskReport: taskReportOf(s.taskReport),
@@ -530,9 +530,42 @@ export const orderProjects = (ids: number[]) => api<Project[]>('/api/agents/proj
 export const deleteProject = (id: number) => api(`/api/agents/projects/${id}`, { method: 'DELETE' })
 
 let modelList: Promise<ModelInfo[]> | null = null
-/** Asks for the model list again next time (after signing in with ChatGPT or out, or a new OpenAI key). */
-export const forgetAgentModels = () => void (modelList = null)
-/** The models a thread can run on (Ollama Cloud's that can use tools, and OpenAI's once set up); asked once per page. */
+let modelVersion = 0
+const modelListeners = new Set<() => void>()
+
+/** Asks for the model list again next time (after changing Ollama, OpenAI/ChatGPT, or custom endpoints). */
+export function forgetAgentModels() {
+  modelList = null
+  modelVersion++
+  modelListeners.forEach((l) => l())
+}
+
+/** Reactive counter bumped whenever the account's available agent models may have changed. */
+export function useAgentModelsVersion() {
+  const [v, setV] = useState(modelVersion)
+  useEffect(() => {
+    const on = () => setV(modelVersion)
+    modelListeners.add(on)
+    on()
+    return () => void modelListeners.delete(on)
+  }, [])
+  return v
+}
+
+const providerStamp = () => {
+  const a = getAccount()
+  return `${a.status}:${a.user?.id ?? ''}:${a.integrations.ollama ?? ''}:${a.integrations.openai ? 1 : 0}:${a.integrations.customOpenAI ?? 0}`
+}
+let lastProviderStamp = providerStamp()
+subscribeAccount(() => {
+  const next = providerStamp()
+  if (next !== lastProviderStamp) {
+    lastProviderStamp = next
+    forgetAgentModels()
+  }
+})
+
+/** The models a thread can run on (Ollama Cloud's when connected, OpenAI's and custom endpoints once set up). */
 export function agentModels(): Promise<ModelInfo[]> {
   modelList ??= api<ModelInfo[]>('/api/agents/models').catch((e) => {
     modelList = null

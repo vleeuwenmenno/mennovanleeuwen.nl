@@ -25,8 +25,8 @@ import { meter, responsesStats, type CallStats } from './agentStats.ts'
 // and handed back in the shape Ollama's chat gives, so the turn loop does not care which it was.
 // Tokens and keys stay on the server. CHATGPT_CODEX_URL and OPENAI_URL point at stand-ins for tests.
 
-export type ChatProvider = 'ollama' | 'chatgpt' | 'openai'
-export const providerOf = (model: string): ChatProvider => (model.startsWith('chatgpt/') ? 'chatgpt' : model.startsWith('openai/') ? 'openai' : 'ollama')
+export type ChatProvider = 'ollama' | 'chatgpt' | 'openai' | 'custom'
+export const providerOf = (model: string): ChatProvider => (model.startsWith('chatgpt/') ? 'chatgpt' : model.startsWith('openai/') ? 'openai' : model.startsWith('custom/') ? 'custom' : 'ollama')
 const slugOf = (model: string) => model.slice(model.indexOf('/') + 1)
 
 /** Thinking effort levels any provider may list, lowest first. Ollama's boolean thinking uses off and on. */
@@ -34,7 +34,7 @@ export const EFFORTS = ['off', 'on', 'none', 'minimal', 'low', 'medium', 'high',
 export type Effort = (typeof EFFORTS)[number]
 export const isEffort = (v: unknown): v is Effort => typeof v === 'string' && (EFFORTS as readonly string[]).includes(v)
 
-export type ProviderModel = { name: string; thinking: boolean; vision: boolean; contextLength: number | null; provider: ChatProvider; label?: string; efforts?: Effort[]; defaultEffort?: Effort }
+export type ProviderModel = { name: string; thinking: boolean; vision: boolean; contextLength: number | null; provider: ChatProvider; providerLabel?: string; label?: string; efforts?: Effort[]; defaultEffort?: Effort }
 
 /** The Codex client version the model list is asked for (the same one the User-Agent names). */
 const CLIENT_VERSION = '0.154.0'
@@ -93,8 +93,8 @@ function cached(key: string, load: () => Promise<ProviderModel[]>): Promise<Prov
   return value
 }
 
-/** Whether a thread on this provider can run for the account now. */
-export const chatProviderReady = (user: User, p: ChatProvider) => (p === 'chatgpt' ? access.signedIn(user) : p === 'openai' ? !!access.apiKey(user) : true)
+/** Whether a thread on this provider can run for the account now (custom endpoints are checked per endpoint in server/agentCustomOpenAI.ts). */
+export const chatProviderReady = (user: User, p: ChatProvider) => (p === 'chatgpt' ? access.signedIn(user) : p === 'openai' ? !!access.apiKey(user) : p === 'ollama')
 
 /** The OpenAI models this account can chat with: ChatGPT's when signed in, the API's with a key. Never throws. */
 export async function openaiModels(user: User): Promise<ProviderModel[]> {
@@ -341,7 +341,7 @@ async function responsesChatInner(
   onDelta: (d: { content?: string; thinking?: string }) => void,
 ): Promise<Reply> {
   const provider = providerOf(req.model)
-  if (provider === 'ollama') throw new HttpError(500, 'Not an OpenAI model')
+  if (provider === 'ollama' || provider === 'custom') throw new HttpError(500, 'Not an OpenAI model')
   const info = (await openaiModels(user)).find((m) => m.name === req.model)
   const effort = clampEffort(req.effort ?? info?.defaultEffort, info?.efforts)
   const { input } = responsesInput(req.messages)

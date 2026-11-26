@@ -33,21 +33,28 @@ const CASES: [string, string, string | null, MakerId, string?][] = [
   ['openai/gpt-4o-mini', 'GPT-4o Mini', null, 'openai'],
   ['openai/o4-mini', 'o4 Mini', null, 'openai'],
   ['some-new-model:latest', 'some-new-model', null, 'other'],
+  ['custom/e01234567/Qwen/Qwen3-32B', 'Qwen3 32B', null, 'alibaba'],
+  ['custom/e01234567/deepseek-ai/DeepSeek-R1:q4', 'DeepSeek R1', 'q4', 'deepseek'],
+  ['custom/e01234567/strata-local-v1', 'strata-local-v1', null, 'other'],
+  ['custom/e01234567/strata-local-v1:latest', 'strata-local-v1', null, 'other'],
+  ['custom/e01234567/gpt-4o', 'GPT-4o', null, 'openai'],
 ]
 
 for (const [raw, name, variant, maker, label] of CASES) {
   const n = modelName(raw, label)
   check(`${raw} → ${name}${variant ? ` [${variant}]` : ''} by ${maker} (got ${n.name}${n.variant ? ` [${n.variant}]` : ''} by ${n.maker})`, n.name === name && n.variant === variant && n.maker === maker && n.raw === raw)
 }
-check('providers come from the prefix', modelName('chatgpt/gpt-5.5').provider === 'chatgpt' && modelName('openai/gpt-4o').provider === 'openai' && modelName('glm-5.3').provider === 'ollama')
+check('providers come from the prefix', modelName('chatgpt/gpt-5.5').provider === 'chatgpt' && modelName('openai/gpt-4o').provider === 'openai' && modelName('custom/e01234567/foo').provider === 'custom' && modelName('glm-5.3').provider === 'ollama')
 
-// Search: pretty name, raw id, maker and provider; in order with gaps; no match is 0.
+// Search: pretty name, raw id, maker and provider (including custom endpoint label); in order with gaps; no match is 0.
 const ds = modelName('deepseek-v4.1-flash:1017')
 check('search by pretty words', modelMatch(ds, 'deepseek flash') > 0)
 check('search by raw id', modelMatch(ds, 'v4.1-flash:1017') > 0)
 check('search by gaps', modelMatch(ds, 'dsv41') > 0)
 check('search by maker', modelMatch(modelName('kimi-k2.6'), 'moonshot') > 0)
 check('search by provider', modelMatch(modelName('chatgpt/gpt-5.5', 'GPT-5.5'), 'chatgpt') > 0)
+check('search by custom endpoint label', modelMatch(modelName('custom/e01234567/Qwen/Qwen3-32B'), 'strata', 'Strata API') > 0)
+check('search by custom endpoint label misses other labels', modelMatch(modelName('custom/e01234567/Qwen/Qwen3-32B'), 'strata', 'Local vLLM') === 0)
 check('no match is 0', modelMatch(ds, 'mistral') === 0)
 check('a tighter gap match ranks first', modelMatch(ds, 'dsv41') > modelMatch(modelName('deepseek-v4-pro:0813'), 'dsv41'))
 check('a run scores above gaps', modelMatch(ds, 'flash') > modelMatch(ds, 'fsh'))

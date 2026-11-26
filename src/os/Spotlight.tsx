@@ -21,7 +21,7 @@ import { contributions, profile, projects } from '../data/profile'
 import { timeAgo, useRecents } from '../data/recents'
 import { age, fileKind, HOME, lookup, prettyPath, walk } from '../terminal/vfs'
 import { MEDIA_APP } from '../data/media'
-import { signIn, signInWithGoogle, useAccount } from './account'
+import { hasAgentProvider, signIn, signInWithGoogle, useAccount } from './account'
 import { appHere, cvMode } from './cvMode'
 import { APP_META } from './apps'
 import { useCodeSearch } from './codeSearch'
@@ -594,7 +594,7 @@ export function Spotlight() {
   const engine = ENGINES[searchSettings.engine]
   const close = () => setOverlay(null)
   // A question for the Agents app, answered here; Ctrl+K continues it in the Agents window.
-  const quick = useQuickAnswer(account.status === 'user' && !!account.integrations.ollama)
+  const quick = useQuickAnswer(account.status === 'user' && hasAgentProvider(account))
   // Your contacts as you type, and your mail after "mail:".
   const { contacts } = useContacts()
   const { accounts: mailAccounts } = useMailAccounts()
@@ -1175,7 +1175,7 @@ export function Spotlight() {
     // the top hit.
     const question = q.trim().replace(/^\?\s*/, '')
     const agent: Result | null =
-      account.status === 'user' && account.integrations.ollama && question
+      account.status === 'user' && hasAgentProvider(account) && question
         ? {
             id: 'agent',
             group: 'Fallback',
