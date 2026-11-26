@@ -25,10 +25,11 @@ import { summarize, threadSummary, summaryLines, cacheNote, type ThreadStats } f
 
 const MODEL = 'stats-model'
 const FIRST_DELAY = 60
+const BIG_PAGE = 'CACHE_PREFIX_PAYLOAD_'.repeat(120) // > 2,500 chars (> 1,500)
 
 // --- The stand-in for Ollama --------------------------------------------------------------------------
 
-type ChatBody = { model: string; messages: { role: string; content: string; tool_calls?: unknown[] }[]; stream?: boolean; tools?: unknown[]; think?: unknown }
+type ChatBody = { model: string; messages: { role: string; content: string; tool_calls?: unknown[]; tool_name?: string }[]; stream?: boolean; tools?: unknown[]; think?: unknown }
 const mains: { body: ChatBody; raw: string }[] = []
 const send = (res: ServerResponse, status: number, body: unknown, type = 'application/json') => res.writeHead(status, { 'Content-Type': type }).end(typeof body === 'string' ? body : JSON.stringify(body))
 
@@ -39,6 +40,7 @@ const ollama = createServer((req: IncomingMessage, res: ServerResponse) => {
     const path = new URL(req.url ?? '/', 'http://x').pathname
     if (path === '/api/tags') return send(res, 200, { models: [{ name: MODEL }] })
     if (path === '/api/show') return send(res, 200, { capabilities: ['completion', 'tools'], model_info: { 'x.context_length': 200000 } })
+    if (path === '/api/web_fetch') return send(res, 200, { title: 'Long Page', content: BIG_PAGE, links: [] })
     if (path !== '/api/chat') return send(res, 404, {})
     const body = JSON.parse(raw) as ChatBody
     if (body.stream === false) return send(res, 200, { message: { role: 'assistant', content: '{"title":"Stats check"}' }, done: true })
@@ -46,11 +48,25 @@ const ollama = createServer((req: IncomingMessage, res: ServerResponse) => {
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
     await sleep(FIRST_DELAY)
     const last = body.messages.at(-1)!
+    const lastUserIdx = body.messages.map((m) => m.role === 'user').lastIndexOf(true)
+    const lastUser = lastUserIdx >= 0 ? body.messages[lastUserIdx] : last
+    const round = body.messages.slice(lastUserIdx + 1).filter((m) => m.role === 'assistant').length
     const done = { done: true, prompt_eval_count: 1200, eval_count: 300, total_duration: 2_500_000_000, load_duration: 50_000_000, prompt_eval_duration: 400_000_000, eval_duration: 1_500_000_000 }
     // A user message asks for a search first; after the search's result, the answer.
     if (last.role === 'user' && /SEARCH/.test(last.content)) {
       res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'search_threads', arguments: { query: 'apples' } } }] }, done: false })}\n`)
       return res.end(`${JSON.stringify({ message: { role: 'assistant', content: '' }, ...done })}\n`)
+    }
+    // Large (>1,500 char) web_fetch + update_todos mid-turn, then clear todos, then answer.
+    if (/BIGTOOL_TODOS/.test(lastUser.content)) {
+      if (round === 0) {
+        res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'web_fetch', arguments: { url: 'https://cache.example.test/doc' } } }, { function: { name: 'update_todos', arguments: { items: [{ text: 'Read doc', status: 'active' }, { text: 'Answer', status: 'pending' }] } } }] }, done: false })}\n`)
+        return res.end(`${JSON.stringify({ message: { role: 'assistant', content: '' }, ...done })}\n`)
+      }
+      if (round === 1) {
+        res.write(`${JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'update_todos', arguments: { items: [] } } }] }, done: false })}\n`)
+        return res.end(`${JSON.stringify({ message: { role: 'assistant', content: '' }, ...done })}\n`)
+      }
     }
     res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'The answer ' }, done: false })}\n`)
     await sleep(20)
@@ -60,6 +76,46 @@ const ollama = createServer((req: IncomingMessage, res: ServerResponse) => {
 })
 await new Promise<void>((r) => ollama.listen(0, '127.0.0.1', r))
 const ollamaUrl = `http://127.0.0.1:${(ollama.address() as { port: number }).port}`
+
+// --- The stand-in for a Custom OpenAI-compatible server -----------------------------------------------
+
+type CustomMsg = { role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }
+type CustomBody = { model: string; messages: CustomMsg[]; tools?: unknown[]; tool_choice?: string; stream?: boolean; stream_options?: unknown }
+const customs: { body: CustomBody; raw: string }[] = []
+const customServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+  let raw = ''
+  req.on('data', (d) => (raw += d))
+  req.on('end', () => {
+    const path = new URL(req.url ?? '/', 'http://x').pathname
+    if (path === '/v1/models') return send(res, 200, { data: [{ id: 'strata-cache-model', context_length: 131072 }] })
+    if (path !== '/v1/chat/completions') return send(res, 404, {})
+    const body = JSON.parse(raw) as CustomBody
+    customs.push({ body, raw })
+    const userIdx = body.messages.map((m) => m.role === 'user' && !(m.content ?? '').startsWith('(A note from the app')).lastIndexOf(true)
+    const lastUser = userIdx >= 0 ? body.messages[userIdx].content ?? '' : ''
+    const round = body.messages.slice(userIdx + 1).filter((m) => m.role === 'assistant').length
+    const sseLine = (o: Record<string, unknown>) => `data: ${JSON.stringify(o)}\n\n`
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+    if (/BIGTOOL/.test(lastUser) && round === 0) {
+      res.write(sseLine({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_big', type: 'function', function: { name: 'web_fetch', arguments: '{"url":"https://cache.example.test/doc"}' } }] } }] }))
+      res.write(sseLine({ choices: [], usage: { prompt_tokens: 4000, completion_tokens: 100, total_tokens: 4100, prompt_tokens_details: { cached_tokens: 0 } } }))
+      return res.end('data: [DONE]\n\n')
+    }
+    if (/EXHAUST/.test(lastUser) && body.tool_choice !== 'none') {
+      res.write(sseLine({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call_r${round}`, type: 'function', function: { name: 'search_threads', arguments: `{"query":"step-${round}"}` } }] } }] }))
+      res.write(sseLine({ choices: [], usage: { prompt_tokens: 2000 + round * 100, completion_tokens: 50, total_tokens: 2050 + round * 100, prompt_tokens_details: { cached_tokens: round ? 1900 : 0 } } }))
+      return res.end('data: [DONE]\n\n')
+    }
+    const usage = /BIGTOOL/.test(lastUser)
+      ? { prompt_tokens: 5000, completion_tokens: 120, total_tokens: 5120, prompt_tokens_details: { cached_tokens: 4000 } }
+      : { prompt_tokens: 5500, completion_tokens: 80, total_tokens: 5580, prompt_tokens_details: { cached_tokens: 4950 } }
+    res.write(sseLine({ choices: [{ delta: { content: 'Custom done.' } }] }))
+    res.write(sseLine({ choices: [], usage }))
+    res.end('data: [DONE]\n\n')
+  })
+})
+await new Promise<void>((r) => customServer.listen(0, '127.0.0.1', r))
+const customUrl = `http://127.0.0.1:${(customServer.address() as { port: number }).port}`
 
 // --- The stand-in for ChatGPT's Codex backend ---------------------------------------------------------
 
@@ -199,6 +255,57 @@ try {
   database().prepare('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, 2, ?, ?)').run(sha256(sid2), now, now + 86400_000)
   const theirs = await fetch(`${server.origin}/api/agents/threads/${a}/stats`, { headers: { Cookie: `mvlos_sid=${sid2}`, ...(await asPage(sid2)) } })
   check(`another account cannot read the stats (${theirs.status})`, theirs.status === 404 || theirs.status === 403)
+
+  // 6. Large (>1,500 char) tool results and update_todos mid-turn never mutate earlier messages or messages[0].
+  const big = await newThread(MODEL, ['threads', 'calendar'])
+  const bigFrom = mains.length
+  const bigErr1 = await say(big, 'BIGTOOL_TODOS https://cache.example.test/doc')
+  const bigErr2 = await say(big, 'follow up after big tool and todos')
+  check(`large tool result + update_todos turns answer${bigErr1 || bigErr2 ? ` (${bigErr1 || bigErr2})` : ''}`, !bigErr1 && !bigErr2 && mains.length - bigFrom === 4)
+  const [b0, b1, b2, b3] = mains.slice(bigFrom)
+  const bigToolR1 = b1.body.messages.find((m) => m.role === 'tool' && m.tool_name === 'web_fetch')
+  const bigToolT2 = b3.body.messages.find((m) => m.role === 'tool' && m.tool_name === 'web_fetch')
+  const todoToolR1 = b1.body.messages.find((m) => m.role === 'tool' && m.tool_name === 'update_todos')
+  check('update_todos mid-turn does not mutate messages[0] across rounds or turns', b0.body.messages[0].content === b1.body.messages[0].content && b1.body.messages[0].content === b2.body.messages[0].content && b2.body.messages[0].content === b3.body.messages[0].content)
+  check('update_todos tool result returns checklist status in conversation history', !!todoToolR1 && /"ok":true/.test(todoToolR1.content) && /Read doc/.test(todoToolR1.content))
+  check('large (>1,500 char) tool result stays whole and byte-identical on Turn 2', !!bigToolR1 && !!bigToolT2 && bigToolR1.content.length > 1500 && bigToolR1.content === bigToolT2.content)
+  check('Turn 2 sends Turn 1’s full history (with large tool result and todos) byte for byte', same(b3.body.messages.slice(0, b2.body.messages.length), b2.body.messages))
+  const bigHead = b2.raw.slice(0, b2.raw.indexOf('"messages"'))
+  const bigSent = `"messages":${JSON.stringify(b2.body.messages).slice(0, -1)},`
+  check('Turn 2 serialized request prefix is byte-identical up to the end of Turn 1', b3.raw.startsWith(`${bigHead}${bigSent}`))
+
+  // 7. Custom OpenAI-compatible endpoint: byte-identical prefix across rounds & turns (with >1,500 char tool),
+  //    cached_tokens & cache hit % in stats, and stable tools with tool_choice: "none" on budget-exhausted rounds.
+  const ep = await api<{ endpoint: { id: string } }>('POST', '/api/agents/custom-openai', { name: 'Strata Cache', url: customUrl })
+  const customModel = `custom/${ep.endpoint.id}/strata-cache-model`
+  const ct = await newThread(customModel, ['threads', 'calendar'])
+  const cFrom = customs.length
+  const ce1 = await say(ct, 'BIGTOOL https://cache.example.test/doc')
+  const ce2 = await say(ct, 'follow up custom')
+  check(`Custom OpenAI thread answers twice${ce1 || ce2 ? ` (${ce1 || ce2})` : ''}`, !ce1 && !ce2 && customs.length - cFrom === 3)
+  const [cr0, cr1, cr2] = customs.slice(cFrom)
+  const cToolR1 = cr1.body.messages.find((m) => m.role === 'tool')
+  const cToolT2 = cr2.body.messages.find((m) => m.role === 'tool')
+  check('Custom OpenAI: round 2 sends round 1’s messages and tools byte for byte', same(cr1.body.messages.slice(0, cr0.body.messages.length), cr0.body.messages) && same(cr1.body.tools, cr0.body.tools))
+  check('Custom OpenAI: Turn 2 sends Turn 1’s messages (including >1,500 char tool output) and tools byte for byte', !!cToolR1 && !!cToolT2 && String(cToolR1.content).length > 1500 && cToolR1.content === cToolT2.content && same(cr2.body.messages.slice(0, cr1.body.messages.length), cr1.body.messages) && same(cr2.body.tools, cr1.body.tools))
+  const cHead = cr1.raw.slice(0, cr1.raw.indexOf('"messages"'))
+  const cSent = `"messages":${JSON.stringify(cr1.body.messages).slice(0, -1)},`
+  check('Custom OpenAI: serialized request prefix up to end of Turn 1 is byte-identical', cr2.raw.startsWith(`${cHead}${cSent}`))
+  const cs = await stats(ct)
+  const cSum = threadSummary(cs)
+  const expectedHit = Math.round(((0 + 4000 + 4950) / (4000 + 5000 + 5500)) * 100)
+  check(`Custom OpenAI: stats record cached_tokens and cache hit % (${Math.round((cSum.cacheHit ?? 0) * 100)}%, expected ${expectedHit}%)`, cs.turns[0].calls[1]?.stats?.cached === 4000 && cs.turns[1].calls[0]?.stats?.cached === 4950 && cSum.cacheHit !== null && Math.round(cSum.cacheHit * 100) === expectedHit && summaryLines(cSum).some(([k, v]) => k === 'Cache hit' && v.startsWith(`${expectedHit}%`)))
+
+  // Budget-exhausted final round on Custom OpenAI keeps full tools with tool_choice: "none" and keeps messages[0] immutable.
+  const ex = await newThread(customModel, ['threads'])
+  const exFrom = customs.length
+  const exErr = await say(ex, 'EXHAUST rounds')
+  const exReqs = customs.slice(exFrom)
+  const exFirst = exReqs[0]
+  const exLast = exReqs.at(-1)!
+  check(`Custom OpenAI budget-exhausted turn finishes cleanly${exErr ? ` (${exErr})` : ''}`, !exErr && exReqs.length === 7)
+  check('Custom OpenAI budget-exhausted final round keeps full tools with tool_choice: "none"', same(exLast.body.tools, exFirst.body.tools) && exFirst.body.tool_choice === 'auto' && exLast.body.tool_choice === 'none')
+  check('Custom OpenAI budget-exhausted final round keeps messages[0] byte-identical and puts notice in trailing note', exLast.body.messages[0].content === exFirst.body.messages[0].content && exLast.body.messages.at(-1)?.role === 'user' && /tool-round budget for this turn is exhausted/.test(String(exLast.body.messages.at(-1)?.content ?? '')))
 } catch (e) {
   check(`ran to the end (${(e as Error).message})`, false)
   console.error(server.log)
@@ -206,5 +313,6 @@ try {
   await server.dispose()
   ollama.close()
   fake.close()
+  customServer.close()
 }
 finish()

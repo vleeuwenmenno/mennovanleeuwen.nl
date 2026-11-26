@@ -2888,21 +2888,30 @@ prompts is not known); OpenAI's Responses usage gives `input_tokens` with
 A wrap-up round that adds nothing is not saved, and its call is not counted either.
 
 **Prompt caching.** Providers reuse the work on a prompt prefix they saw before, up to the first
-byte that differs, so a thread's requests keep their start the same between rounds and turns: the
-system prompt has what is the same in every thread first (AGENTS.md, the mode, the guides), then
-what changes now and then (today's date, the always-on skills, memory), and what can change within a
-turn last (the todo list); tool definitions keep their order; skills are listed by name; and there
-is no clock in it. The calendar's clock is in the messages instead: with the calendar tools on, each
-of your messages ends with when it was sent (`[Sent Sun 25 Oct 2026 14:05]`, in your zone), which
-never changes once written. ChatGPT and OpenAI calls send a `prompt_cache_key` (and Codex's
-`session_id`) that is the thread's own. What still changes the prefix: a todo list update, a new
-memory or a change of permission mode mid-turn (they are in the system prompt), the date at
-midnight, the round-budget and todo reminders on the rounds that carry them, the last round's
-missing tools, and at a new message the previous turn's thinking (Ollama) and its tool results over
-1,500 characters, which go in shortened from then on.
+byte that differs, so a thread's requests keep their prefix stable between rounds and turns: the
+system prompt (`messages[0]`) puts what is the same in every thread first (AGENTS.md, the mode, the
+guides), then what changes rarely (today's date, always-on skills, memory, work folder, skills);
+tool definitions keep their order; skills are listed by name; and there is no clock in it (nor an
+ephemeral 15-minute mail-read expiry clock). The calendar's clock is in the messages instead: with
+the calendar tools on, each of your messages ends with when it was sent (`[Sent Sun 25 Oct 2026 14:05]`,
+in your zone), which never changes once written. The turn's base system prompt is frozen across
+rounds unless the thread's own configuration changes mid-turn (mode, work folder, permission mode,
+enabled tools, skills, project or always-on mail reads), so midnight rollovers, mid-turn memory
+saves or skill cache refreshes never invalidate the prefix mid-turn. Volatile per-round state stays
+out of `messages[0]`: `update_todos` returns the current checklist in its tool result (and open
+todos are snapshotted into the compaction summary if a thread compacts while items remain), while
+running subagents, round-budget notices and stale-todo reminders go in a single trailing transient
+app note at the end of `messages`. Saved tool outputs stay immutable across rounds and turns until
+compaction (individual tools bound their own output size on save), rather than being retroactively
+truncated. On budget-exhausted or text-only final rounds, ChatGPT, OpenAI and custom
+OpenAI-compatible endpoints keep the full `tools` list with `tool_choice: "none"` (falling back
+cleanly if a custom server rejects `tool_choice: "none"`), while Ollama omits `tools`. ChatGPT and
+OpenAI calls send a `prompt_cache_key` (and Codex's `session_id`) that is the thread's own. What
+still changes the prefix: an explicit mid-turn configuration change, a new day/memory between turns,
+nudge/wrap-up rounds, Ollama's thinking from the previous turn, and compaction boundaries.
 
 ```sh
-pnpm check:agents-stats   # Against fake Ollama and Codex: per-call counts, durations, cache and reasoning tokens, tool timing, a restart, old messages, and a byte-identical request prefix between rounds and turns
+pnpm check:agents-stats   # Against fake Ollama, Codex and Custom OpenAI: per-call counts, durations, cache and reasoning tokens, tool timing, a restart, old messages, and byte-identical request prefixes across rounds and turns (including >1,500-char tool outputs, update_todos and tool_choice: "none")
 ```
 Its tools: web search
 (Ollama's own by default; Settings → Agents → Web search switches it to SearXNG, Brave Search, Kagi,

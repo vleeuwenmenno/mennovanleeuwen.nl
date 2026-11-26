@@ -342,7 +342,7 @@ try {
     t = await turn(g.id, `SCENARIO reads ${MSG}`, false)
     check(`given, ${permission}: reads ran without a card (${names(t.asked) || 'none asked'})`, !t.asked.length && ran(t, 'mail_search') && ran(t, 'mail_read'))
     check(`given, ${permission}: their rows say why`, t.tools.every((m) => /allowed mail reads/.test(m.checked ?? '')))
-    check(`given, ${permission}: the prompt says reads run until then, and the rest still asks`, /allowed mail reads in this thread until [0-9]{2}:[0-9]{2}/.test(lastPrompt()) && /mail_draft, mail_send and mail_update still wait for the user/.test(lastPrompt()))
+    check(`given, ${permission}: the prompt keeps no ephemeral grant clock and says writes still wait`, !/until [0-9]{2}:[0-9]{2}/.test(lastPrompt()) && /temporary thread grant is active.*run automatically without asking/.test(lastPrompt()) && /mail_draft, mail_send and mail_update still wait for the user/.test(lastPrompt()))
     check(`given, ${permission}: the safety check model was never asked`, checks.length === checksBefore)
   }
   // Drafts, sends and changes still ask, Bypass too.
