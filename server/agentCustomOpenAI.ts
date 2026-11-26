@@ -622,7 +622,7 @@ async function readStreamReply(res: Response, who: string, onDelta: (d: { conten
 /** One streamed Chat Completions turn against a user's configured custom OpenAI-compatible API. */
 export async function customOpenAIChat(
   user: User,
-  req: { model: string; messages: ChatMessage[]; tools?: ToolDef[]; effort?: Effort | null; session?: string },
+  req: { model: string; messages: ChatMessage[]; tools?: ToolDef[]; toolChoice?: 'auto' | 'none'; effort?: Effort | null; session?: string },
   signal: AbortSignal,
   onDelta: (d: { content?: string; thinking?: string }) => void,
 ): Promise<Reply> {
@@ -642,24 +642,29 @@ export async function customOpenAIChat(
       const who = endpoint.name
       const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' }
       if (endpoint.apiKey) headers.Authorization = `Bearer ${endpoint.apiKey}`
-      const tools = req.tools?.length
-        ? {
-            tools: req.tools.map((t) => ({ type: 'function', function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters } })),
-            tool_choice: 'auto',
-          }
-        : {}
-      const baseBody = {
-        model: parsed.modelId,
-        messages: chatCompletionsMessages(req.messages),
-        stream: true,
-        ...tools,
-      }
-      const send = async (withStreamOptions: boolean) => {
+      const toolDefs = req.tools?.length
+        ? req.tools.map((t) => ({ type: 'function', function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters } }))
+        : null
+      const toolChoice = req.toolChoice ?? 'auto'
+      const chatMessages = chatCompletionsMessages(req.messages)
+      const send = async (opts: { streamOptions: boolean; toolChoiceMode: 'requested' | 'auto' | 'omit' }) => {
+        const toolsPart = toolDefs
+          ? opts.toolChoiceMode === 'omit'
+            ? {}
+            : { tools: toolDefs, tool_choice: opts.toolChoiceMode === 'auto' ? 'auto' : toolChoice }
+          : {}
+        const body = {
+          model: parsed.modelId,
+          messages: chatMessages,
+          stream: true,
+          ...toolsPart,
+          ...(opts.streamOptions ? { stream_options: { include_usage: true } } : {}),
+        }
         try {
           return await guardedFetch(user, `${endpoint.url}/chat/completions`, {
             method: 'POST',
             headers,
-            body: JSON.stringify(withStreamOptions ? { ...baseBody, stream_options: { include_usage: true } } : baseBody),
+            body: JSON.stringify(body),
             signal,
           })
         } catch (e) {
@@ -670,13 +675,21 @@ export async function customOpenAIChat(
       }
 
       const timer = meter()
-      let res = await send(true)
+      let res = await send({ streamOptions: true, toolChoiceMode: 'requested' })
       if (res.status === 400) {
         const firstText = (await readCapped(res, 64 * 1024).catch(() => Buffer.alloc(0))).toString('utf8')
         const { message, code } = parseErrorText(firstText)
         if (CONTEXT_ERR.test(`${code} ${message}`)) throw mapFailure(400, firstText, who)
-        // Some OpenAI-compatible servers reject stream_options with 400: retry once without it.
-        res = await send(false)
+        // Some OpenAI-compatible servers reject stream_options or tool_choice: "none" with 400.
+        // Retry without stream_options (and downgrade tool_choice: "none" to "auto" to keep tools in
+        // the cached prefix — server/agents.ts strips calls on last/textOnly rounds anyway).
+        res = await send({ streamOptions: false, toolChoiceMode: toolChoice === 'none' ? 'auto' : 'requested' })
+        if (res.status === 400 && toolChoice === 'none') {
+          const secondText = (await readCapped(res, 64 * 1024).catch(() => Buffer.alloc(0))).toString('utf8')
+          const second = parseErrorText(secondText)
+          if (CONTEXT_ERR.test(`${second.code} ${second.message}`)) throw mapFailure(400, secondText, who)
+          res = await send({ streamOptions: false, toolChoiceMode: 'omit' })
+        }
         if (!res.ok) {
           const retryText = (await readCapped(res, 64 * 1024).catch(() => Buffer.alloc(0))).toString('utf8')
           throw mapFailure(res.status, retryText || firstText, who)

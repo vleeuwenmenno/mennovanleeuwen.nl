@@ -336,7 +336,7 @@ async function readStream(res: Response, who: string, onDelta: (d: { content?: s
  */
 async function responsesChatInner(
   user: User,
-  req: { model: string; messages: ChatMessage[]; tools?: ToolDef[]; effort?: Effort | null; session?: string },
+  req: { model: string; messages: ChatMessage[]; tools?: ToolDef[]; toolChoice?: 'auto' | 'none'; effort?: Effort | null; session?: string },
   signal: AbortSignal,
   onDelta: (d: { content?: string; thinking?: string }) => void,
 ): Promise<Reply> {
@@ -352,7 +352,7 @@ async function responsesChatInner(
     stream: true,
     store: false,
     parallel_tool_calls: true,
-    ...(req.tools?.length ? { tools: functionTools(req.tools), tool_choice: 'auto' } : {}),
+    ...(req.tools?.length ? { tools: functionTools(req.tools), tool_choice: req.toolChoice ?? 'auto' } : {}),
     ...(effort ? { reasoning: { effort, summary: 'auto' }, include: ['reasoning.encrypted_content'] } : {}),
     ...(req.session ? { prompt_cache_key: createHash('sha256').update(req.session).digest('hex').slice(0, 32) } : {}),
   }

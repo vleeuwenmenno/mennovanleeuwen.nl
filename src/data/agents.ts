@@ -82,7 +82,7 @@ export type MessageMeta =
  * or by itself, when the context passed the threshold or the model said it was too long; how many
  * messages it stands in for, and roughly how many tokens they took against the summary's.
  */
-export type Compaction = { /** A task run's seed: the thread it continues */ seed?: string; auto: boolean; reason?: 'threshold' | 'overflow'; instructions?: string; messages: number; before: number; after: number; model: string; request?: string; files?: string[] }
+export type Compaction = { /** A task run's seed: the thread it continues */ seed?: string; auto: boolean; reason?: 'threshold' | 'overflow'; instructions?: string; messages: number; before: number; after: number; model: string; request?: string; files?: string[]; todos?: Todo[] }
 /** "Compacted by itself: the context was nearly full" and the like, for the divider. */
 export const compactionText = (c: Compaction | undefined) =>
   !c?.auto ? 'Conversation compacted' : c.reason === 'overflow' ? 'Conversation compacted by itself: the model said it was too long' : 'Conversation compacted by itself: the context was nearly full'
